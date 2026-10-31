@@ -497,5 +497,8 @@ document.addEventListener('change', async (ev) => {
   } catch (e) { toast(e instanceof Error ? e.message : 'Fișier invalid.'); }
 });
 
+// No zoom: iOS ignores user-scalable=no, so pinch is blocked here as well.
+for (const g of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(g, (ev) => ev.preventDefault(), { passive: false });
+document.addEventListener('touchmove', (ev) => { if (ev.touches.length > 1) ev.preventDefault(); }, { passive: false });
 if (import.meta.env.PROD && 'serviceWorker' in navigator) void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
 render();

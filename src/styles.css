@@ -9,7 +9,7 @@
   --warn: #ffc65c; --bad: #ff8d7a; --safe: env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { background: var(--bg); }
+html { background: var(--bg); touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; }
 body { margin: 0; color: var(--ice); font: 500 15px/1.45 Montserrat, system-ui, sans-serif;
   background: radial-gradient(120% 60% at 50% -10%, #17408f 0%, var(--bg) 60%) no-repeat; min-height: 100dvh; }
 h1, h2, h3, b.big { font-family: 'League Spartan', Montserrat, sans-serif; letter-spacing: -.01em; margin: 0; }

@@ -1,0 +1,40 @@
+import { apiFetch } from './apiClient';
+import type { DailyGoals } from '../../types/goals';
+import type { FoodEntry } from '../../types/foodEntries';
+import type {
+  ExerciseSessionResponse,
+  CalorieBalance,
+  SupplementTotals,
+  WaterIntakeBreakdown,
+  AdjustedGoals,
+} from '@workspace/shared';
+
+export interface DailySummaryApiResponse {
+  goals: DailyGoals;
+  foodEntries: FoodEntry[];
+  exerciseSessions: ExerciseSessionResponse[];
+  waterIntake: number;
+  // #1557, #1629: present only when includeCheckin fetched water at all
+  // (server dailySummaryService.ts), absent on an older server.
+  waterIntakeBreakdown?: WaterIntakeBreakdown | null;
+  stepCalories?: number;
+  calorieBalance?: CalorieBalance;
+  // Optional: a client can outrun the server it talks to, and supplement totals only exist
+  // on servers new enough to send them.
+  supplementTotals?: SupplementTotals;
+  adjustedGoals?: AdjustedGoals | null;
+}
+
+export const fetchDailySummary = (
+  date: string,
+  userId?: string
+): Promise<DailySummaryApiResponse> => {
+  const params = new URLSearchParams({ date });
+  if (userId) params.set('userId', userId);
+
+  return apiFetch<DailySummaryApiResponse>({
+    endpoint: `/api/daily-summary?${params.toString()}`,
+    serviceName: 'Daily Summary API',
+    operation: userId ? 'fetch family daily summary' : 'fetch daily summary',
+  });
+};

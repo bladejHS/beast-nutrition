@@ -1,0 +1,48 @@
+export interface GlobalSettings {
+  enable_email_password_login: boolean;
+  is_oidc_active: boolean;
+  is_mfa_mandatory: boolean;
+  allow_openfoodfacts_contributions: boolean;
+  allow_user_ai_config?: boolean;
+  default_vision_ai_service_id?: string | null;
+  allow_private_network_ai?: boolean;
+  allow_private_network_food_providers?: boolean;
+  public_api_docs?: boolean;
+  mcp_oauth_enabled?: boolean;
+  mcp_oauth_allowed_redirect_uris?: string[];
+  mcp_oauth_available?: boolean;
+  mcp_oauth_unavailable_reason?: string | null;
+  dev_tools_enabled?: boolean;
+  mock_data_enabled?: boolean;
+  enable_version_check?: boolean;
+  is_email_login_env_configured?: boolean;
+  enable_passkey_login?: boolean;
+  is_passkey_login_env_configured?: boolean;
+  is_oidc_active_env_configured?: boolean;
+}
+
+export interface OidcProvider {
+  id?: string;
+  issuer_url: string;
+  client_id: string;
+  client_secret?: string;
+  redirect_uris: string[];
+  scope: string;
+  token_endpoint_auth_method: string;
+  response_types: string[];
+  is_active: boolean;
+  display_name?: string;
+  logo_url?: string;
+  auto_register?: boolean;
+  signing_algorithm?: string;
+  profile_signing_algorithm?: string;
+  timeout?: number;
+  domain?: string;
+  provider_id?: string;
+  is_env_configured?: boolean;
+}
+
+export interface CreateOidcProvider {
+  id: string;
+  message: string;
+}

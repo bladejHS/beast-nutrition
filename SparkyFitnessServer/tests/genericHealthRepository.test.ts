@@ -1,0 +1,470 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as genericHealthRepo from '../models/genericHealthRepository.js';
+import * as workoutTelemetryRepo from '../models/workoutTelemetryRepository.js';
+import { getClient } from '../db/poolManager.js';
+
+vi.mock('../db/poolManager.js', () => ({
+  getClient: vi.fn(),
+}));
+
+describe('Generic Health & Workout Telemetry Repositories', () => {
+  const mockQuery = vi.fn();
+  const mockClient = { query: mockQuery, release: vi.fn() };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (getClient as ReturnType<typeof vi.fn>).mockResolvedValue(mockClient);
+  });
+
+  it('upsertHealthMetricSamples should query health_metric_samples', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'hms-1',
+          user_id: 'user-1',
+          metric: 'heart_rate',
+          entry_date: '2026-07-29',
+          source_provider: 'garmin',
+          device_name: 'Forerunner 965',
+          samples: [{ t: '2026-07-29T08:00:00.000Z', bpm: 72 }],
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      ],
+    });
+
+    const result = await genericHealthRepo.upsertHealthMetricSamples(
+      'user-1',
+      'user-1',
+      {
+        user_id: 'user-1',
+        metric: 'heart_rate',
+        entry_date: '2026-07-29',
+        source_provider: 'garmin',
+        samples: [{ t: '2026-07-29T08:00:00.000Z', bpm: 72 }],
+      }
+    );
+
+    expect(result.metric).toBe('heart_rate');
+    expect(result.samples).toHaveLength(1);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it('getHealthMetricSamples should query health_metric_samples by metric and date range', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'hms-1',
+          user_id: 'user-1',
+          metric: 'spo2',
+          entry_date: '2026-07-29',
+          source_provider: 'garmin',
+          device_name: null,
+          samples: [{ t: '2026-07-29T12:00:00.000Z', percentage: 97 }],
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      ],
+    });
+
+    const results = await genericHealthRepo.getHealthMetricSamples(
+      'user-1',
+      'user-1',
+      'spo2',
+      '2026-07-29',
+      '2026-07-29'
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].metric).toBe('spo2');
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE user_id = $1 AND metric = $2'),
+      ['user-1', 'spo2', '2026-07-29', '2026-07-29']
+    );
+  });
+
+  it('upsertDailyHealthMetrics should query daily_health_metrics', async () => {
+    const totalCaloriesCapturedAt = new Date('2026-07-29T12:00:00Z');
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'daily-1',
+          user_id: 'user-1',
+          entry_date: '2026-07-29',
+          source_provider: 'garmin',
+          total_steps: 10500,
+          body_battery_highest: 95,
+        },
+      ],
+    });
+
+    const result = await genericHealthRepo.upsertDailyHealthMetrics(
+      'user-1',
+      'user-1',
+      {
+        user_id: 'user-1',
+        entry_date: '2026-07-29',
+        source_provider: 'garmin',
+        total_steps: 10500,
+        body_battery_highest: 95,
+        total_calories: 2400,
+        total_calories_captured_at: totalCaloriesCapturedAt,
+      }
+    );
+
+    expect(result.total_steps).toBe(10500);
+    expect(result.body_battery_highest).toBe(95);
+    expect(mockQuery).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /total_calories_captured_at[\s\S]*EXCLUDED\.total_calories_captured_at > daily_health_metrics\.total_calories_captured_at/
+      ),
+      expect.arrayContaining([totalCaloriesCapturedAt])
+    );
+    expect(mockQuery.mock.calls[0]?.[1]).toHaveLength(46);
+    expect(mockQuery.mock.calls[0]?.[1]?.[12]).toEqual(totalCaloriesCapturedAt);
+  });
+
+  it('keeps a newer total-calorie sample when a delayed older sample is upserted', async () => {
+    const newerCapturedAt = new Date('2026-07-29T18:00:00Z');
+    const olderCapturedAt = new Date('2026-07-29T12:00:00Z');
+    mockQuery
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'daily-1',
+            total_calories: 2200,
+            total_calories_captured_at: newerCapturedAt,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'daily-1',
+            total_calories: 2200,
+            total_calories_captured_at: newerCapturedAt,
+          },
+        ],
+      });
+
+    const baseMetric = {
+      user_id: 'user-1',
+      entry_date: '2026-07-29',
+      source_provider: 'health_connect',
+    } as const;
+
+    await genericHealthRepo.upsertDailyHealthMetrics('user-1', 'user-1', {
+      ...baseMetric,
+      total_calories: 2200,
+      total_calories_captured_at: newerCapturedAt,
+    });
+    const delayedResult = await genericHealthRepo.upsertDailyHealthMetrics(
+      'user-1',
+      'user-1',
+      {
+        ...baseMetric,
+        total_calories: 1400,
+        total_calories_captured_at: olderCapturedAt,
+      }
+    );
+
+    const delayedUpsertSql = String(mockQuery.mock.calls[1]?.[0]);
+    expect(delayedUpsertSql).toMatch(
+      /total_calories = CASE[\s\S]*EXCLUDED\.total_calories IS NOT NULL[\s\S]*daily_health_metrics\.total_calories_captured_at IS NULL[\s\S]*EXCLUDED\.total_calories_captured_at > daily_health_metrics\.total_calories_captured_at[\s\S]*THEN EXCLUDED\.total_calories[\s\S]*ELSE daily_health_metrics\.total_calories[\s\S]*END/
+    );
+    expect(delayedUpsertSql).toMatch(
+      /total_calories_captured_at = CASE[\s\S]*THEN EXCLUDED\.total_calories_captured_at[\s\S]*ELSE daily_health_metrics\.total_calories_captured_at[\s\S]*END/
+    );
+    expect(delayedResult.total_calories).toBe(2200);
+    expect(delayedResult.total_calories_captured_at).toEqual(newerCapturedAt);
+    expect(mockQuery.mock.calls[1]?.[1]?.[11]).toBe(1400);
+    expect(mockQuery.mock.calls[1]?.[1]?.[12]).toEqual(olderCapturedAt);
+  });
+
+  it('gets one device total per day from every source', async () => {
+    const capturedAt = new Date('2026-07-29T12:00:00Z');
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          entry_date: '2026-07-29',
+          source_provider: 'garmin',
+          total_calories: 2550,
+          captured_at: capturedAt,
+        },
+        {
+          entry_date: '2026-07-29',
+          source_provider: 'health_connect',
+          total_calories: 2400,
+          captured_at: capturedAt,
+        },
+        {
+          entry_date: '2026-07-30',
+          source_provider: 'garmin',
+          total_calories: 2300,
+          captured_at: capturedAt,
+        },
+      ],
+    });
+
+    const rows = await genericHealthRepo.getDeviceTotalCaloriesByDateRange(
+      'user-1',
+      'actor-1',
+      '2026-07-29',
+      '2026-07-30'
+    );
+
+    expect(rows).toEqual([
+      {
+        entry_date: '2026-07-29',
+        source_provider: 'health_connect',
+        total_calories: 2400,
+        captured_at: capturedAt,
+      },
+      {
+        entry_date: '2026-07-30',
+        source_provider: 'garmin',
+        total_calories: 2300,
+        captured_at: capturedAt,
+      },
+    ]);
+    const sql = mockQuery.mock.calls[0]?.[0] as string;
+    expect(sql).toMatch(
+      /COALESCE\(total_calories_captured_at, updated_at, created_at\) AS captured_at/
+    );
+    expect(sql).not.toMatch(/source_provider =/);
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual([
+      'user-1',
+      '2026-07-29',
+      '2026-07-30',
+    ]);
+  });
+
+  it('getDailyHealthMetrics selects daily health metrics with episodic metric carry-forward subqueries', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'daily-1',
+          user_id: 'user-1',
+          entry_date: '2026-07-29',
+          source_provider: 'garmin',
+          total_steps: 8000,
+          vo2_max: 52.5,
+          fitness_age: 28.0,
+          lactate_threshold_bpm: 168,
+          lactate_threshold_speed_mps: 3.85,
+          walking_asymmetry_percentage: 1.2,
+          hill_score: 65,
+          race_prediction_5k_seconds: 1200,
+          race_prediction_10k_seconds: 2500,
+          race_prediction_half_marathon_seconds: 5600,
+          race_prediction_marathon_seconds: 12000,
+          endurance_score: 72,
+        },
+      ],
+    });
+
+    const rows = await genericHealthRepo.getDailyHealthMetrics(
+      'user-1',
+      'actor-1',
+      '2026-07-29',
+      '2026-07-30'
+    );
+
+    expect(getClient).toHaveBeenCalledWith('user-1', 'actor-1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].vo2_max).toBe(52.5);
+    expect(rows[0].fitness_age).toBe(28.0);
+    expect(rows[0].lactate_threshold_bpm).toBe(168);
+    expect(rows[0].hill_score).toBe(65);
+    expect(rows[0].endurance_score).toBe(72);
+
+    const sql = String(mockQuery.mock.calls[0]?.[0]);
+    // Verifies carry-forward subqueries for episodic metrics
+    expect(sql).toMatch(
+      /COALESCE\(\s*dhm\.vo2_max,\s*\(SELECT vo2_max FROM daily_health_metrics d2[\s\S]*WHERE d2\.user_id = dhm\.user_id[\s\S]*AND d2\.source_provider = dhm\.source_provider[\s\S]*AND d2\.entry_date < dhm\.entry_date[\s\S]*AND d2\.vo2_max IS NOT NULL[\s\S]*ORDER BY d2\.entry_date DESC LIMIT 1\)\s*\) AS vo2_max/
+    );
+    expect(sql).toMatch(
+      /COALESCE\(\s*dhm\.fitness_age,\s*\(SELECT fitness_age FROM daily_health_metrics d2/
+    );
+    expect(sql).toMatch(
+      /COALESCE\(\s*dhm\.lactate_threshold_bpm,\s*\(SELECT lactate_threshold_bpm FROM daily_health_metrics d2/
+    );
+    expect(sql).toMatch(
+      /COALESCE\(\s*dhm\.hill_score,\s*\(SELECT hill_score FROM daily_health_metrics d2/
+    );
+    expect(sql).toMatch(
+      /COALESCE\(\s*dhm\.endurance_score,\s*\(SELECT endurance_score FROM daily_health_metrics d2/
+    );
+    expect(mockQuery).toHaveBeenCalledWith(expect.any(String), [
+      'user-1',
+      '2026-07-29',
+      '2026-07-30',
+    ]);
+  });
+
+  it('bulkInsertExerciseEntryLaps should query exercise_entry_laps', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'lap-1',
+          user_id: 'user-1',
+          exercise_entry_id: 'ex-1',
+          entry_date: '2026-07-29',
+          lap_index: 1,
+          start_time: new Date('2026-07-29T08:00:00Z'),
+          end_time: new Date('2026-07-29T08:05:00Z'),
+          duration_seconds: 300,
+        },
+      ],
+    });
+
+    const results = await workoutTelemetryRepo.bulkInsertExerciseEntryLaps(
+      'user-1',
+      'user-1',
+      [
+        {
+          user_id: 'user-1',
+          exercise_entry_id: 'ex-1',
+          entry_date: '2026-07-29',
+          lap_index: 1,
+          start_time: new Date('2026-07-29T08:00:00Z'),
+          end_time: new Date('2026-07-29T08:05:00Z'),
+          duration_seconds: 300,
+        },
+      ]
+    );
+
+    expect(results).toHaveLength(1);
+    expect(results[0].lap_index).toBe(1);
+  });
+
+  it('bulkInsertExerciseEntryGpsPoints groups flat points into one row per workout', async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'gps-1',
+          user_id: 'user-1',
+          exercise_entry_id: 'ex-1',
+          entry_date: '2026-07-29',
+          points: [
+            { t: '2026-07-29T08:01:00.000Z', lat: 37.7749, lon: -122.4194 },
+            { t: '2026-07-29T08:01:05.000Z', lat: 37.775, lon: -122.4195 },
+          ],
+        },
+      ],
+    });
+
+    const results = await workoutTelemetryRepo.bulkInsertExerciseEntryGpsPoints(
+      'user-1',
+      'user-1',
+      [
+        {
+          user_id: 'user-1',
+          exercise_entry_id: 'ex-1',
+          entry_date: '2026-07-29',
+          timestamp: new Date('2026-07-29T08:01:00Z'),
+          latitude: 37.7749,
+          longitude: -122.4194,
+        },
+        {
+          user_id: 'user-1',
+          exercise_entry_id: 'ex-1',
+          entry_date: '2026-07-29',
+          timestamp: new Date('2026-07-29T08:01:05Z'),
+          latitude: 37.775,
+          longitude: -122.4195,
+        },
+      ]
+    );
+
+    // One row (one query call) for both points -- they share an exercise_entry_id.
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    expect(results[0].points).toHaveLength(2);
+    expect(results[0].points[0].lat).toBe(37.7749);
+  });
+
+  describe('merge-write concurrency primitives', () => {
+    it('acquireHealthMetricSampleLockWithClient takes a transaction-scoped advisory lock keyed to the (user, metric, day, provider) tuple', async () => {
+      const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+
+      await genericHealthRepo.acquireHealthMetricSampleLockWithClient(
+        client,
+        'user-1',
+        'heart_rate',
+        '2026-07-29',
+        'garmin'
+      );
+
+      expect(client.query).toHaveBeenCalledWith(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        ['user-1:heart_rate:2026-07-29:garmin']
+      );
+    });
+
+    it('the lock key is distinct per provider — two providers on the same day/metric must not block each other', async () => {
+      const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+
+      await genericHealthRepo.acquireHealthMetricSampleLockWithClient(
+        client,
+        'user-1',
+        'heart_rate',
+        '2026-07-29',
+        'garmin'
+      );
+      await genericHealthRepo.acquireHealthMetricSampleLockWithClient(
+        client,
+        'user-1',
+        'heart_rate',
+        '2026-07-29',
+        'HealthKit'
+      );
+
+      const keys = client.query.mock.calls.map((call) => call[1][0]);
+      expect(new Set(keys).size).toBe(2);
+    });
+
+    it('getHealthMetricSampleRowForUpdateWithClient SELECTs FOR UPDATE scoped to the exact (user, metric, day, provider) row', async () => {
+      const client = {
+        query: vi.fn().mockResolvedValue({
+          rows: [
+            {
+              id: 'hms-1',
+              samples: [{ t: '2026-07-29T08:00:00.000Z', bpm: 72 }],
+            },
+          ],
+        }),
+      };
+
+      const row =
+        await genericHealthRepo.getHealthMetricSampleRowForUpdateWithClient(
+          client,
+          'user-1',
+          'heart_rate',
+          '2026-07-29',
+          'HealthKit'
+        );
+
+      expect(client.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR UPDATE'),
+        ['user-1', 'heart_rate', '2026-07-29', 'HealthKit']
+      );
+      expect(row?.id).toBe('hms-1');
+    });
+
+    it('getHealthMetricSampleRowForUpdateWithClient returns null rather than undefined when no row exists', async () => {
+      const client = { query: vi.fn().mockResolvedValue({ rows: [] }) };
+
+      const row =
+        await genericHealthRepo.getHealthMetricSampleRowForUpdateWithClient(
+          client,
+          'user-1',
+          'heart_rate',
+          '2026-07-29',
+          'HealthKit'
+        );
+
+      expect(row).toBeNull();
+    });
+  });
+});

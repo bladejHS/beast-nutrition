@@ -1,0 +1,448 @@
+import React from 'react';
+import { render, waitFor } from '@testing-library/react-native';
+import { pressAction } from './helpers/nativeHeaderTestUtils';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import FoodEntryViewScreen from '../../src/screens/FoodEntryViewScreen';
+import { useMealTypes } from '../../src/hooks';
+import {
+  useCreateFoodVariant,
+  useFoodVariants,
+} from '../../src/hooks/useFoodVariants';
+import { useDeleteFoodEntry } from '../../src/hooks/useDeleteFoodEntry';
+import { useUpdateFoodEntry } from '../../src/hooks/useUpdateFoodEntry';
+import { useProfile } from '../../src/hooks/useProfile';
+
+const mockNavigation = {
+  setOptions: jest.fn(),
+  goBack: jest.fn(),
+  navigate: jest.fn(),
+  setParams: jest.fn(),
+  replace: jest.fn(),
+} as any;
+
+jest.mock('@react-navigation/native', () => ({
+  ...jest.requireActual('@react-navigation/native'),
+  useNavigation: () => mockNavigation,
+}));
+
+jest.mock('../../src/hooks', () => ({
+  useNutrientDisplayPreferences: jest.fn(() => ({ preferences: [] })),
+  useMealTypes: jest.fn(),
+  usePreferences: jest.fn(() => ({
+    preferences: undefined,
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  })),
+  useServerConnection: jest.fn(() => ({ isConnected: true, isLoading: false })),
+  useCustomNutrients: jest.fn(() => ({
+    customNutrients: [],
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  })),
+  useSetFoodEntryImages: jest.fn(() => ({
+    setImages: jest.fn(),
+    setImagesAsync: jest.fn().mockResolvedValue(undefined),
+    isPending: false,
+  })),
+  useClearFoodEntryImage: jest.fn(() => ({
+    clearImage: jest.fn(),
+    isPending: false,
+  })),
+}));
+
+jest.mock('../../src/hooks/useFoodVariants', () => ({
+  useFoodVariants: jest.fn(),
+  useCreateFoodVariant: jest.fn(),
+}));
+
+jest.mock('../../src/hooks/useDeleteFoodEntry', () => ({
+  useDeleteFoodEntry: jest.fn(),
+}));
+
+jest.mock('../../src/hooks/useUpdateFoodEntry', () => ({
+  useUpdateFoodEntry: jest.fn(),
+}));
+
+jest.mock('../../src/hooks/useProfile', () => ({
+  useProfile: jest.fn(),
+}));
+
+jest.mock('../../src/components/ActiveWorkoutBar', () => ({
+  useActiveWorkoutBarPadding: jest.fn(() => 0),
+}));
+
+jest.mock('../../src/components/MacroCompositionRing', () => {
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: () => <View testID="macro-composition-ring" />,
+  };
+});
+
+jest.mock('uniwind', () => ({
+  useCSSVariable: (keys: string | string[]) =>
+    Array.isArray(keys) ? keys.map(() => '#111827') : '#111827',
+}));
+
+jest.mock('../../src/components/FadeView', () => {
+  const React = require('react');
+  return {
+    __esModule: true,
+    default: ({ children }: any) => <>{children}</>,
+  };
+});
+
+jest.mock('../../src/components/Icon', () => {
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ name }: any) => <View testID={`icon-${name}`} />,
+  };
+});
+
+jest.mock('../../src/components/ui/Button', () => {
+  const React = require('react');
+  const { Pressable, Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ children, onPress, disabled }: any) => (
+      <Pressable onPress={disabled ? undefined : onPress}>
+        {typeof children === 'string' ? <Text>{children}</Text> : children}
+      </Pressable>
+    ),
+  };
+});
+
+jest.mock('../../src/components/StepperInput', () => {
+  const React = require('react');
+  const { TextInput } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ value, onChangeText, onBlur }: any) => (
+      <TextInput
+        testID="quantity-input"
+        value={value}
+        onChangeText={onChangeText}
+        onBlur={onBlur}
+      />
+    ),
+  };
+});
+
+jest.mock('../../src/components/BottomSheetPicker', () => {
+  const React = require('react');
+  const { Pressable, Text, View } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ options, value, onSelect, renderTrigger }: any) => (
+      <View>
+        {renderTrigger?.({
+          onPress: () => {},
+          selectedOption: options.find((option: any) => option.value === value),
+        })}
+        {options.map((option: any) => (
+          <Pressable key={option.value} onPress={() => onSelect(option.value)}>
+            <Text>{option.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    ),
+  };
+});
+
+jest.mock('../../src/components/FoodUnitSelectorSheet', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({ renderTrigger }: any) => (
+      <View>{renderTrigger?.({ onPress: () => {} })}</View>
+    ),
+  };
+});
+
+jest.mock('../../src/components/CalendarSheet', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const MockCalendarSheet = React.forwardRef((_props: any, ref: any) => {
+    React.useImperativeHandle(ref, () => ({ present: jest.fn() }));
+    return <View testID="calendar-sheet" />;
+  });
+  MockCalendarSheet.displayName = 'MockCalendarSheet';
+  return {
+    __esModule: true,
+    default: MockCalendarSheet,
+  };
+});
+
+jest.mock('../../src/components/TimeSheet', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const MockTimeSheet = React.forwardRef((_props: any, ref: any) => {
+    React.useImperativeHandle(ref, () => ({ present: jest.fn() }));
+    return <View testID="time-sheet" />;
+  });
+  MockTimeSheet.displayName = 'MockTimeSheet';
+  return {
+    __esModule: true,
+    default: MockTimeSheet,
+  };
+});
+
+const mockUseMealTypes = useMealTypes as jest.MockedFunction<
+  typeof useMealTypes
+>;
+const mockUseFoodVariants = useFoodVariants as jest.MockedFunction<
+  typeof useFoodVariants
+>;
+const mockUseCreateFoodVariant = useCreateFoodVariant as jest.MockedFunction<
+  typeof useCreateFoodVariant
+>;
+const mockUseDeleteFoodEntry = useDeleteFoodEntry as jest.MockedFunction<
+  typeof useDeleteFoodEntry
+>;
+const mockUseUpdateFoodEntry = useUpdateFoodEntry as jest.MockedFunction<
+  typeof useUpdateFoodEntry
+>;
+const mockUseProfile = useProfile as jest.MockedFunction<typeof useProfile>;
+
+const insets = { top: 0, bottom: 0, left: 0, right: 0 };
+const frame = { x: 0, y: 0, width: 390, height: 844 };
+
+describe('FoodEntryViewScreen', () => {
+  const navigation = mockNavigation;
+
+  const mockCreateVariant = jest.fn();
+  const mockUpdateEntry = jest.fn();
+
+  const baseEntry = {
+    id: 'entry-1',
+    food_id: 'food-1',
+    variant_id: 'variant-1',
+    user_id: 'user-1',
+    meal_type: 'breakfast',
+    meal_type_id: 'meal-1',
+    quantity: 1,
+    unit: 'cup',
+    food_name: 'Greek Yogurt',
+    brand_name: 'Sparky',
+    entry_date: '2026-05-07',
+    serving_size: 1,
+    calories: 100,
+    protein: 15,
+    carbs: 6,
+    fat: 0,
+  };
+
+  const renderScreen = (params?: Record<string, unknown>) =>
+    render(
+      <SafeAreaProvider initialMetrics={{ insets, frame }}>
+        <FoodEntryViewScreen
+          navigation={navigation}
+          route={
+            {
+              key: 'FoodEntryView-key',
+              name: 'FoodEntryView',
+              params: { entry: baseEntry, ...params },
+            } as any
+          }
+        />
+      </SafeAreaProvider>
+    );
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseMealTypes.mockReturnValue({
+      mealTypes: [
+        { id: 'meal-1', name: 'breakfast', is_visible: true, sort_order: 1 },
+      ] as any,
+      defaultMealTypeId: 'meal-1',
+      isLoading: false,
+      isError: false,
+    });
+    mockUseFoodVariants.mockReturnValue({
+      variants: [
+        {
+          id: 'variant-1',
+          food_id: 'food-1',
+          serving_size: 1,
+          serving_unit: 'cup',
+          calories: 100,
+          protein: 15,
+          carbs: 6,
+          fat: 0,
+        },
+      ] as any,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseCreateFoodVariant.mockReturnValue({
+      createVariant: mockCreateVariant,
+      isPending: false,
+    });
+    mockUseDeleteFoodEntry.mockReturnValue({
+      confirmAndDelete: jest.fn(),
+      isPending: false,
+      invalidateCache: jest.fn(),
+    });
+    mockUseUpdateFoodEntry.mockReturnValue({
+      updateEntry: mockUpdateEntry,
+      isPending: false,
+      invalidateCache: jest.fn(),
+    });
+    mockUseProfile.mockReturnValue({
+      profile: { id: 'user-1' } as any,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+  });
+
+  it('redirects to EditLoggedMeal when the entry has food_entry_meal_id', () => {
+    renderScreen({ entry: { ...baseEntry, food_entry_meal_id: 'fem-99' } });
+    expect(navigation.replace).toHaveBeenCalledWith('EditLoggedMeal', {
+      foodEntryMealId: 'fem-99',
+    });
+  });
+
+  it('does not redirect for a standalone food entry', () => {
+    renderScreen();
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it('renders verified badge for verified diary entries', () => {
+    const screen = renderScreen({
+      entry: { ...baseEntry, provider_verified: true },
+    });
+
+    expect(screen.getByText('Greek Yogurt')).toBeTruthy();
+    expect(screen.getByTestId('verified-badge')).toBeTruthy();
+  });
+
+  it('offers the 100 g reference when editing a grouped local entry', () => {
+    mockUseFoodVariants.mockReturnValue({
+      variants: [
+        {
+          id: 'variant-portion',
+          food_id: 'food-1',
+          is_default: true,
+          serving_size: 1,
+          serving_unit: 'portion',
+          serving_description: 'portion (150 g)',
+          calories: 183,
+          protein: 4,
+          carbs: 40,
+          fat: 0,
+        },
+        {
+          id: 'variant-reference',
+          food_id: 'food-1',
+          serving_size: 100,
+          serving_unit: 'g',
+          serving_description: '100 g',
+          calories: 122,
+          protein: 2.7,
+          carbs: 27,
+          fat: 0,
+        },
+        {
+          id: 'variant-portion-grams',
+          food_id: 'food-1',
+          serving_size: 150,
+          serving_unit: 'g',
+          serving_description: '150 g',
+          calories: 183,
+          protein: 4,
+          carbs: 40,
+          fat: 0,
+        },
+      ] as any,
+      isLoading: false,
+      isError: false,
+    });
+
+    const screen = renderScreen({
+      entry: {
+        ...baseEntry,
+        variant_id: 'variant-reference',
+        quantity: 100,
+        unit: 'g',
+        serving_size: 100,
+        calories: 122,
+        protein: 2.7,
+        carbs: 27,
+      },
+    });
+
+    pressAction(screen, navigation, 'Edit');
+
+    expect(screen.getByText('1 portion (150 g) (183 cal)')).toBeTruthy();
+    expect(screen.getByText('100 g (122 cal)')).toBeTruthy();
+    expect(screen.queryByText('150 g (183 cal)')).toBeNull();
+  });
+
+  it('applies the unit returned from adjust nutrition and saves against that variant', async () => {
+    const screen = renderScreen({
+      adjustedValues: {
+        name: 'Greek Yogurt',
+        brand: 'Sparky',
+        servingSize: '1',
+        servingUnit: 'oz',
+        calories: '120',
+        protein: '10',
+        carbs: '8',
+        fat: '4',
+        fiber: '',
+        saturatedFat: '',
+        sodium: '',
+        sugars: '',
+        transFat: '',
+        potassium: '',
+        calcium: '',
+        iron: '',
+        cholesterol: '',
+        vitaminA: '',
+        vitaminC: '',
+      },
+      adjustedUnitSelection: {
+        kind: 'existing',
+        variant: {
+          id: 'variant-oz',
+          food_id: 'food-1',
+          serving_size: 1,
+          serving_unit: 'oz',
+          calories: 120,
+          protein: 10,
+          carbs: 8,
+          fat: 4,
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(navigation.setParams).toHaveBeenCalledWith({
+        adjustedValues: undefined,
+        adjustedUnitSelection: undefined,
+      });
+    });
+
+    expect(screen.getByText('1 serving · 1 cup per serving')).toBeTruthy();
+
+    pressAction(screen, navigation, 'Edit');
+    pressAction(screen, navigation, 'Done');
+
+    expect(mockUpdateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variant_id: 'variant-oz',
+        unit: 'oz',
+        serving_size: 1,
+        serving_unit: 'oz',
+        calories: 120,
+      })
+    );
+    expect(screen.queryByText('Create Draft Unit')).toBeNull();
+  });
+});

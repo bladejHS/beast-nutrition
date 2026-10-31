@@ -1,0 +1,304 @@
+// writebackMappers imports RecordingMethod (a runtime enum) from the library, so
+// provide it here (the global jest mock only stubs the read APIs).
+jest.mock('react-native-health-connect', () => ({
+  RecordingMethod: { RECORDING_METHOD_MANUAL_ENTRY: 3 },
+}));
+
+import {
+  foodEntryToNutritionRecord,
+  waterMlToHydrationRecord,
+  waterLogEntryToHydrationRecord,
+  nutritionClientRecordId,
+  waterClientRecordId,
+  waterEntryClientRecordId,
+  computeWritebackDates,
+} from '../../../src/services/healthconnect/writebackMappers';
+import type { FoodEntry } from '../../../src/types/foodEntries';
+
+const field = (record: any, key: string) => record[key];
+
+// A clearly-past date so every meal-time anchor (incl. dinner 19:00) is in the
+// past at test time — otherwise recordInterval would defer same-day future anchors.
+const baseEntry: FoodEntry = {
+  id: 'fe1',
+  meal_type: 'breakfast',
+  quantity: 150,
+  unit: 'g',
+  entry_date: '2026-06-01',
+  serving_size: 100, // consumed = value * 150 / 100 = value * 1.5
+  food_name: 'Oatmeal',
+  calories: 200, // -> 300 kcal
+  protein: 10, // -> 15 g
+  sodium: 400, // mg -> 600 mg (no conversion, just unit string)
+  vitamin_a: 80, // mcg -> 120 mcg
+  monounsaturated_fat: 0, // omitted
+};
+
+describe('foodEntryToNutritionRecord', () => {
+  it('scales nutrients by quantity/serving_size and keeps native units', () => {
+    const record = foodEntryToNutritionRecord(baseEntry, 1000)!;
+    expect(record).not.toBeNull();
+    expect(record.mealType).toBe(1); // breakfast
+    expect(field(record, 'name')).toBe('Oatmeal');
+    expect(field(record, 'energy')).toEqual({
+      value: 300,
+      unit: 'kilocalories',
+    });
+    expect(field(record, 'protein')).toEqual({ value: 15, unit: 'grams' });
+    // mg/mcg columns are written in their native unit with the value unchanged.
+    expect(field(record, 'sodium')).toEqual({ value: 600, unit: 'milligrams' });
+    expect(field(record, 'vitaminA')).toEqual({
+      value: 120,
+      unit: 'micrograms',
+    });
+  });
+
+  it('omits zero / undefined nutrients', () => {
+    const record = foodEntryToNutritionRecord(baseEntry, 1000)!;
+    expect(field(record, 'monounsaturatedFat')).toBeUndefined();
+    expect(field(record, 'cholesterol')).toBeUndefined(); // absent in fixture
+  });
+
+  // #1958: caffeine rides the same generic HC_NUTRIENT_COLUMNS loop as every
+  // other nutrient here -- confirm it scales and lands in the native `caffeine` field.
+  it('scales caffeine_mg and writes it in milligrams', () => {
+    const record = foodEntryToNutritionRecord(
+      { ...baseEntry, caffeine_mg: 60 }, // -> 90 mg
+      1000
+    )!;
+    expect(field(record, 'caffeine')).toEqual({
+      value: 90,
+      unit: 'milligrams',
+    });
+  });
+
+  it('maps meal types (unknown -> snack=4)', () => {
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, meal_type: 'lunch' }, 1)!
+        .mealType
+    ).toBe(2);
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, meal_type: 'dinner' }, 1)!
+        .mealType
+    ).toBe(3);
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, meal_type: 'snacks' }, 1)!
+        .mealType
+    ).toBe(4);
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, meal_type: 'pre-workout' }, 1)!
+        .mealType
+    ).toBe(4);
+  });
+
+  it('returns null when serving_size is 0 (cannot scale)', () => {
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, serving_size: 0 }, 1)
+    ).toBeNull();
+  });
+
+  it('defers (returns null) when the meal-time anchor is still in the future', () => {
+    // Far-future date → anchor is after "now", so HC would reject it; skip this run.
+    expect(
+      foodEntryToNutritionRecord({ ...baseEntry, entry_date: '2099-01-01' }, 1)
+    ).toBeNull();
+  });
+
+  it('stamps a version-suffixed, prefixed clientRecordId + version', () => {
+    const record = foodEntryToNutritionRecord(baseEntry, 4242)!;
+    const metadata = field(record, 'metadata');
+    expect(metadata.clientRecordId).toBe('sparky-nutrition-fe1-4242');
+    expect(metadata.clientRecordVersion).toBe(4242);
+    expect(metadata.recordingMethod).toBe(3); // MANUAL_ENTRY
+  });
+
+  it('sets an end time after the start time (interval record)', () => {
+    const record = foodEntryToNutritionRecord(baseEntry, 1)!;
+    expect(new Date(field(record, 'endTime')).getTime()).toBeGreaterThan(
+      new Date(field(record, 'startTime')).getTime()
+    );
+  });
+
+  it('uses entry_time when provided on the food entry', () => {
+    const record = foodEntryToNutritionRecord(
+      { ...baseEntry, entry_time: '14:25' },
+      1
+    )!;
+    const start = new Date(field(record, 'startTime'));
+    expect(start.getHours()).toBe(14);
+    expect(start.getMinutes()).toBe(25);
+    expect(start.getSeconds()).toBe(0);
+  });
+
+  it('handles entry_time with seconds', () => {
+    const record = foodEntryToNutritionRecord(
+      { ...baseEntry, entry_time: '14:25:45' },
+      1
+    )!;
+    const start = new Date(field(record, 'startTime'));
+    expect(start.getHours()).toBe(14);
+    expect(start.getMinutes()).toBe(25);
+    expect(start.getSeconds()).toBe(45);
+  });
+
+  it('falls back to meal default time when entry_time is absent or invalid', () => {
+    const lunchRecord = foodEntryToNutritionRecord(
+      { ...baseEntry, meal_type: 'lunch', entry_time: null },
+      1
+    )!;
+    const lunchStart = new Date(field(lunchRecord, 'startTime'));
+    expect(lunchStart.getHours()).toBe(12);
+    expect(lunchStart.getMinutes()).toBe(30);
+
+    const invalidTimeRecord = foodEntryToNutritionRecord(
+      { ...baseEntry, meal_type: 'breakfast', entry_time: 'invalid-time' },
+      1
+    )!;
+    const breakfastStart = new Date(field(invalidTimeRecord, 'startTime'));
+    expect(breakfastStart.getHours()).toBe(8);
+    expect(breakfastStart.getMinutes()).toBe(0);
+  });
+
+  it('defers when entry_time is still in the future for today', () => {
+    const now = new Date('2026-06-01T14:00:00');
+    // 14:30 is in the future relative to 14:00 on the same date
+    expect(
+      foodEntryToNutritionRecord(
+        { ...baseEntry, entry_date: '2026-06-01', entry_time: '14:30' },
+        1,
+        now
+      )
+    ).toBeNull();
+
+    // 13:30 is in the past relative to 14:00
+    expect(
+      foodEntryToNutritionRecord(
+        { ...baseEntry, entry_date: '2026-06-01', entry_time: '13:30' },
+        1,
+        now
+      )
+    ).not.toBeNull();
+  });
+
+  it('clamps interval end to now when the 1-minute window extends past now', () => {
+    // start is 14:25:45, now is 14:26:00 -> 15 seconds after start
+    const now = new Date('2026-06-01T14:26:00');
+    const record = foodEntryToNutritionRecord(
+      { ...baseEntry, entry_date: '2026-06-01', entry_time: '14:25:45' },
+      1,
+      now
+    )!;
+    expect(record).not.toBeNull();
+    expect(new Date(field(record, 'endTime')).getTime()).toBe(now.getTime());
+    expect(new Date(field(record, 'startTime')).getTime()).toBeLessThan(
+      new Date(field(record, 'endTime')).getTime()
+    );
+  });
+});
+
+describe('waterMlToHydrationRecord', () => {
+  it('returns null for non-positive ml', () => {
+    expect(waterMlToHydrationRecord('2026-06-01', 0, 1)).toBeNull();
+    expect(waterMlToHydrationRecord('2026-06-01', -5, 1)).toBeNull();
+  });
+
+  it('defers (returns null) when the noon anchor is still in the future', () => {
+    expect(waterMlToHydrationRecord('2099-01-01', 500, 1)).toBeNull();
+  });
+
+  it('builds an interval Hydration record in milliliters', () => {
+    const record = waterMlToHydrationRecord('2026-06-01', 750, 99)!;
+    expect(field(record, 'volume')).toEqual({
+      value: 750,
+      unit: 'milliliters',
+    });
+    expect(field(record, 'metadata').clientRecordId).toBe(
+      'sparky-water-2026-06-01-99'
+    );
+    expect(field(record, 'metadata').clientRecordVersion).toBe(99);
+    expect(new Date(field(record, 'endTime')).getTime()).toBeGreaterThan(
+      new Date(field(record, 'startTime')).getTime()
+    );
+  });
+});
+
+// #1939: one record per real ledger row, at its own logged_at timestamp --
+// never the noon anchor waterMlToHydrationRecord uses for the day total.
+describe('waterLogEntryToHydrationRecord', () => {
+  const entry = {
+    id: 'log-1',
+    water_ml: 350,
+    logged_at: '2026-06-01T09:15:00.000Z',
+  };
+
+  it("builds a record at the entry's own timestamp, not a noon anchor", () => {
+    const record = waterLogEntryToHydrationRecord(entry, 99)!;
+    expect(field(record, 'startTime')).toBe('2026-06-01T09:15:00.000Z');
+    expect(field(record, 'volume')).toEqual({
+      value: 350,
+      unit: 'milliliters',
+    });
+  });
+
+  it('never defers -- a real logged_at is never "in the future" the way a noon anchor can be', () => {
+    const futureLoggedEntry = {
+      ...entry,
+      logged_at: '2099-01-01T09:15:00.000Z',
+    };
+    expect(waterLogEntryToHydrationRecord(futureLoggedEntry, 1)).not.toBeNull();
+  });
+
+  it('sets an end time strictly after the start time (interval record)', () => {
+    const record = waterLogEntryToHydrationRecord(entry, 1)!;
+    expect(new Date(field(record, 'endTime')).getTime()).toBeGreaterThan(
+      new Date(field(record, 'startTime')).getTime()
+    );
+  });
+
+  it('stamps a per-entry, version-suffixed clientRecordId', () => {
+    const record = waterLogEntryToHydrationRecord(entry, 42)!;
+    expect(field(record, 'metadata').clientRecordId).toBe(
+      'sparky-water-entry-log-1-42'
+    );
+  });
+
+  it('returns null for an unparseable logged_at', () => {
+    expect(
+      waterLogEntryToHydrationRecord({ ...entry, logged_at: 'not-a-date' }, 1)
+    ).toBeNull();
+  });
+});
+
+describe('clientRecordId helpers', () => {
+  it('are prefixed and version-suffixed (fresh per write run)', () => {
+    expect(nutritionClientRecordId('abc', 7)).toBe('sparky-nutrition-abc-7');
+    expect(waterClientRecordId('2026-06-14', 7)).toBe(
+      'sparky-water-2026-06-14-7'
+    );
+    expect(waterEntryClientRecordId('log-1', 7)).toBe(
+      'sparky-water-entry-log-1-7'
+    );
+  });
+});
+
+describe('computeWritebackDates', () => {
+  const now = new Date('2026-06-14T10:00:00');
+
+  it('defaults to yesterday + today when no cursor', () => {
+    expect(computeWritebackDates(null, now)).toEqual([
+      '2026-06-13',
+      '2026-06-14',
+    ]);
+  });
+
+  it('extends the window to cover a gap since the last writeback', () => {
+    const dates = computeWritebackDates('2026-06-11T10:00:00', now);
+    expect(dates[dates.length - 1]).toBe('2026-06-14');
+    expect(dates).toContain('2026-06-10'); // 1-day overlap before 06-11
+  });
+
+  it('caps the window at 7 days', () => {
+    const dates = computeWritebackDates('2026-01-01T00:00:00', now);
+    expect(dates.length).toBeLessThanOrEqual(8); // 7 back + today
+  });
+});

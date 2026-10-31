@@ -1,0 +1,615 @@
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCSSVariable } from 'uniwind';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import Toast from 'react-native-toast-message';
+import Button from '../components/ui/Button';
+import Icon from '../components/Icon';
+import BottomSheetPicker from '../components/BottomSheetPicker';
+import FoodNutritionSummary from '../components/FoodNutritionSummary';
+import { NoteMarkdown } from '../components/NoteMarkdown';
+import { usableFoodImages } from '../utils/foodImages';
+import StatusView from '../components/StatusView';
+import ActionSheet, {
+  type ActionSheetItem,
+  type ActionSheetRef,
+} from '../components/ActionSheet';
+import SettingsRow, { SettingsRowGroup } from '../components/SettingsRow';
+import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
+import {
+  useDeleteFood,
+  useFavorites,
+  useFoodVariants,
+  useProfile,
+  useServerConnection,
+  usePreferences,
+  useToggleFavorite,
+} from '../hooks';
+import { foodDeletionImpactQueryKey, foodsQueryKey } from '../hooks/queryKeys';
+import { getFoodDeletionImpact, updateFood } from '../services/api/foodsApi';
+import { useScreenHeader, type HeaderItem } from '../hooks/useScreenHeader';
+import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
+import {
+  buildExternalVariantOptions,
+  buildLocalVariantOptions,
+  formatVariantLabel,
+  resolveFoodDisplayValues,
+  applyDisplayValuesToFoodInfo,
+} from '../utils/foodDetails';
+import type { RootStackScreenProps } from '../types/navigation';
+
+type FoodDetailScreenProps = RootStackScreenProps<'FoodDetail'>;
+
+const buildSelectedVariantId = (
+  hasExternalVariants: boolean,
+  variantId?: string
+) => (hasExternalVariants ? (variantId ?? 'ext-0') : variantId);
+
+const FoodDetailScreen: React.FC<FoodDetailScreenProps> = ({
+  navigation,
+  route,
+}) => {
+  const { t } = useTranslation();
+  const { item, updatedItem, updatedSelectedVariantId, updatedBarcode } =
+    route.params;
+  const insets = useSafeAreaInsets();
+  const usesNativeHeader = useNativeIOSHeadersActive();
+  const activeWorkoutBarPadding = useActiveWorkoutBarPadding('stack');
+  const [accentColor, textPrimary] = useCSSVariable([
+    '--color-accent-primary',
+    '--color-text-primary',
+  ]) as [string, string];
+  const { isConnected, isLoading: isConnectionLoading } = useServerConnection();
+  const { profile } = useProfile();
+  const { preferences } = usePreferences({ enabled: isConnected });
+  const showNetCarbs = preferences?.show_net_carbs === true;
+  const [food, setFood] = useState(item);
+
+  const isLocalFood = food.source === 'local';
+  const hasExternalVariants = !!(
+    food.externalVariants && food.externalVariants.length > 1
+  );
+  const [selectedVariantId, setSelectedVariantId] = useState<
+    string | undefined
+  >(buildSelectedVariantId(hasExternalVariants, item.variantId));
+  const {
+    variants,
+    isLoading: isVariantsLoading,
+    isError: isVariantsError,
+  } = useFoodVariants(food.id, {
+    enabled: isLocalFood && isConnected,
+  });
+  const canManageFood = !!(
+    isLocalFood &&
+    isConnected &&
+    food.userId &&
+    profile?.id === food.userId
+  );
+
+  const queryClient = useQueryClient();
+  const isPublic = !!food.sharedWithPublic;
+
+  const updateShareMutation = useMutation({
+    mutationFn: (next: boolean) =>
+      updateFood(food.id, { shared_with_public: next }),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({
+        queryKey: foodsQueryKey,
+        refetchType: 'all',
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['foodsLibrary'],
+        refetchType: 'all',
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['foodSearch'],
+        refetchType: 'all',
+      });
+      setFood((prev) => ({
+        ...prev,
+        sharedWithPublic: updated.shared_with_public,
+      }));
+      Toast.show({
+        type: 'success',
+        text1: updated.shared_with_public
+          ? t('foodDetail.sharedPublicly', {
+              defaultValue: 'Food shared publicly',
+            })
+          : t('foodDetail.madePrivate', { defaultValue: 'Food made private' }),
+      });
+    },
+    onError: (error) => {
+      Toast.show({
+        type: 'error',
+        text1: t('foodDetail.shareFailed', {
+          defaultValue: 'Failed to update sharing',
+        }),
+        text2:
+          error instanceof Error
+            ? error.message
+            : t('common.tryAgain', { defaultValue: 'Please try again.' }),
+      });
+    },
+  });
+
+  const handleToggleShare = useCallback(() => {
+    if (isPublic) {
+      updateShareMutation.mutate(false);
+    } else {
+      Alert.alert(
+        t('foodDetail.makePublicTitle', { defaultValue: 'Make public?' }),
+        t('foodDetail.makePublicMessage', {
+          defaultValue:
+            'This food will become visible to all users on this server.',
+        }),
+        [
+          {
+            text: t('common.cancel', { defaultValue: 'Cancel' }),
+            style: 'cancel',
+          },
+          {
+            text: t('foodDetail.makePublic', { defaultValue: 'Make Public' }),
+            onPress: () => updateShareMutation.mutate(true),
+          },
+        ]
+      );
+    }
+  }, [isPublic, t, updateShareMutation]);
+
+  // Favorites: a saved local food can be starred here, so the library is no
+  // longer edit-only via search. External results have no stable id to
+  // favorite, and the toggle needs a live connection like the rest of the
+  // screen. Ownership is not required — the server verifies access on add.
+  const canFavorite = isLocalFood && isConnected;
+  const { favoriteFoods } = useFavorites({ enabled: canFavorite });
+  const isFavorite = useMemo(
+    () => favoriteFoods.some((f) => f.id === food.id),
+    [favoriteFoods, food.id]
+  );
+  const { toggleFavorite, isPending: isFavoritePending } = useToggleFavorite();
+  const handleToggleFavorite = useCallback(() => {
+    // The full FoodItem isn't held here (route carries a FoodInfo), so the
+    // optimistic list insert is skipped; the star reconciles on the settle
+    // refetch. Removal filters by id and still flips instantly.
+    toggleFavorite({ type: 'food', id: food.id, isFavorite });
+  }, [toggleFavorite, food.id, isFavorite]);
+
+  const localVariantOptions = useMemo(
+    () => buildLocalVariantOptions(variants),
+    [variants]
+  );
+  const externalVariantOptions = useMemo(
+    () => buildExternalVariantOptions(food.externalVariants),
+    [food.externalVariants]
+  );
+  const variantOptions =
+    localVariantOptions.length > 0
+      ? localVariantOptions
+      : externalVariantOptions;
+  const displayValues = useMemo(
+    () =>
+      resolveFoodDisplayValues({
+        item: food,
+        selectedVariantId,
+        localVariantOptions,
+        externalVariantOptions,
+      }),
+    [food, selectedVariantId, localVariantOptions, externalVariantOptions]
+  );
+
+  const selectedVariantLabel =
+    variantOptions.find((option) => option.id === selectedVariantId)?.label ??
+    formatVariantLabel(displayValues);
+  const selectedCustomNutrients = useMemo(() => {
+    const selectedVariant = variants?.find(
+      (variant) => variant.id === selectedVariantId
+    );
+    if (selectedVariant) {
+      return selectedVariant.custom_nutrients ?? null;
+    }
+
+    if (selectedVariantId === food.variantId) {
+      return food.customNutrients ?? null;
+    }
+
+    return undefined;
+  }, [food.customNutrients, food.variantId, selectedVariantId, variants]);
+
+  useEffect(() => {
+    setFood(item);
+  }, [item]);
+
+  useEffect(() => {
+    if (updatedItem) {
+      setFood(updatedItem);
+      setSelectedVariantId(updatedSelectedVariantId ?? updatedItem.variantId);
+      navigation.setParams({
+        updatedItem: undefined,
+        updatedSelectedVariantId: undefined,
+      });
+    }
+  }, [updatedItem, updatedSelectedVariantId, navigation]);
+
+  useEffect(() => {
+    if (updatedBarcode !== undefined) {
+      setFood((prev) => ({ ...prev, barcode: updatedBarcode }));
+      navigation.setParams({ updatedBarcode: undefined });
+    }
+  }, [updatedBarcode, navigation]);
+
+  useEffect(() => {
+    if (!selectedVariantId && localVariantOptions.length > 0) {
+      setSelectedVariantId(localVariantOptions[0].id);
+    }
+  }, [selectedVariantId, localVariantOptions]);
+
+  const {
+    buildDeleteOptions,
+    isPending: isDeletePending,
+    invalidateCaches,
+  } = useDeleteFood({
+    foodId: food.id,
+    onSuccess: () => {
+      invalidateCaches();
+      navigation.goBack();
+    },
+  });
+
+  // Prefetched rather than fetched on tap: the ActionSheet needs its items
+  // before present(), and this decides which options exist at all. Until it
+  // resolves, buildDeleteOptions offers Hide only.
+  const { data: deletionImpact } = useQuery({
+    queryKey: foodDeletionImpactQueryKey(food.id),
+    queryFn: () => getFoodDeletionImpact(food.id),
+    enabled: canManageFood,
+  });
+
+  const deleteSheetRef = useRef<ActionSheetRef>(null);
+  const deleteSheetItems = useMemo<ActionSheetItem[]>(
+    () =>
+      buildDeleteOptions(deletionImpact ?? null).map((option) => ({
+        key: option.mode,
+        label: `${option.label}\n${option.description}`,
+        destructive: option.destructive,
+        onPress: option.onSelect,
+      })),
+    [buildDeleteOptions, deletionImpact]
+  );
+  const handlePressDelete = useCallback(() => {
+    deleteSheetRef.current?.present();
+  }, []);
+
+  const handleEdit = () => {
+    if (!selectedVariantId) {
+      return;
+    }
+
+    navigation.navigate('FoodForm', {
+      mode: 'edit-food',
+      item: applyDisplayValuesToFoodInfo(
+        food,
+        displayValues,
+        selectedVariantId
+      ),
+      returnKey: route.key,
+      foodId: food.id,
+      variantId: selectedVariantId,
+      customNutrients: selectedCustomNutrients,
+      initialValues: {
+        name: food.name,
+        brand: food.brand ?? '',
+        notes: food.notes ?? '',
+        servingSize: String(displayValues.servingSize),
+        servingUnit: displayValues.servingUnit,
+        calories: String(displayValues.calories),
+        protein: String(displayValues.protein),
+        carbs: String(displayValues.carbs),
+        fat: String(displayValues.fat),
+        fiber: displayValues.fiber != null ? String(displayValues.fiber) : '',
+        saturatedFat:
+          displayValues.saturatedFat != null
+            ? String(displayValues.saturatedFat)
+            : '',
+        sodium:
+          displayValues.sodium != null ? String(displayValues.sodium) : '',
+        sugars:
+          displayValues.sugars != null ? String(displayValues.sugars) : '',
+        transFat:
+          displayValues.transFat != null ? String(displayValues.transFat) : '',
+        potassium:
+          displayValues.potassium != null
+            ? String(displayValues.potassium)
+            : '',
+        calcium:
+          displayValues.calcium != null ? String(displayValues.calcium) : '',
+        iron: displayValues.iron != null ? String(displayValues.iron) : '',
+        caffeineMg:
+          displayValues.caffeineMg != null
+            ? String(displayValues.caffeineMg)
+            : '',
+        waterMl:
+          displayValues.waterMl != null ? String(displayValues.waterMl) : '',
+        alcoholG:
+          displayValues.alcoholG != null ? String(displayValues.alcoholG) : '',
+        cholesterol:
+          displayValues.cholesterol != null
+            ? String(displayValues.cholesterol)
+            : '',
+        vitaminA:
+          displayValues.vitaminA != null ? String(displayValues.vitaminA) : '',
+        vitaminC:
+          displayValues.vitaminC != null ? String(displayValues.vitaminC) : '',
+      },
+    });
+  };
+
+  // Favorite star (accent-tinted, reads as a button) sits before the neutral
+  // Edit action, matching the food-log screen's header order.
+  const rightItems: HeaderItem[] = [
+    ...(canFavorite
+      ? [
+          {
+            kind: 'icon',
+            sfSymbol: isFavorite ? 'star.fill' : 'star',
+            ionicon: isFavorite ? 'star' : 'star-outline',
+            role: 'primary',
+            // Gated on the toggle's own mutation: onMutate flips the cache
+            // optimistically, so a double tap before settle would send the
+            // opposite op and the two writes could land out of order.
+            disabled: isFavoritePending,
+            onPress: handleToggleFavorite,
+            accessibilityLabel: isFavorite
+              ? t('common.removeFromFavorites', {
+                  defaultValue: 'Remove from favorites',
+                })
+              : t('common.addToFavorites', {
+                  defaultValue: 'Add to favorites',
+                }),
+            identifier: 'food-detail-favorite',
+          } as const,
+        ]
+      : []),
+    ...(canManageFood
+      ? [
+          {
+            kind: 'icon',
+            sfSymbol: isPublic ? 'lock.fill' : 'square.and.arrow.up',
+            ionicon: isPublic ? 'lock-closed-outline' : 'share-social-outline',
+            role: 'secondary',
+            useIoniconOnIOS: !isPublic,
+            disabled: updateShareMutation.isPending,
+            onPress: handleToggleShare,
+            accessibilityLabel: isPublic
+              ? t('foodDetail.makePrivate', { defaultValue: 'Make private' })
+              : t('foodDetail.sharePublic', {
+                  defaultValue: 'Share with public',
+                }),
+            identifier: 'food-detail-share',
+          } as const,
+          {
+            kind: 'text',
+            label: t('common.edit', { defaultValue: 'Edit' }),
+            role: 'secondary',
+            disabled: !selectedVariantId,
+            onPress: handleEdit,
+            accessibilityLabel: t('foodDetail.editFood', {
+              defaultValue: 'Edit food',
+            }),
+            identifier: 'food-detail-edit',
+          } as const,
+        ]
+      : []),
+  ];
+  const header = useScreenHeader({
+    borderless: true,
+    left: { kind: 'back' },
+    right: rightItems.length > 0 ? rightItems : null,
+  });
+
+  const renderContent = () => {
+    if (!isConnectionLoading && !isConnected) {
+      return (
+        <StatusView
+          icon="cloud-offline"
+          iconTone="muted"
+          iconSize={64}
+          title={t('foodDetail.noServer', {
+            defaultValue: 'No server configured',
+          })}
+          subtitle={t('foodDetail.configureServer', {
+            defaultValue:
+              'Configure your server connection in Settings to view food details.',
+          })}
+          action={{
+            label: t('common.goToSettings', { defaultValue: 'Go to Settings' }),
+            onPress: () => navigation.navigate('Tabs', { screen: 'Settings' }),
+            variant: 'primary',
+          }}
+        />
+      );
+    }
+
+    return (
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 16,
+          paddingBottom: insets.bottom + activeWorkoutBarPadding + 16,
+          gap: 16,
+        }}
+      >
+        <FoodNutritionSummary
+          name={food.name}
+          brand={food.brand}
+          values={displayValues}
+          showNetCarbs={showNetCarbs}
+          provider_verified={food.provider_verified}
+          customNutrients={selectedCustomNutrients}
+        />
+
+        {food.notes ? (
+          <View className="bg-surface rounded-xl p-4">
+            <Text className="text-text-secondary text-sm mb-2">
+              {t('foodDetail.notes', { defaultValue: 'Notes' })}
+            </Text>
+            <NoteMarkdown
+              text={food.notes}
+              fontSize={14}
+              images={usableFoodImages(food.images)}
+            />
+          </View>
+        ) : null}
+
+        <View className="bg-surface rounded-xl p-4">
+          <Text className="text-text-secondary text-sm mb-2">
+            {t('foodDetail.serving', { defaultValue: 'Serving' })}
+          </Text>
+          {variantOptions.length > 1 ? (
+            <BottomSheetPicker
+              value={selectedVariantId ?? variantOptions[0].id}
+              options={variantOptions.map((option) => ({
+                label: option.label,
+                value: option.id,
+              }))}
+              onSelect={setSelectedVariantId}
+              title={t('foodDetail.selectServing', {
+                defaultValue: 'Select Serving',
+              })}
+              renderTrigger={({ onPress }) => (
+                <TouchableOpacity
+                  onPress={onPress}
+                  activeOpacity={0.7}
+                  className="flex-row items-center justify-between"
+                  accessibilityRole="button"
+                  accessibilityLabel={t('foodDetail.servingOptions', {
+                    defaultValue: 'Serving options',
+                  })}
+                >
+                  <Text className="text-text-primary text-base font-medium flex-1 mr-3">
+                    {selectedVariantLabel}
+                  </Text>
+                  <Icon name="chevron-down" size={16} color={textPrimary} />
+                </TouchableOpacity>
+              )}
+            />
+          ) : (
+            <Text className="text-text-primary text-base font-medium">
+              {selectedVariantLabel}
+            </Text>
+          )}
+
+          {isVariantsLoading ? (
+            <View className="flex-row items-center mt-3">
+              <ActivityIndicator size="small" color={accentColor} />
+              <Text className="text-text-secondary text-sm ml-2">
+                {t('foodDetail.loadingServingOptions', {
+                  defaultValue: 'Loading serving options...',
+                })}
+              </Text>
+            </View>
+          ) : null}
+
+          {isVariantsError ? (
+            <Text className="text-text-secondary text-sm mt-3">
+              {t('foodDetail.servingOptionsError', {
+                defaultValue:
+                  'Some serving options could not be loaded right now.',
+              })}
+            </Text>
+          ) : null}
+        </View>
+
+        {canManageFood && (
+          <SettingsRowGroup>
+            <SettingsRow
+              icon="scan"
+              title={t('foodDetail.barcode', { defaultValue: 'Barcode' })}
+              subtitle={
+                food.barcode ? (
+                  food.barcode
+                ) : (
+                  <Text className="text-sm text-text-secondary mt-0.5">
+                    {t('common.notSet', { defaultValue: 'Not set' })}
+                  </Text>
+                )
+              }
+              onPress={() =>
+                navigation.navigate('EditBarcode', {
+                  foodId: food.id,
+                  foodName: food.name,
+                  currentBarcode: food.barcode ?? null,
+                  returnKey: route.key,
+                })
+              }
+            />
+          </SettingsRowGroup>
+        )}
+
+        <Button
+          variant="primary"
+          onPress={() =>
+            navigation.navigate('FoodEntryAdd', {
+              item: applyDisplayValuesToFoodInfo(
+                food,
+                displayValues,
+                selectedVariantId
+              ),
+            })
+          }
+        >
+          <Text className="text-white text-base font-semibold">
+            {t('foodDetail.logFood', { defaultValue: 'Log Food' })}
+          </Text>
+        </Button>
+
+        {canManageFood && (
+          <Button
+            variant="destructive"
+            onPress={handlePressDelete}
+            disabled={isDeletePending}
+          >
+            {isDeletePending
+              ? t('common.deleting', { defaultValue: 'Deleting...' })
+              : t('foodDetail.deleteFood', { defaultValue: 'Delete Food' })}
+          </Button>
+        )}
+      </ScrollView>
+    );
+  };
+
+  return (
+    <View
+      className="flex-1 bg-background"
+      style={usesNativeHeader ? undefined : { paddingTop: insets.top }}
+    >
+      {header}
+      {renderContent()}
+
+      <ActionSheet
+        ref={deleteSheetRef}
+        title={t('foodDetail.deleteSheetTitle', {
+          defaultValue: 'Delete food',
+        })}
+        items={deleteSheetItems}
+      />
+    </View>
+  );
+};
+
+export default FoodDetailScreen;

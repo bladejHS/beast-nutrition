@@ -1,0 +1,282 @@
+import { authClient, followOAuthRedirect } from '@/lib/auth-client';
+import type {
+  AccessibleUser,
+  AuthResponse,
+  BetterAuthUser,
+  LoginSettings,
+} from '@/types/auth';
+import { apiCall } from '../api';
+
+import i18n from 'i18next';
+interface AuthError extends Error {
+  code?: string;
+  status?: number;
+}
+
+interface BetterAuthResponse {
+  user: BetterAuthUser;
+  twoFactorRedirect?: boolean;
+}
+
+export interface IdentityUserResponse {
+  activeUserId: string;
+  fullName: string | null;
+  activeUserFullName?: string;
+  activeUserEmail: string;
+  /** True when the authenticated account is the demo sandbox. */
+  isDemo?: boolean;
+}
+
+export interface SwitchContextResponse {
+  activeUserId?: string;
+}
+
+function currentAuthenticationCallbackUrl(): string {
+  return new URLSearchParams(window.location.search).has('sig')
+    ? window.location.href
+    : window.location.origin;
+}
+
+export const requestMagicLink = async (email: string): Promise<void> => {
+  const { error } = await authClient.signIn.magicLink({
+    email,
+    callbackURL: currentAuthenticationCallbackUrl(),
+  });
+  if (error) throw error;
+};
+
+export const registerUser = async (
+  email: string,
+  password: string,
+  fullName: string
+): Promise<AuthResponse> => {
+  const { data, error } = await authClient.signUp.email({
+    email,
+    password,
+    name: fullName,
+  });
+
+  if (error) {
+    if (error.status === 409) {
+      const err = new Error(
+        'User with this email already exists.'
+      ) as AuthError;
+      err.code = '23505';
+      throw err;
+    }
+    throw error;
+  }
+
+  if (followOAuthRedirect(data)) {
+    return await new Promise<AuthResponse>(() => undefined);
+  }
+
+  const authData = data as Partial<BetterAuthResponse> | null;
+
+  if (!authData?.user) {
+    throw new Error(
+      'Registration succeeded but no user data was received from the server.'
+    );
+  }
+
+  return {
+    message: i18n.t(
+      'hooks.auth.userRegisteredSuccessfully',
+      'User registered successfully'
+    ),
+    userId: authData?.user?.id,
+    role: authData?.user?.role || 'user',
+    fullName: authData?.user?.name || '',
+  } as AuthResponse;
+};
+
+export const loginUser = async (
+  email: string,
+  password: string
+): Promise<AuthResponse> => {
+  const { data, error } = await authClient.signIn.email({
+    email,
+    password,
+  });
+
+  if (error) {
+    if (error.status === 401) {
+      throw new Error('Invalid credentials.');
+    }
+    throw error;
+  }
+
+  if (followOAuthRedirect(data)) {
+    return await new Promise<AuthResponse>(() => undefined);
+  }
+
+  const authData = data as Partial<BetterAuthResponse> | null;
+
+  // Better Auth native 2FA handling - Check this BEFORE checking for user data
+  if (authData?.twoFactorRedirect) {
+    return {
+      userId: authData?.user?.id || '',
+      email: authData?.user?.email || email,
+      status: 'MFA_REQUIRED',
+      twoFactorRedirect: true,
+      mfa_totp_enabled: authData?.user?.twoFactorEnabled,
+      mfa_email_enabled: authData?.user?.mfaEmailEnabled,
+    } as AuthResponse;
+  }
+
+  if (!authData?.user) {
+    throw new Error(
+      'Login succeeded but no user data was received from the server.'
+    );
+  }
+
+  return {
+    message: i18n.t('hooks.auth.loginSuccessful', 'Login successful'),
+    userId: authData?.user?.id,
+    role: authData?.user?.role || 'user',
+    fullName: authData?.user?.name || '',
+  } as AuthResponse;
+};
+
+export const requestPasswordReset = async (email: string): Promise<void> => {
+  const { error } = await authClient.requestPasswordReset({
+    email,
+    redirectTo: window.location.origin + '/reset-password',
+  });
+  if (error) throw error;
+};
+
+export const resetPassword = async (
+  token: string,
+  newPassword: string
+): Promise<void> => {
+  const { error } = await authClient.resetPassword({
+    newPassword,
+    token,
+  });
+  if (error) throw error;
+};
+
+export interface OidcLoginParams {
+  providerId: string;
+  requestSignUp?: boolean;
+}
+export const initiateOidcLogin = async ({
+  providerId,
+  requestSignUp = false,
+}: OidcLoginParams) => {
+  const callbackURL = currentAuthenticationCallbackUrl();
+  await authClient.signIn.sso({
+    providerId: providerId,
+    callbackURL,
+    errorCallbackURL: callbackURL,
+    requestSignUp: requestSignUp,
+  });
+};
+
+export const getLoginSettings = async (): Promise<LoginSettings> => {
+  try {
+    return await apiCall('/auth/settings', {
+      method: 'GET',
+    });
+  } catch (error) {
+    return {
+      email: { enabled: true },
+      oidc: { enabled: false, providers: [] },
+      signup_disabled: false,
+    };
+  }
+};
+
+export const getMfaFactors = async (email: string) => {
+  return await apiCall(`/auth/mfa-factors?email=${encodeURIComponent(email)}`, {
+    method: 'GET',
+  });
+};
+
+export const fetchIdentityUser = async (): Promise<IdentityUserResponse> => {
+  return apiCall('/identity/user', {
+    method: 'GET',
+  });
+};
+
+export const switchUserContext = async (
+  targetUserId: string
+): Promise<SwitchContextResponse> => {
+  return apiCall('/identity/switch-context', {
+    method: 'POST',
+    body: { targetUserId },
+  });
+};
+
+export const getAccessibleUsers = async (): Promise<AccessibleUser[]> => {
+  const data = await apiCall('/identity/users/accessible-users', {
+    method: 'GET',
+  });
+
+  return (data || []).map((item: AccessibleUser) => ({
+    user_id: item.user_id,
+    full_name: item.full_name,
+    email: item.email,
+    permissions:
+      typeof item.permissions === 'object' && item.permissions
+        ? {
+            diary:
+              item.permissions.diary ||
+              item.permissions.calorie ||
+              item.permissions.can_manage_diary ||
+              false,
+            checkin:
+              item.permissions.checkin ||
+              item.permissions.can_manage_checkin ||
+              false,
+            reports:
+              item.permissions.reports ||
+              item.permissions.can_view_reports ||
+              false,
+            food_list:
+              item.permissions.food_list ||
+              item.permissions.can_view_food_library ||
+              false,
+            calorie: item.permissions.calorie || false,
+            can_manage_medications:
+              item.permissions.can_manage_medications || false,
+            can_manage_symptoms: item.permissions.can_manage_symptoms || false,
+          }
+        : {
+            diary: false,
+            checkin: false,
+            reports: false,
+            food_list: false,
+            calorie: false,
+            can_manage_medications: false,
+            can_manage_symptoms: false,
+          },
+    access_end_date: item.access_end_date,
+  }));
+};
+
+export const demoLogin = async (): Promise<AuthResponse> => {
+  const data = await apiCall<{
+    user?: BetterAuthUser;
+    message?: string;
+  }>('/auth/demo-login', {
+    method: 'POST',
+  });
+
+  if (!data?.user) {
+    throw new Error(
+      'Demo login succeeded but no user data was received from the server.'
+    );
+  }
+
+  return {
+    message:
+      data.message ||
+      i18n.t('hooks.auth.demoLoginSuccessful', 'Demo login successful'),
+    userId: data.user.id,
+    role: data.user.role || 'user',
+    fullName: data.user.name || 'Demo User',
+    email: data.user.email,
+  };
+};

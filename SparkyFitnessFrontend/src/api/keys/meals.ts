@@ -1,0 +1,79 @@
+import { MealFilter } from '@/types/meal';
+
+export const mealKeys = {
+  all: ['meals'] as const,
+  one: (mealId?: string) => [...mealKeys.all, mealId] as const,
+  filter: (filter: MealFilter, searchTerm?: string) =>
+    [...mealKeys.all, 'filter', filter, searchTerm] as const,
+  impact: (mealId: string) => [...mealKeys.one(mealId), 'impact'] as const,
+  recent: (limit: number) => [...mealKeys.all, 'recent', limit] as const,
+  top: (limit: number) => [...mealKeys.all, 'top', limit] as const,
+};
+export const foodKeys = {
+  all: ['foods'] as const,
+  one: (foodId: string) => [...foodKeys.all, foodId] as const,
+  impact: (foodId: string) => [...foodKeys.one(foodId), 'impact'] as const,
+  lists: () => [...foodKeys.all, 'list'] as const,
+  list: (
+    searchTerm: string,
+    filter: MealFilter,
+    page: number,
+    limit: number,
+    sort: string,
+    providerType: string
+  ) =>
+    [
+      ...foodKeys.lists(),
+      { searchTerm, filter, page, limit, sort, providerType },
+    ] as const,
+  recentTop: (limit: number, mealType?: string) =>
+    [...foodKeys.all, 'recentTop', limit, mealType] as const,
+  databaseSearch: (term: string, pageSize: number, filter: MealFilter) =>
+    [...foodKeys.all, 'search', term, pageSize, filter] as const,
+  // Separate namespace from `databaseSearch`: that one is an infinite query
+  // whose cached shape is {pages}, this one resolves to a single response.
+  nameLookup: (term: string, limit: number) =>
+    [...foodKeys.all, 'nameLookup', term, limit] as const,
+  favorites: () => [...foodKeys.all, 'favorites'] as const,
+};
+
+export const mealPlanKeys = {
+  all: ['mealPlans'] as const,
+  byUser: (userId: string) => [...mealPlanKeys.all, userId] as const,
+};
+
+export const customNutrientsKeys = {
+  all: ['customNutrients'] as const,
+  one: (id: string) => [...customNutrientsKeys.all, id] as const,
+};
+
+export const nutritionixKeys = {
+  all: ['nutritionix'] as const,
+  search: (query: string, providerId: string | null) =>
+    [...nutritionixKeys.all, 'search', query, providerId] as const,
+  naturalNutrients: (query: string, providerId: string | null) =>
+    [
+      ...nutritionixKeys.all,
+      'nutrients',
+      'natural',
+      query,
+      providerId,
+    ] as const,
+  brandedNutrients: (nixItemId: string, providerId: string | null) =>
+    [
+      ...nutritionixKeys.all,
+      'nutrients',
+      'branded',
+      nixItemId,
+      providerId,
+    ] as const,
+};
+
+export const foodVariantKeys = {
+  all: [...foodKeys.all, 'variants'] as const,
+  byFood: (foodId: string) => [...foodKeys.all, 'variants', foodId] as const,
+};
+
+export const allergenPreferenceKeys = {
+  all: ['allergenPreferences'] as const,
+};

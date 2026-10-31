@@ -1,0 +1,157 @@
+/**
+ * Per-run limits on workout telemetry collection.
+ *
+ * Collecting a route and the per-workout sample series costs on the order of a
+ * second per workout. A background task gets only a few tens of seconds before
+ * the OS kills it, and being killed mid-read loses the entire sync — so
+ * background runs enrich just the newest few workouts and send the rest as
+ * summaries. Because the server upserts workouts on (source, source_id), a
+ * later interactive sync re-sends the skipped ones with telemetry and upgrades
+ * the existing entries in place rather than duplicating them.
+ *
+ * Limits are carried by a per-run context rather than module state: background
+ * tasks, manual syncs, and the iOS observer path are not mutually exclusive,
+ * and a shared flag would let a capped background run silently strip the
+ * budget (and route-consent UI) from a foreground sync running at the same
+ * moment.
+ *
+ * Lives in `shared/` rather than beside either provider so run shells can
+ * build a context without importing a platform-specific module.
+ */
+
+/** Workouts to enrich per background read. */
+export const BACKGROUND_TELEMETRY_BUDGET = 3;
+
+/**
+ * Workouts to enrich per foreground read.
+ *
+ * Higher than the background budget — a user-present run has no OS deadline —
+ * but not unlimited: the foreground window is the user's whole configured sync
+ * range (up to 365 days), so an uncapped run enriches every workout in that
+ * range on every single sync. At roughly a dozen native reads per workout, whose
+ * results are deserialized and sorted on the JS thread, that starves the UI and
+ * taps queue up for seconds (#2191). Sessions beyond the cap are picked up by
+ * later syncs, which skip the ones already collected.
+ */
+export const FOREGROUND_TELEMETRY_BUDGET = 25;
+
+export interface TelemetryRunContext {
+  /**
+   * Whether collection may show UI. Android route access can require a
+   * per-session system consent dialog, which a headless task cannot present —
+   * attempting it there fails or hangs. Non-interactive runs skip routes; a
+   * later interactive sync collects them.
+   */
+  readonly interactive: boolean;
+  /**
+   * Re-collect telemetry for sessions the reuse cache already holds, for this
+   * run only.
+   *
+   * Set when the user explicitly asks to re-send workout details — after
+   * deleting the data server-side, say, or once a fix changes what we collect.
+   * Without it those sessions are skipped forever: the cache lives on the
+   * device, so removing the rows on the server does not clear it.
+   *
+   * Deliberately a run flag rather than clearing the cache. The cache is not
+   * range-aware, so wiping it would invalidate every session ever collected,
+   * not just the window the user picked — and every later background run would
+   * then grind back through that whole backlog three at a time, which is the
+   * starvation the cache was added to end (#2191). A flag only affects the
+   * sessions this run already reads, and they are re-committed as normal.
+   */
+  readonly force: boolean;
+  /**
+   * The slot count this run started with, for callers that must reserve part
+   * of it rather than spend it first-come. Infinite when uncapped.
+   */
+  readonly budget: number;
+  /**
+   * Claims one unit of budget, returning whether the caller may collect.
+   * Callers that skip collection do not consume budget.
+   */
+  claim(): boolean;
+  /**
+   * Records a session whose telemetry this run collected, pending the upload
+   * that will commit it to the reuse cache.
+   *
+   * Run-scoped for the same reason the budget is: overlapping runs would
+   * otherwise share one staging area, and a successful upload in one run would
+   * commit keys staged by another whose upload later failed — marking those
+   * sessions collected when the server never received their telemetry.
+   * Null keys (no stable record identity) are ignored.
+   */
+  stageCollected(key: string | null): void;
+  /** Drains the staged keys, for the shell to commit after a successful upload. */
+  drainCollected(): string[];
+}
+
+/**
+ * Builds the limits for one sync run. Defaults are the interactive shape:
+ * unlimited budget and UI allowed, for runs with a user present and no
+ * execution deadline to respect.
+ */
+export const createTelemetryRunContext = (options?: {
+  budget?: number;
+  interactive?: boolean;
+  force?: boolean;
+}): TelemetryRunContext => {
+  let remaining = options?.budget ?? Number.POSITIVE_INFINITY;
+  let collected: string[] = [];
+  return {
+    interactive: options?.interactive ?? true,
+    // Defaults off: only an explicit user action re-reads what is cached.
+    force: options?.force ?? false,
+    budget: options?.budget ?? Number.POSITIVE_INFINITY,
+    claim: (): boolean => {
+      if (remaining <= 0) return false;
+      remaining -= 1;
+      return true;
+    },
+    stageCollected: (key: string | null): void => {
+      if (key) collected.push(key);
+    },
+    drainCollected: (): string[] => {
+      const staged = collected;
+      collected = [];
+      return staged;
+    },
+  };
+};
+
+/**
+ * Caps how much of a run's budget may go to sessions still inside the
+ * telemetry grace window.
+ *
+ * Those sessions are re-read on every sync until their heart rate arrives or
+ * the window closes (#2300), and the claim loop takes sessions newest-first —
+ * so without a cap a handful of recent heart-rate-less workouts would take the
+ * whole budget every run and the older backlog behind them would never advance,
+ * which is the starvation the reuse cache was added to end (#2191).
+ *
+ * Half, not a fixed count, because the two budgets differ by an order of
+ * magnitude. It is a ceiling with a floor of one: a background run of 3 still
+ * spends 2 on recent sessions and keeps 1 for the backlog. Recent sessions keep
+ * their newest-first priority within that share — capping them without
+ * reordering is what keeps the #2300 fix working for a user who also has a
+ * large backlog, since a backlog-first rule would defer the retry past the
+ * 24h window it has to happen in.
+ *
+ * The share is a floor for the backlog, not a ceiling on the run: callers defer
+ * the sessions this denies and offer them the budget again once every backlog
+ * session has had its chance, so a drained backlog does not leave slots unspent
+ * and collect fewer sessions per run than before the cap existed.
+ */
+export const createGraceWindowClaimLimiter = (
+  budget: number
+): ((withinGraceWindow: boolean) => boolean) => {
+  const cap = Number.isFinite(budget)
+    ? Math.max(1, Math.ceil(budget / 2))
+    : Number.POSITIVE_INFINITY;
+  let used = 0;
+  return (withinGraceWindow: boolean): boolean => {
+    if (!withinGraceWindow) return true;
+    if (used >= cap) return false;
+    used += 1;
+    return true;
+  };
+};

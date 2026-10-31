@@ -1,0 +1,24 @@
+{
+  "watch": [
+    ".",
+    "routes",
+    "services",
+    "models",
+    "integrations",
+    "config",
+    "db",
+    "security",
+    "ai",
+    "prompts"
+  ],
+  "ignore": [
+    "mock_data",
+    "mock_data/**",
+    ".tmp",
+    "node_modules",
+    "test",
+    "coverage"
+  ],
+  "ext": "js,ts,json",
+  "exec": "tsx index.ts"
+}

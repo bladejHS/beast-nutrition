@@ -1,0 +1,343 @@
+import { z } from 'zod/v4';
+import {
+  isDayString,
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL,
+} from '@workspace/shared';
+
+const coerceLegacyNumber = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return value;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isNaN(parsed) ? value : parsed;
+};
+
+const requiredLegacyString = (fieldName: string) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() : value),
+    z.string().min(1, `${fieldName} is required`)
+  );
+
+const requiredDayString = (fieldName: string) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() : value),
+    z
+      .string()
+      .refine(isDayString, `${fieldName} must be a YYYY-MM-DD calendar date`)
+  );
+
+const optionalLegacyString = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().optional()
+);
+
+const nullableOptionalLegacyString = z.preprocess((value) => {
+  if (value === '') {
+    return null;
+  }
+
+  return value;
+}, z.string().nullable().optional());
+
+const requiredLegacyNumber = z.preprocess(coerceLegacyNumber, z.number());
+
+const optionalLegacyNumber = z.preprocess((value) => {
+  if (value === '') {
+    return undefined;
+  }
+
+  return coerceLegacyNumber(value);
+}, z.number().optional());
+
+const nullableOptionalLegacyNumber = z.preprocess((value) => {
+  if (value === '') {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return coerceLegacyNumber(value);
+}, z.number().nullable().optional());
+
+// Same coercion as nullableOptionalLegacyNumber, but whole numbers only.
+// Used for integer columns like record_utc_offset_minutes, where a fractional
+// value must fail validation here instead of erroring at the database layer.
+const nullableOptionalLegacyInteger = z.preprocess((value) => {
+  if (value === '') {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  return coerceLegacyNumber(value);
+}, z.number().int().nullable().optional());
+
+// Same coercion as nullableOptionalLegacyNumber, plus a domain range. Used for
+// the smart-scale columns so this route enforces the same bounds as the other
+// two write paths (ai/tools/schemas/checkin.ts and the processHealthData
+// ingestion path); without it a direct API call could store a negative mass or
+// a body-water percentage above 100.
+const boundedNullableOptionalLegacyNumber = (min: number, max: number) =>
+  z.preprocess((value) => {
+    if (value === '') {
+      return undefined;
+    }
+
+    if (value === null) {
+      return null;
+    }
+
+    return coerceLegacyNumber(value);
+  }, z.number().min(min).max(max).nullable().optional());
+
+// numeric(5,2) columns, so 999.99 is the largest storable mass.
+const smartScaleMassKg = boundedNullableOptionalLegacyNumber(0, 999.99);
+const percentage = boundedNullableOptionalLegacyNumber(0, 100);
+// numeric(6,1) column for BMR kcal. Bounds are shared with every consumer that
+// decides whether a measured BMR may replace the formula estimate.
+const smartScaleBmrKcal = boundedNullableOptionalLegacyNumber(
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL
+);
+
+export const UpsertWaterIntakeBodySchema = z
+  .object({
+    entry_date: requiredLegacyString('entry_date'),
+    // Bounded and integral because upsertWaterIntake loops once per drink, and
+    // since #2115 a single iteration can also insert a food_entries row. An
+    // unbounded (or fractional) value turned one request into an unbounded
+    // serial write loop. 100 presses of "+" in one call is already far past
+    // anything the UI issues.
+    change_drinks: z.preprocess(
+      coerceLegacyNumber,
+      z.number().int().min(-100).max(100)
+    ),
+    container_id: nullableOptionalLegacyNumber,
+    user_id: optionalLegacyString,
+  })
+  .loose();
+
+export type UpsertWaterIntakeBody = z.infer<typeof UpsertWaterIntakeBodySchema>;
+
+export const UpdateWaterIntakeBodySchema = z
+  .object({
+    water_ml: optionalLegacyNumber,
+    entry_date: optionalLegacyString,
+    source: optionalLegacyString,
+  })
+  .loose();
+
+export type UpdateWaterIntakeBody = z.infer<typeof UpdateWaterIntakeBodySchema>;
+
+export const UpsertCheckInBodySchema = z
+  .object({
+    entry_date: requiredLegacyString('entry_date'),
+    weight: nullableOptionalLegacyNumber,
+    neck: nullableOptionalLegacyNumber,
+    waist: nullableOptionalLegacyNumber,
+    hips: nullableOptionalLegacyNumber,
+    steps: nullableOptionalLegacyNumber,
+    height: nullableOptionalLegacyNumber,
+    body_fat_percentage: nullableOptionalLegacyNumber,
+    // Smart-scale composition. These must be declared even though the schema is
+    // .loose(): without them the values still reach the repository but skip
+    // coercion entirely, so a non-numeric or oversized value surfaced as a 500
+    // from the numeric(5,2) column instead of a 400.
+    muscle_mass_kg: smartScaleMassKg,
+    bone_mass_kg: smartScaleMassKg,
+    body_water_percentage: percentage,
+    bmr: smartScaleBmrKcal,
+  })
+  .loose();
+
+export type UpsertCheckInBody = z.infer<typeof UpsertCheckInBodySchema>;
+
+export const UpdateCheckInBodySchema = z
+  .object({
+    entry_date: optionalLegacyString,
+    weight: nullableOptionalLegacyNumber,
+    neck: nullableOptionalLegacyNumber,
+    waist: nullableOptionalLegacyNumber,
+    hips: nullableOptionalLegacyNumber,
+    steps: nullableOptionalLegacyNumber,
+    height: nullableOptionalLegacyNumber,
+    body_fat_percentage: nullableOptionalLegacyNumber,
+    muscle_mass_kg: smartScaleMassKg,
+    bone_mass_kg: smartScaleMassKg,
+    body_water_percentage: percentage,
+    bmr: smartScaleBmrKcal,
+  })
+  .loose();
+
+export type UpdateCheckInBody = z.infer<typeof UpdateCheckInBodySchema>;
+
+export const CreateCustomCategoryBodySchema = z
+  .object({
+    name: requiredLegacyString('name'),
+    display_name: nullableOptionalLegacyString,
+    frequency: requiredLegacyString('frequency'),
+    measurement_type: requiredLegacyString('measurement_type'),
+    data_type: nullableOptionalLegacyString,
+  })
+  .loose();
+
+export type CreateCustomCategoryBody = z.infer<
+  typeof CreateCustomCategoryBodySchema
+>;
+
+export const UpdateCustomCategoryBodySchema = z
+  .object({
+    name: optionalLegacyString,
+    display_name: nullableOptionalLegacyString,
+    frequency: optionalLegacyString,
+    measurement_type: optionalLegacyString,
+    data_type: nullableOptionalLegacyString,
+  })
+  .loose();
+
+export type UpdateCustomCategoryBody = z.infer<
+  typeof UpdateCustomCategoryBodySchema
+>;
+
+export const UpsertCustomEntryBodySchema = z
+  .object({
+    category_id: requiredLegacyString('category_id'),
+    value: z.union([
+      requiredLegacyNumber,
+      requiredLegacyString('value'),
+      z.boolean(),
+    ]),
+    entry_date: requiredLegacyString('entry_date'),
+    entry_hour: nullableOptionalLegacyNumber,
+    entry_timestamp: optionalLegacyString,
+    notes: optionalLegacyString,
+    source: optionalLegacyString,
+  })
+  .loose();
+
+export type UpsertCustomEntryBody = z.infer<typeof UpsertCustomEntryBodySchema>;
+
+export const DateParamSchema = z
+  .object({
+    date: requiredDayString('date'),
+  })
+  .loose();
+
+export type DateParam = z.infer<typeof DateParamSchema>;
+
+export const UuidParamSchema = z
+  .object({
+    id: z.string().uuid(),
+  })
+  .loose();
+
+export type UuidParam = z.infer<typeof UuidParamSchema>;
+
+export const DateRangeParamSchema = z
+  .object({
+    startDate: requiredDayString('startDate'),
+    endDate: requiredDayString('endDate'),
+  })
+  .loose();
+
+export type DateRangeParam = z.infer<typeof DateRangeParamSchema>;
+
+export const CustomMeasurementsRangeParamSchema = z
+  .object({
+    categoryId: requiredLegacyString('categoryId'),
+    startDate: requiredDayString('startDate'),
+    endDate: requiredDayString('endDate'),
+  })
+  .loose();
+
+export type CustomMeasurementsRangeParam = z.infer<
+  typeof CustomMeasurementsRangeParamSchema
+>;
+
+/**
+ * Query params for the "latest manual custom value per category on or before a
+ * date" lookup.
+ */
+export const LatestCustomEntryQuerySchema = z
+  .object({
+    date: requiredDayString('date'),
+  })
+  .loose();
+
+export type LatestCustomEntryQuery = z.infer<
+  typeof LatestCustomEntryQuerySchema
+>;
+
+export const UpdateWaterIntakeLogTimeBodySchema = z
+  .object({
+    loggedAt: z.string().datetime({
+      message: 'loggedAt must be a valid ISO 8601 datetime string',
+    }),
+  })
+  .strict();
+
+export type UpdateWaterIntakeLogTimeBody = z.infer<
+  typeof UpdateWaterIntakeLogTimeBodySchema
+>;
+
+// CSV import of health data (measurements, sleep, vitals, activity, hydration).
+// Rows are parsed client-side into flat HealthDataPayloadItem-shaped objects and
+// fed straight into measurementService.processHealthData, which owns the real
+// per-type validation, timezone resolution, and dedup. The schema is therefore
+// deliberately permissive (.loose()) and only enforces the invariants the
+// pipeline itself assumes: a type, and at least one date/timestamp field.
+export const ImportHealthDataItemSchema = z
+  .object({
+    type: requiredLegacyString('type'),
+    value: nullableOptionalLegacyNumber,
+    unit: optionalLegacyString,
+    date: optionalLegacyString,
+    entry_date: optionalLegacyString,
+    timestamp: optionalLegacyString,
+    source: optionalLegacyString,
+    source_id: optionalLegacyString,
+    exercise_source_id: optionalLegacyString,
+    record_timezone: nullableOptionalLegacyString,
+    record_utc_offset_minutes: nullableOptionalLegacyInteger,
+    // Sleep session fields (only present on SleepSession rows).
+    bedtime: optionalLegacyString,
+    wake_time: optionalLegacyString,
+    duration_in_seconds: nullableOptionalLegacyNumber,
+    time_asleep_in_seconds: nullableOptionalLegacyNumber,
+    deep_sleep_seconds: nullableOptionalLegacyNumber,
+    light_sleep_seconds: nullableOptionalLegacyNumber,
+    rem_sleep_seconds: nullableOptionalLegacyNumber,
+    awake_sleep_seconds: nullableOptionalLegacyNumber,
+    sleep_score: nullableOptionalLegacyNumber,
+    entry_hour: nullableOptionalLegacyNumber,
+    notes: optionalLegacyString,
+  })
+  .loose()
+  .refine((item) => Boolean(item.date || item.entry_date || item.timestamp), {
+    message: 'Each row needs a date, entry_date, or timestamp',
+    path: ['date'],
+  });
+
+export type ImportHealthDataItem = z.infer<typeof ImportHealthDataItemSchema>;
+
+export const ImportHealthDataBodySchema = z
+  .object({
+    items: z
+      .array(ImportHealthDataItemSchema)
+      .min(1, 'items must contain at least one row')
+      .max(5000, 'items cannot exceed 5000 rows per request'),
+  })
+  .loose();
+
+export type ImportHealthDataBody = z.infer<typeof ImportHealthDataBodySchema>;

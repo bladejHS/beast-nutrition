@@ -1,0 +1,1570 @@
+import type { PoolClient } from 'pg';
+import { getClient } from '../db/poolManager.js';
+import { log } from '../config/logging.js';
+// @ts-expect-error TS(7016): Could not find a declaration file for module 'pg-f... Remove this comment to see the full error message
+import format from 'pg-format';
+import { sanitizeCustomNutrients } from '../utils/foodUtils.js';
+import { toImageArray } from '../utils/imageLocalizer.js';
+import type { FoodEntryInput, FoodEntrySnapshot } from '../types/nutrition.js';
+import {
+  copyFingerprintFor,
+  hasExactReviewedFoodEntrySnapshot,
+  sanitizeNotes,
+  type CopySelectedFoodEntriesFromUserBody,
+  type FoodEntryCopyFingerprintVersion,
+  type ReviewedFoodEntryFingerprint,
+} from '@workspace/shared';
+
+interface FoodEntryCopyContext {
+  targetUserId: string;
+  actingUserId: string;
+  sourceUserId: string;
+  sourceDate: string;
+  targetDate: string;
+  targetMealTypeId: string;
+  fingerprintVersion?: FoodEntryCopyFingerprintVersion;
+}
+
+interface ReviewedFoodEntryCopyInput extends FoodEntryCopyContext {
+  sourceMealTypeId: string;
+  reviewedEntries: ReviewedFoodEntryFingerprint[];
+}
+
+interface SelectedFoodEntryCopyInput extends FoodEntryCopyContext {
+  selections: CopySelectedFoodEntriesFromUserBody['entries'];
+}
+
+interface ReviewedSourceEntry extends FoodEntryInput {
+  id: string;
+  food_entry_meal_id: string | null;
+}
+
+interface SourceMealContainer {
+  id: string;
+  meal_template_id: string | null;
+  entry_time: string | null;
+  name: string;
+  description: string | null;
+  notes: string | null;
+  quantity: number | null;
+  unit: string | null;
+  legacy_serving_unit_math: boolean;
+  entry_total_servings: number | null;
+}
+
+function reviewedCopyConflict() {
+  return Object.assign(
+    new Error('One or more source entries changed. Refresh the family diary.'),
+    { statusCode: 409 }
+  );
+}
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     FoodEntry:
+ *       type: object
+ *       required:
+ *         - user_id
+ *         - meal_type_id
+ *         - quantity
+ *         - unit
+ *         - entry_date
+ *         - food_name
+ *         - calories
+ *       properties:
+ *         id:
+ *           type: string
+ *           format: uuid
+ *           description: The unique identifier for the food entry.
+ *         user_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the user who owns this food entry.
+ *         food_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the food, if this entry is linked to a food in the database.
+ *         meal_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the meal, if this entry is part of a meal.
+ *         meal_type_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the meal type (e.g., breakfast, lunch, dinner).
+ *         quantity:
+ *           type: number
+ *           description: The quantity of the food consumed.
+ *         unit:
+ *           type: string
+ *           description: The unit of measurement for the quantity (e.g., grams, oz, serving).
+ *         entry_date:
+ *           type: string
+ *           format: date
+ *           description: The date the food was consumed.
+ *         entry_time:
+ *           type: string
+ *           description: The wall-clock local time of day the food was eaten (e.g., HH:MM). Nullable.
+ *         variant_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the food variant, if applicable.
+ *         food_entry_meal_id:
+ *           type: string
+ *           format: uuid
+ *           description: The ID of the food entry meal, if this entry is part of a larger meal entry.
+ *         food_name:
+ *           type: string
+ *           description: The name of the food.
+ *         brand_name:
+ *           type: string
+ *           description: The brand name of the food.
+ *         serving_size:
+ *           type: number
+ *           description: The size of a single serving.
+ *         serving_unit:
+ *           type: string
+ *           description: The unit for the serving size.
+ *         calories:
+ *           type: number
+ *           description: The number of calories.
+ *         protein:
+ *           type: number
+ *         carbs:
+ *           type: number
+ *         fat:
+ *           type: number
+ *         saturated_fat:
+ *           type: number
+ *         polyunsaturated_fat:
+ *           type: number
+ *         monounsaturated_fat:
+ *           type: number
+ *         trans_fat:
+ *           type: number
+ *         cholesterol:
+ *           type: number
+ *         sodium:
+ *           type: number
+ *         potassium:
+ *           type: number
+ *         dietary_fiber:
+ *           type: number
+ *         sugars:
+ *           type: number
+ *         vitamin_a:
+ *           type: number
+ *         vitamin_c:
+ *           type: number
+ *         calcium:
+ *           type: number
+ *         iron:
+ *           type: number
+ *         caffeine_mg:
+ *           type: number
+ *         water_ml:
+ *           type: number
+ *         alcohol_g:
+ *           type: number
+ *         glycemic_index:
+ *           type: number
+ *         custom_nutrients:
+ *           type: object
+ *           description: A JSON object for storing custom nutrient data.
+ */
+async function createFoodEntry(
+  entryData: FoodEntryInput,
+  createdByUserId: string
+) {
+  log(
+    'info',
+    `createFoodEntry in foodEntry.js: entryData: ${JSON.stringify(entryData)}, createdByUserId: ${createdByUserId}`
+  );
+  const client = await getClient(entryData.user_id, createdByUserId); // User-specific operation
+  try {
+    await client.query('BEGIN');
+    let mealTypeId = entryData.meal_type_id;
+    if (!mealTypeId && entryData.meal_type) {
+      const typeRes = await client.query(
+        'SELECT id FROM meal_types WHERE LOWER(name) = LOWER($1)',
+        [entryData.meal_type]
+      );
+      if (typeRes.rows.length > 0) {
+        mealTypeId = typeRes.rows[0].id;
+      } else {
+        throw new Error(`Invalid meal type: ${entryData.meal_type}`);
+      }
+    }
+    let snapshot: Record<string, unknown>;
+    // For individual food entries (food_id present), fetch snapshot from food/variant
+    // For entries that are components of a logged meal (food_entry_meal_id present),
+    // snapshot data should be directly provided in entryData.
+    if (entryData.food_id) {
+      // This is an individual food entry
+      const foodSnapshotQuery = await client.query(
+        `SELECT f.name, f.brand, f.images AS food_images, fv.*
+         FROM foods f
+         JOIN food_variants fv ON f.id = fv.food_id
+         WHERE f.id = $1 AND fv.id = $2`,
+        [entryData.food_id, entryData.variant_id]
+      );
+      // Add custom_nutrients to the snapshot if available
+      if (foodSnapshotQuery.rows.length > 0) {
+        foodSnapshotQuery.rows[0].custom_nutrients =
+          foodSnapshotQuery.rows[0].custom_nutrients || {};
+      }
+      if (foodSnapshotQuery.rows.length === 0) {
+        throw new Error('Food or variant not found for snapshotting.');
+      }
+      snapshot = foodSnapshotQuery.rows[0];
+      // Apply inline nutrition overrides if provided by the client.
+      // The DB snapshot uses 'name'/'brand' keys while entryData uses 'food_name'/'brand_name'.
+      const nutritionOverrideFields: (keyof FoodEntrySnapshot)[] = [
+        'calories',
+        'protein',
+        'carbs',
+        'fat',
+        'saturated_fat',
+        'polyunsaturated_fat',
+        'monounsaturated_fat',
+        'trans_fat',
+        'cholesterol',
+        'sodium',
+        'potassium',
+        'dietary_fiber',
+        'sugars',
+        'vitamin_a',
+        'vitamin_c',
+        'calcium',
+        'iron',
+        'caffeine_mg',
+        'water_ml',
+        'alcohol_g',
+        'glycemic_index',
+        'serving_size',
+        'serving_unit',
+        'allergens',
+        'traces',
+      ];
+      for (const field of nutritionOverrideFields) {
+        if (entryData[field] !== undefined) {
+          snapshot[field] = entryData[field];
+        }
+      }
+      if (entryData.food_name !== undefined)
+        snapshot.name = entryData.food_name;
+      if (entryData.brand_name !== undefined)
+        snapshot.brand = entryData.brand_name;
+      if (entryData.custom_nutrients !== undefined) {
+        snapshot.custom_nutrients = sanitizeCustomNutrients(
+          entryData.custom_nutrients
+        );
+      }
+    } else {
+      // This means it's an entry where snapshot data is already prepared (e.g., from migration or meal components)
+      // We expect snapshot data to be present in entryData
+      snapshot = {
+        name: entryData.food_name,
+        brand: entryData.brand_name,
+        serving_size: entryData.serving_size,
+        serving_unit: entryData.serving_unit,
+        calories: entryData.calories,
+        protein: entryData.protein,
+        carbs: entryData.carbs,
+        fat: entryData.fat,
+        saturated_fat: entryData.saturated_fat,
+        polyunsaturated_fat: entryData.polyunsaturated_fat,
+        monounsaturated_fat: entryData.monounsaturated_fat,
+        trans_fat: entryData.trans_fat,
+        cholesterol: entryData.cholesterol,
+        sodium: entryData.sodium,
+        potassium: entryData.potassium,
+        dietary_fiber: entryData.dietary_fiber,
+        sugars: entryData.sugars,
+        vitamin_a: entryData.vitamin_a,
+        vitamin_c: entryData.vitamin_c,
+        calcium: entryData.calcium,
+        iron: entryData.iron,
+        caffeine_mg: entryData.caffeine_mg,
+        water_ml: entryData.water_ml,
+        alcohol_g: entryData.alcohol_g,
+        glycemic_index: entryData.glycemic_index,
+        custom_nutrients: entryData.custom_nutrients || {},
+        allergens: entryData.allergens || null,
+        traces: entryData.traces || null,
+      };
+    }
+    // Insert the food entry with the snapshot data
+    const result = await client.query(
+      `INSERT INTO food_entries (
+         user_id, food_id, meal_id, meal_type_id, quantity, unit, entry_date, variant_id, meal_plan_template_id,
+         food_entry_meal_id,
+         created_by_user_id, food_name, brand_name, serving_size, serving_unit, calories, protein, carbs, fat,
+         saturated_fat, polyunsaturated_fat, monounsaturated_fat, trans_fat, cholesterol, sodium,
+         potassium, dietary_fiber, sugars, vitamin_a, vitamin_c, calcium, iron, glycemic_index, custom_nutrients, allergens, traces, updated_by_user_id,
+         source, source_id, entry_time, images, notes, caffeine_mg, water_ml, alcohol_g
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
+         $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41::jsonb, $42, $43, $44, $45
+       )
+       -- Idempotent re-sync for provider-sourced entries (e.g. Health Connect):
+       -- re-ingesting the same record updates it in place. Manual/web entries
+       -- (source/source_id NULL) are excluded by the partial unique index, so
+       -- this never alters their behavior.
+       ON CONFLICT (user_id, source, source_id)
+         WHERE source IS NOT NULL AND source_id IS NOT NULL
+         DO UPDATE SET
+           food_id = EXCLUDED.food_id,
+           meal_type_id = EXCLUDED.meal_type_id,
+           quantity = EXCLUDED.quantity,
+           unit = EXCLUDED.unit,
+           entry_date = EXCLUDED.entry_date,
+           variant_id = EXCLUDED.variant_id,
+           food_name = EXCLUDED.food_name,
+           brand_name = EXCLUDED.brand_name,
+           serving_size = EXCLUDED.serving_size,
+           serving_unit = EXCLUDED.serving_unit,
+           calories = EXCLUDED.calories,
+           protein = EXCLUDED.protein,
+           carbs = EXCLUDED.carbs,
+           fat = EXCLUDED.fat,
+           saturated_fat = EXCLUDED.saturated_fat,
+           polyunsaturated_fat = EXCLUDED.polyunsaturated_fat,
+           monounsaturated_fat = EXCLUDED.monounsaturated_fat,
+           trans_fat = EXCLUDED.trans_fat,
+           cholesterol = EXCLUDED.cholesterol,
+           sodium = EXCLUDED.sodium,
+           potassium = EXCLUDED.potassium,
+           dietary_fiber = EXCLUDED.dietary_fiber,
+           sugars = EXCLUDED.sugars,
+           vitamin_a = EXCLUDED.vitamin_a,
+           vitamin_c = EXCLUDED.vitamin_c,
+           calcium = EXCLUDED.calcium,
+           iron = EXCLUDED.iron,
+           glycemic_index = EXCLUDED.glycemic_index,
+           custom_nutrients = EXCLUDED.custom_nutrients,
+           allergens = EXCLUDED.allergens,
+           traces = EXCLUDED.traces,
+           updated_by_user_id = EXCLUDED.updated_by_user_id,
+           entry_time = EXCLUDED.entry_time,
+           caffeine_mg = EXCLUDED.caffeine_mg,
+           water_ml = EXCLUDED.water_ml,
+           alcohol_g = EXCLUDED.alcohol_g
+           -- notes is deliberately absent: it is user-authored, so a provider
+           -- re-sync must never overwrite what the user wrote on this entry.
+       RETURNING *`,
+      [
+        entryData.user_id,
+        entryData.food_id,
+        entryData.meal_id,
+        mealTypeId,
+        entryData.quantity,
+        entryData.unit,
+        entryData.entry_date,
+        entryData.variant_id,
+        entryData.meal_plan_template_id,
+        entryData.food_entry_meal_id,
+        createdByUserId, // created_by_user_id
+        snapshot.name, // food_name
+        snapshot.brand, // brand_name
+        snapshot.serving_size,
+        snapshot.serving_unit,
+        snapshot.calories,
+        snapshot.protein,
+        snapshot.carbs,
+        snapshot.fat,
+        snapshot.saturated_fat,
+        snapshot.polyunsaturated_fat,
+        snapshot.monounsaturated_fat,
+        snapshot.trans_fat,
+        snapshot.cholesterol,
+        snapshot.sodium,
+        snapshot.potassium,
+        snapshot.dietary_fiber,
+        snapshot.sugars,
+        snapshot.vitamin_a,
+        snapshot.vitamin_c,
+        snapshot.calcium,
+        snapshot.iron,
+        snapshot.glycemic_index,
+        snapshot.custom_nutrients || {},
+        snapshot.allergens || null,
+        snapshot.traces || null,
+        createdByUserId, // updated_by_user_id
+        entryData.source ?? null,
+        entryData.source_id ?? null,
+        entryData.entry_time ?? null,
+        // Photos are snapshotted like nutrition: the entry keeps what the food
+        // looked like when it was logged, so editing the food later does not
+        // rewrite history. An explicit client value still wins (that is the
+        // per-entry photo the user chose), and meal-component entries have no
+        // parent food row to read from, so they fall back to an empty array.
+        JSON.stringify(toImageArray(entryData.images ?? snapshot.food_images)),
+        // Per-occurrence note. Never seeded from the parent food's notes: the
+        // food's note is shown alongside this one, not copied into it.
+        sanitizeNotes(entryData.notes) ?? null,
+        snapshot.caffeine_mg,
+        snapshot.water_ml,
+        snapshot.alcohol_g,
+      ]
+    );
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    log('error', 'Error creating food entry with snapshot:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function getFoodEntryById(entryId: string, userId: string) {
+  const client = await getClient(userId); // User-specific operation (RLS will handle access)
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id, 
+        fe.food_id, 
+        fe.meal_id, 
+        mt.name as meal_type, fe.meal_type_id,
+        fe.quantity,
+        fe.unit,
+        fe.variant_id,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.meal_plan_template_id,
+        fe.food_entry_meal_id, 
+        fe.food_name, 
+        fe.brand_name, 
+        fe.serving_size, 
+        fe.serving_unit, 
+        fe.calories, 
+        fe.protein, 
+        fe.carbs, 
+        fe.fat,
+        fe.saturated_fat, 
+        fe.polyunsaturated_fat, 
+        fe.monounsaturated_fat, 
+        fe.trans_fat, 
+        fe.cholesterol, fe.sodium,
+        fe.potassium, 
+        fe.dietary_fiber, 
+        fe.sugars, 
+        fe.vitamin_a, 
+        fe.vitamin_c, 
+        fe.calcium, 
+        fe.iron, 
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index,
+        fe.custom_nutrients,
+        fe.allergens,
+        fe.traces,
+        fe.user_id
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       WHERE fe.id = $1`,
+      [entryId]
+    );
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+async function getFoodEntryOwnerId(entryId: string, userId: string) {
+  const client = await getClient(userId); // User-specific operation (RLS will handle access)
+  try {
+    const result = await client.query(
+      'SELECT user_id FROM food_entries WHERE id = $1',
+      [entryId]
+    );
+    return result.rows[0]?.user_id;
+  } finally {
+    client.release();
+  }
+}
+async function deleteFoodEntry(entryId: string, userId: string) {
+  const client = await getClient(userId); // User-specific operation (RLS will handle access)
+  try {
+    const result = await client.query(
+      'DELETE FROM food_entries WHERE id = $1 RETURNING id',
+      [entryId]
+    );
+    return result.rowCount > 0;
+  } finally {
+    client.release();
+  }
+}
+async function updateFoodEntry(
+  entryId: string,
+  userId: string,
+  actingUserId: string,
+  entryData: FoodEntryInput,
+  snapshotData: FoodEntrySnapshot
+) {
+  const client = await getClient(userId, actingUserId); // User-specific operation
+  let mealTypeId = entryData.meal_type_id;
+  if (!mealTypeId && entryData.meal_type) {
+    // If we are updating the meal type and only have the name
+    const typeRes = await client.query(
+      'SELECT id FROM meal_types WHERE LOWER(name) = LOWER($1)',
+      [entryData.meal_type]
+    );
+    if (typeRes.rows.length > 0) mealTypeId = typeRes.rows[0].id;
+  }
+  try {
+    const result = await client.query(
+      `UPDATE food_entries SET
+        quantity = COALESCE($1, quantity),
+        unit = COALESCE($2, unit),
+        entry_date = COALESCE($3, entry_date),
+        variant_id = COALESCE($4, variant_id),
+        food_entry_meal_id = COALESCE($5, food_entry_meal_id), -- New column
+        meal_type_id = COALESCE($31, meal_type_id), -- Added support to update meal category
+        updated_by_user_id = $6,
+        food_name = $7,
+        brand_name = $8,
+        serving_size = $9,
+        serving_unit = $10,
+        calories = $11,
+        protein = $12,
+        carbs = $13,
+        fat = $14,
+        saturated_fat = $15,
+        polyunsaturated_fat = $16,
+        monounsaturated_fat = $17,
+        trans_fat = $18,
+        cholesterol = $19,
+        sodium = $20,
+        potassium = $21,
+        dietary_fiber = $22,
+        sugars = $23,
+        vitamin_a = $24,
+        vitamin_c = $25,
+        calcium = $26,
+        iron = $27,
+        glycemic_index = $28,
+        custom_nutrients = $29,
+        allergens = $32,
+        traces = $33,
+        entry_time = $34,
+        -- NULL means "key omitted": keep whatever override is already stored.
+        -- Clearing the override is done by sending an empty array.
+        images = COALESCE($35::jsonb, images),
+        -- Plain assignment like entry_time: the service has already resolved
+        -- "key omitted => keep existing" against the stored row, so whatever
+        -- arrives here is the value the entry should end up with.
+        notes = $36,
+        caffeine_mg = $37,
+        water_ml = $38,
+        alcohol_g = $39
+      WHERE id = $30
+      RETURNING *`,
+      [
+        entryData.quantity,
+        entryData.unit,
+        entryData.entry_date,
+        entryData.variant_id,
+        entryData.food_entry_meal_id,
+        actingUserId,
+        snapshotData.food_name,
+        snapshotData.brand_name,
+        snapshotData.serving_size,
+        snapshotData.serving_unit,
+        snapshotData.calories,
+        snapshotData.protein,
+        snapshotData.carbs,
+        snapshotData.fat,
+        snapshotData.saturated_fat,
+        snapshotData.polyunsaturated_fat,
+        snapshotData.monounsaturated_fat,
+        snapshotData.trans_fat,
+        snapshotData.cholesterol,
+        snapshotData.sodium,
+        snapshotData.potassium,
+        snapshotData.dietary_fiber,
+        snapshotData.sugars,
+        snapshotData.vitamin_a,
+        snapshotData.vitamin_c,
+        snapshotData.calcium,
+        snapshotData.iron,
+        snapshotData.glycemic_index,
+        snapshotData.custom_nutrients || {},
+        entryId,
+        mealTypeId,
+        snapshotData.allergens ?? null,
+        snapshotData.traces ?? null,
+        entryData.entry_time ?? null,
+        entryData.images === undefined
+          ? null
+          : JSON.stringify(toImageArray(entryData.images)),
+        sanitizeNotes(entryData.notes) ?? null,
+        snapshotData.caffeine_mg,
+        snapshotData.water_ml,
+        snapshotData.alcohol_g,
+      ]
+    );
+    return result.rows[0];
+  } finally {
+    client.release();
+  }
+}
+async function updateFoodEntryTime(
+  entryId: string,
+  userId: string,
+  entryTime: string | null,
+  client?: PoolClient
+) {
+  const ownClient = !client;
+  const activeClient = client ?? (await getClient(userId));
+  try {
+    const result = await activeClient.query(
+      'UPDATE food_entries SET entry_time = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
+      [entryTime, entryId, userId]
+    );
+    return result.rows[0] || null;
+  } finally {
+    if (ownClient) activeClient.release();
+  }
+}
+
+async function getFoodEntriesByDate(userId: string, selectedDate: string) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id,
+        fe.user_id,
+        fe.food_id,
+        fe.meal_id,
+        mt.name as meal_type, fe.meal_type_id,
+        fe.quantity, -- Note: quantity is already scaled when created for meal components
+        fe.unit,
+        fe.variant_id,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.meal_plan_template_id,
+        fe.food_entry_meal_id,
+        fe.food_name,
+        fe.brand_name,
+        fe.serving_size,
+        fe.serving_unit,
+        fe.calories,
+        fe.protein,
+        fe.carbs,
+        fe.fat,
+        fe.saturated_fat,
+        fe.polyunsaturated_fat,
+        fe.monounsaturated_fat,
+        fe.trans_fat,
+        fe.cholesterol,
+        fe.sodium,
+        fe.potassium,
+        fe.dietary_fiber,
+        fe.sugars,
+        fe.vitamin_a,
+        fe.vitamin_c,
+        fe.calcium,
+        fe.iron,
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index,
+        fe.custom_nutrients,
+        fe.source,
+        COALESCE(fe.allergens, fv.allergens) AS allergens,
+        COALESCE(fe.traces, fv.traces) AS traces,
+        f.provider_verified,
+        -- Per-entry override photo, plus the parent food's own images so the
+        -- diary can fall back when the entry has no override of its own.
+        fe.images,
+        f.images AS food_images
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       LEFT JOIN food_entry_meals fem ON fe.food_entry_meal_id = fem.id
+       LEFT JOIN food_variants fv ON fe.variant_id = fv.id
+       LEFT JOIN foods f ON fe.food_id = f.id
+       WHERE fe.user_id = $1 AND fe.entry_date = $2
+       ORDER BY mt.sort_order ASC, fe.entry_time ASC NULLS LAST, fe.created_at`,
+      [userId, selectedDate]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+async function getFoodEntriesByDateAndMealType(
+  userId: string,
+  date: string,
+  mealType: string
+) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id, 
+        fe.food_id, 
+        fe.meal_id,
+        mt.name as meal_type, fe.meal_type_id,
+        fe.quantity, -- Note: quantity is already scaled when created for meal components
+        fe.unit,
+        fe.variant_id,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.meal_plan_template_id,
+        fe.food_entry_meal_id,
+        fe.food_name,
+        fe.brand_name,
+        fe.serving_size,
+        fe.serving_unit,
+        fe.calories,
+        fe.protein,
+        fe.carbs,
+        fe.fat,
+        fe.saturated_fat,
+        fe.polyunsaturated_fat,
+        fe.monounsaturated_fat,
+        fe.trans_fat,
+        fe.cholesterol,
+        fe.sodium,
+        fe.potassium,
+        fe.dietary_fiber,
+        fe.sugars,
+        fe.vitamin_a,
+        fe.vitamin_c,
+        fe.calcium,
+        fe.iron,
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index,
+        fe.custom_nutrients,
+        f.provider_verified,
+        -- Per-entry override photo, plus the parent food's own images so the
+        -- diary can fall back when the entry has no override of its own.
+        fe.images,
+        f.images AS food_images
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       LEFT JOIN food_entry_meals fem ON fe.food_entry_meal_id = fem.id
+       LEFT JOIN foods f ON fe.food_id = f.id
+       WHERE fe.user_id = $1
+          AND fe.entry_date = $2
+          AND (LOWER(mt.name) = LOWER($3) OR fe.meal_type_id::text = $3)`,
+      [userId, date, mealType]
+    );
+    log(
+      'debug',
+      `getFoodEntriesByDateAndMealType: Fetched entries for user ${userId}, date ${date}, mealType ${mealType}: ${JSON.stringify(result.rows)}`
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+async function getFoodEntriesByDateRange(
+  userId: string,
+  startDate: string,
+  endDate: string
+) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id, 
+        fe.food_id, 
+        fe.meal_id, 
+        mt.name as meal_type, fe.meal_type_id,
+        fe.quantity, -- Note: quantity is already scaled when created for meal components
+        fe.unit,
+        fe.variant_id,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.meal_plan_template_id,
+        fe.food_entry_meal_id,
+        fe.food_name,
+        fe.brand_name,
+        fe.serving_size,
+        fe.serving_unit,
+        fe.calories,
+        fe.protein,
+        fe.carbs,
+        fe.fat,
+        fe.saturated_fat,
+        fe.polyunsaturated_fat,
+        fe.monounsaturated_fat,
+        fe.trans_fat,
+        fe.cholesterol,
+        fe.sodium,
+        fe.potassium,
+        fe.dietary_fiber,
+        fe.sugars,
+        fe.vitamin_a, 
+        fe.vitamin_c, 
+        fe.calcium, 
+        fe.iron, 
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index, 
+        fe.custom_nutrients,
+        f.provider_verified,
+        -- Per-entry override photo, plus the parent food's own images so the
+        -- diary can fall back when the entry has no override of its own.
+        fe.images,
+        f.images AS food_images
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       LEFT JOIN food_entry_meals fem ON fe.food_entry_meal_id = fem.id
+       LEFT JOIN foods f ON fe.food_id = f.id
+       WHERE fe.user_id = $1 AND fe.entry_date BETWEEN $2 AND $3
+       ORDER BY fe.entry_date, mt.sort_order ASC`,
+      [userId, startDate, endDate]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+async function getFoodEntryByDetails(
+  userId: string,
+  foodId: string,
+  mealType: string,
+  entryDate: string,
+  variantId: string | null,
+  foodEntryMealId = null
+) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT fe.id 
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       WHERE fe.user_id = $1
+         AND fe.food_id = $2
+         AND (LOWER(mt.name) = LOWER($3) OR fe.meal_type_id::text = $3)
+         AND fe.entry_date = $4
+         AND fe.variant_id = $5
+         AND (
+           ($6::uuid IS NULL AND fe.food_entry_meal_id IS NULL) OR 
+           (fe.food_entry_meal_id = $6::uuid)
+         )`,
+      [userId, foodId, mealType, entryDate, variantId, foodEntryMealId]
+    );
+    return result.rows[0]; // Returns the entry if found, otherwise undefined
+  } finally {
+    client.release();
+  }
+}
+
+// Copies reviewed rows in either direction in one serializable transaction.
+// The source snapshot check belongs next to the writes so an update that races
+// the service's preliminary check cannot leave partially-created containers.
+async function copyFoodEntriesWithReview({
+  targetUserId,
+  actingUserId,
+  sourceUserId,
+  sourceDate,
+  sourceMealTypeId,
+  targetDate,
+  targetMealTypeId,
+  reviewedEntries,
+  selections,
+  fingerprintVersion,
+}: FoodEntryCopyContext & {
+  sourceMealTypeId?: string;
+  reviewedEntries: ReviewedFoodEntryFingerprint[];
+  selections?: CopySelectedFoodEntriesFromUserBody['entries'];
+}) {
+  const client = await getClient(targetUserId, actingUserId);
+  let transactionStarted = false;
+  let releaseError: Error | undefined;
+
+  try {
+    await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+    transactionStarted = true;
+
+    const sourceResult = (await client.query(
+      `SELECT
+        fe.id,
+        fe.user_id,
+        fe.food_id,
+        fe.meal_id,
+        fe.meal_type_id,
+        fe.quantity,
+        fe.unit,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.variant_id,
+        fe.meal_plan_template_id,
+        fe.food_entry_meal_id,
+        fe.food_name,
+        fe.brand_name,
+        fe.serving_size,
+        fe.serving_unit,
+        fe.calories,
+        fe.protein,
+        fe.carbs,
+        fe.fat,
+        fe.saturated_fat,
+        fe.polyunsaturated_fat,
+        fe.monounsaturated_fat,
+        fe.trans_fat,
+        fe.cholesterol,
+        fe.sodium,
+        fe.potassium,
+        fe.dietary_fiber,
+        fe.sugars,
+        fe.vitamin_a,
+        fe.vitamin_c,
+        fe.calcium,
+        fe.iron,
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index,
+        fe.custom_nutrients
+       FROM food_entries fe
+       WHERE fe.user_id = $1
+         AND fe.entry_date = $2
+         AND ${selections ? 'fe.id = ANY($3::uuid[])' : 'fe.meal_type_id = $3'}
+       FOR SHARE`,
+      [
+        sourceUserId,
+        sourceDate,
+        selections
+          ? selections.map(({ entryId }) => entryId)
+          : sourceMealTypeId,
+      ]
+    )) as { rows: ReviewedSourceEntry[] };
+    const sourceEntries = sourceResult.rows;
+    if (
+      !hasExactReviewedFoodEntrySnapshot(
+        sourceEntries,
+        reviewedEntries,
+        copyFingerprintFor(fingerprintVersion)
+      ) ||
+      (selections &&
+        sourceEntries.some(
+          (entry) =>
+            !Number.isFinite(Number(entry.serving_size)) ||
+            Number(entry.serving_size) <= 0
+        ))
+    ) {
+      throw reviewedCopyConflict();
+    }
+
+    // Recheck destination ownership in the write transaction. A source user's
+    // custom meal type must never be accepted for another user's diary.
+    const targetMealTypeResult = await client.query(
+      'SELECT id FROM meal_types WHERE id = $1 AND (user_id = $2 OR user_id IS NULL)',
+      [targetMealTypeId, targetUserId]
+    );
+    if (targetMealTypeResult.rows.length === 0) {
+      throw Object.assign(new Error('Invalid target meal type.'), {
+        statusCode: 400,
+      });
+    }
+
+    const quantityByEntryId = new Map(
+      selections?.map(({ entryId, quantity }) => [entryId, quantity])
+    );
+    const copiedEntries: unknown[] = [];
+    const targetMealIdBySourceMealId = new Map<string, string>();
+    const existingStandaloneResult = (await client.query(
+      `SELECT food_id, variant_id
+       FROM food_entries
+       WHERE user_id = $1
+         AND meal_type_id = $2
+         AND entry_date = $3
+         AND food_entry_meal_id IS NULL
+         AND food_id IS NOT NULL`,
+      [targetUserId, targetMealTypeId, targetDate]
+    )) as {
+      rows: Array<{ food_id: string | null; variant_id: string | null }>;
+    };
+    const existingStandaloneKeys = new Set(
+      existingStandaloneResult.rows
+        .filter(({ food_id }) => food_id !== null)
+        .map(
+          ({ food_id, variant_id }) =>
+            `${food_id ?? 'null'}:${variant_id ?? 'null'}`
+        )
+    );
+
+    for (const entry of sourceEntries) {
+      let targetFoodEntryMealId: string | null = null;
+      if (!selections && entry.food_entry_meal_id) {
+        targetFoodEntryMealId =
+          targetMealIdBySourceMealId.get(entry.food_entry_meal_id) ?? null;
+
+        if (!targetFoodEntryMealId) {
+          const sourceMealResult = (await client.query(
+            `SELECT
+              id,
+              meal_template_id,
+              entry_time,
+              name,
+              description,
+              notes,
+              quantity,
+              unit,
+              legacy_serving_unit_math,
+              entry_total_servings
+             FROM food_entry_meals
+             WHERE id = $1 AND user_id = $2
+             FOR SHARE`,
+            [entry.food_entry_meal_id, sourceUserId]
+          )) as { rows: SourceMealContainer[] };
+          const sourceMeal = sourceMealResult.rows[0];
+          if (!sourceMeal) throw reviewedCopyConflict();
+
+          const targetMealResult = (await client.query(
+            `INSERT INTO food_entry_meals (
+              user_id,
+              meal_template_id,
+              meal_type_id,
+              entry_date,
+              entry_time,
+              name,
+              description,
+              notes,
+              quantity,
+              unit,
+              legacy_serving_unit_math,
+              created_by_user_id,
+              updated_by_user_id,
+              images,
+              entry_total_servings
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+              COALESCE((SELECT images FROM meals WHERE id = $2), '[]'::jsonb),
+              $14
+            )
+            RETURNING id`,
+            [
+              targetUserId,
+              sourceMeal.meal_template_id,
+              targetMealTypeId,
+              targetDate,
+              sourceMeal.entry_time,
+              sourceMeal.name,
+              sourceMeal.description,
+              sourceMeal.notes,
+              sourceMeal.quantity,
+              sourceMeal.unit,
+              sourceMeal.legacy_serving_unit_math,
+              actingUserId,
+              actingUserId,
+              sourceMeal.entry_total_servings,
+            ]
+          )) as { rows: Array<{ id: string }> };
+          targetFoodEntryMealId = targetMealResult.rows[0]?.id ?? null;
+          if (!targetFoodEntryMealId) {
+            throw new Error('Could not create copied meal container.');
+          }
+          targetMealIdBySourceMealId.set(
+            entry.food_entry_meal_id,
+            targetFoodEntryMealId
+          );
+        }
+      } else {
+        const standaloneKey = `${entry.food_id ?? 'null'}:${entry.variant_id ?? 'null'}`;
+        if (
+          entry.food_id !== null &&
+          entry.food_id !== undefined &&
+          // Outbound copies always add every reviewed snapshot. Inbound copies
+          // retain legacy deduplication, including the selected-variant rule.
+          fingerprintVersion !== 'to-user' &&
+          (!selections ||
+            (entry.variant_id !== null && entry.variant_id !== undefined)) &&
+          existingStandaloneKeys.has(standaloneKey)
+        )
+          continue;
+      }
+
+      const inserted = await client.query(
+        `INSERT INTO food_entries (
+          user_id, food_id, meal_type_id, quantity, unit, entry_date,
+          entry_time, variant_id, meal_plan_template_id, food_entry_meal_id,
+          created_by_user_id, updated_by_user_id, food_name, brand_name,
+          serving_size, serving_unit, calories, protein, carbs, fat,
+          saturated_fat, polyunsaturated_fat, monounsaturated_fat, trans_fat,
+          cholesterol, sodium, potassium, dietary_fiber, sugars, vitamin_a,
+          vitamin_c, calcium, iron, caffeine_mg, water_ml, alcohol_g,
+          glycemic_index, custom_nutrients, notes, meal_id
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+          $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+          $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
+        ) RETURNING *`,
+        [
+          targetUserId,
+          entry.food_id,
+          targetMealTypeId,
+          quantityByEntryId.get(entry.id) ?? entry.quantity,
+          entry.unit,
+          targetDate,
+          entry.entry_time ?? null,
+          entry.variant_id,
+          null,
+          targetFoodEntryMealId,
+          actingUserId,
+          actingUserId,
+          entry.food_name,
+          entry.brand_name,
+          entry.serving_size,
+          entry.serving_unit,
+          entry.calories,
+          entry.protein,
+          entry.carbs,
+          entry.fat,
+          entry.saturated_fat,
+          entry.polyunsaturated_fat,
+          entry.monounsaturated_fat,
+          entry.trans_fat,
+          entry.cholesterol,
+          entry.sodium,
+          entry.potassium,
+          entry.dietary_fiber,
+          entry.sugars,
+          entry.vitamin_a,
+          entry.vitamin_c,
+          entry.calcium,
+          entry.iron,
+          entry.caffeine_mg,
+          entry.water_ml,
+          entry.alcohol_g,
+          entry.glycemic_index,
+          sanitizeCustomNutrients(entry.custom_nutrients),
+          sanitizeNotes(entry.notes) ?? null,
+          // A source meal deletion must not cascade into the copied snapshot.
+          null,
+        ]
+      );
+      copiedEntries.push(...inserted.rows);
+    }
+
+    await client.query('COMMIT');
+    return copiedEntries;
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        releaseError = rollbackError as Error;
+      }
+    }
+    if ((error as { code?: string }).code === '40001') {
+      throw reviewedCopyConflict();
+    }
+    throw error;
+  } finally {
+    client.release(releaseError);
+  }
+}
+
+async function copyReviewedFoodEntriesFromUser(
+  input: ReviewedFoodEntryCopyInput
+) {
+  return copyFoodEntriesWithReview(input);
+}
+
+async function copySelectedFoodEntries(input: SelectedFoodEntryCopyInput) {
+  return copyFoodEntriesWithReview({
+    ...input,
+    reviewedEntries: input.selections,
+  });
+}
+
+/**
+ * Inserts many `food_entries` rows in one statement on a caller-supplied
+ * client. Split out of `bulkCreateFoodEntries` so a transactional caller can
+ * insert entries that reference foods created earlier in the same transaction.
+ * The caller owns BEGIN/COMMIT/ROLLBACK and the client's lifetime.
+ */
+async function bulkCreateFoodEntriesWithClient(
+  client: PoolClient,
+  entriesData: FoodEntryInput[]
+) {
+  const query = `
+      INSERT INTO food_entries (
+        user_id, 
+        food_id, 
+        meal_type_id, 
+        quantity, 
+        unit,
+        entry_date,
+        entry_time,
+        variant_id,
+        meal_plan_template_id,
+        food_entry_meal_id, -- New column
+        created_by_user_id, 
+        updated_by_user_id,
+        food_name, 
+        brand_name, 
+        serving_size, 
+        serving_unit, 
+        calories,
+        protein, 
+        carbs, 
+        fat,
+        saturated_fat, 
+        polyunsaturated_fat, 
+        monounsaturated_fat, 
+        trans_fat, 
+        cholesterol, 
+        sodium,
+        potassium, 
+        dietary_fiber, 
+        sugars, 
+        vitamin_a, 
+        vitamin_c, 
+        calcium, 
+        iron, 
+        caffeine_mg,
+        water_ml,
+        alcohol_g,
+        glycemic_index,
+        custom_nutrients,
+        notes
+      )
+      VALUES %L RETURNING *`;
+  const values = entriesData.map((entry: FoodEntryInput) => [
+    entry.user_id,
+    entry.food_id,
+    entry.meal_type_id,
+    entry.quantity,
+    entry.unit,
+    entry.entry_date,
+    entry.entry_time ?? null,
+    entry.variant_id,
+    entry.meal_plan_template_id || null, // meal_plan_template_id can be null
+    entry.food_entry_meal_id || null, // New column value
+    entry.created_by_user_id, // created_by_user_id
+    entry.created_by_user_id, // updated_by_user_id
+    // Snapshot data
+    entry.food_name,
+    entry.brand_name,
+    entry.serving_size,
+    entry.serving_unit,
+    entry.calories,
+    entry.protein,
+    entry.carbs,
+    entry.fat,
+    entry.saturated_fat,
+    entry.polyunsaturated_fat,
+    entry.monounsaturated_fat,
+    entry.trans_fat,
+    entry.cholesterol,
+    entry.sodium,
+    entry.potassium,
+    entry.dietary_fiber,
+    entry.sugars,
+    entry.vitamin_a,
+    entry.vitamin_c,
+    entry.calcium,
+    entry.iron,
+    entry.caffeine_mg,
+    entry.water_ml,
+    entry.alcohol_g,
+    entry.glycemic_index,
+    entry.custom_nutrients || {},
+    sanitizeNotes(entry.notes) ?? null,
+  ]);
+  const formattedQuery = format(query, values);
+  const result = await client.query(formattedQuery);
+  return result.rows;
+}
+
+async function bulkCreateFoodEntries(
+  entriesData: FoodEntryInput[],
+  authenticatedUserId: string,
+  options?: { client?: PoolClient }
+) {
+  log(
+    'info',
+    `bulkCreateFoodEntries in foodEntry.js: entriesData: ${JSON.stringify(entriesData)}, authenticatedUserId: ${authenticatedUserId}`
+  );
+  // For bulk create, assuming all entries belong to the same user,
+  // and the first entry's user_id can be used for RLS context.
+  const providedClient = options?.client;
+  const client = providedClient ?? (await getClient(authenticatedUserId)); // User-specific operation
+  try {
+    return await bulkCreateFoodEntriesWithClient(client, entriesData);
+  } finally {
+    if (!providedClient) client.release();
+  }
+}
+async function getFoodEntryComponentsByFoodEntryMealId(
+  foodEntryMealId: string,
+  userId: string
+) {
+  log(
+    'info',
+    `getFoodEntryComponentsByFoodEntryMealId in foodEntry.js: foodEntryMealId: ${foodEntryMealId}, userId: ${userId}`
+  );
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id, 
+        fe.food_id, 
+        mt.name as meal_type, fe.meal_type_id,
+        fe.quantity, 
+        fe.unit,
+        fe.variant_id,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.food_entry_meal_id,
+        fe.food_name, 
+        fe.brand_name, 
+        fe.serving_size, 
+        fe.serving_unit, 
+        fe.calories, 
+        fe.protein, 
+        fe.carbs, 
+        fe.fat,
+        fe.saturated_fat, 
+        fe.polyunsaturated_fat, 
+        fe.monounsaturated_fat, 
+        fe.trans_fat, 
+        fe.cholesterol, 
+        fe.sodium,
+        fe.potassium, 
+        fe.dietary_fiber, 
+        fe.sugars, 
+        fe.vitamin_a, 
+        fe.vitamin_c, 
+        fe.calcium, 
+        fe.iron, 
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index, 
+        fe.custom_nutrients
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       WHERE fe.food_entry_meal_id = $1`,
+      [foodEntryMealId]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+async function deleteFoodEntryComponentsByFoodEntryMealId(
+  foodEntryMealId: string,
+  userId: string,
+  providedClient?: PoolClient
+) {
+  log(
+    'info',
+    `deleteFoodEntryComponentsByFoodEntryMealId in foodEntry.js: foodEntryMealId: ${foodEntryMealId}, userId: ${userId}`
+  );
+  const client = providedClient ?? (await getClient(userId));
+  try {
+    const result = await client.query(
+      'DELETE FROM food_entries WHERE food_entry_meal_id = $1 RETURNING id',
+      [foodEntryMealId]
+    );
+    return result.rowCount > 0;
+  } finally {
+    if (!providedClient) client.release();
+  }
+}
+
+async function getFoodEntriesBatch(
+  userId: string,
+  limit: number,
+  offset: number
+) {
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `SELECT
+        fe.id, 
+        mt.name as meal_type,
+        fe.food_entry_meal_id,
+        fem.name as meal_name,
+        fe.quantity,
+        fe.unit,
+        fe.entry_date,
+        fe.entry_time,
+        fe.notes,
+        fe.food_name,
+        fe.brand_name, 
+        fe.serving_size, 
+        fe.serving_unit, 
+        fe.calories, 
+        fe.protein, 
+        fe.carbs, 
+        fe.fat,
+        fe.saturated_fat, 
+        fe.polyunsaturated_fat, 
+        fe.monounsaturated_fat, 
+        fe.trans_fat, 
+        fe.cholesterol, 
+        fe.sodium,
+        fe.potassium, 
+        fe.dietary_fiber, 
+        fe.sugars, 
+        fe.vitamin_a, 
+        fe.vitamin_c, 
+        fe.calcium, 
+        fe.iron, 
+        fe.caffeine_mg,
+        fe.water_ml,
+        fe.alcohol_g,
+        fe.glycemic_index,
+        fe.custom_nutrients
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON fe.meal_type_id = mt.id
+       LEFT JOIN food_entry_meals fem ON fe.food_entry_meal_id = fem.id
+       WHERE fe.user_id = $1
+       ORDER BY fe.entry_date ASC, fe.created_at ASC
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+// Most recent food entries with catalog name/brand. Backs the chatbot
+// sparky_get_recent_food_entries tool.
+async function getRecentFoodEntries(userId: string, limit: number) {
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `SELECT fe.*, mt.name AS meal_type, f.name AS food_name_from_catalog, f.brand AS brand_from_catalog
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON mt.id = fe.meal_type_id
+       LEFT JOIN foods f ON f.id = fe.food_id
+       WHERE fe.user_id = $1
+       ORDER BY fe.entry_date DESC, fe.created_at DESC
+       LIMIT $2`,
+      [userId, limit]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+// Paged entries for one food in a date range, plus the total count. Backs the
+// chatbot sparky_get_food_usage tool.
+async function getFoodUsage(
+  userId: string,
+  foodId: string,
+  startDate: string,
+  endDate: string,
+  limit: number,
+  offset: number
+) {
+  const client = await getClient(userId);
+  try {
+    const countResult = await client.query(
+      `SELECT COUNT(*)::int AS count
+       FROM food_entries
+       WHERE user_id = $1 AND food_id = $2 AND entry_date BETWEEN $3 AND $4`,
+      [userId, foodId, startDate, endDate]
+    );
+    const dataResult = await client.query(
+      `SELECT fe.*, mt.name AS meal_type
+       FROM food_entries fe
+       LEFT JOIN meal_types mt ON mt.id = fe.meal_type_id
+       WHERE fe.user_id = $1 AND fe.food_id = $2 AND fe.entry_date BETWEEN $3 AND $4
+       ORDER BY fe.entry_date DESC, fe.created_at DESC
+       LIMIT $5 OFFSET $6`,
+      [userId, foodId, startDate, endDate, limit, offset]
+    );
+    return {
+      rows: dataResult.rows,
+      totalCount: countResult.rows[0]?.count ?? 0,
+    };
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteStaleProviderEntries(
+  userId: string,
+  source: string,
+  startDate: string,
+  endDate: string,
+  activeSourceIds: string[]
+) {
+  if (activeSourceIds.length === 0) return 0;
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `DELETE FROM food_entries
+       WHERE user_id = $1
+         AND source = $2
+         AND entry_date BETWEEN $3 AND $4
+         AND source_id IS NOT NULL
+         AND source_id != ALL($5)
+       RETURNING id`,
+      [userId, source, startDate, endDate, activeSourceIds]
+    );
+    return result.rows.length;
+  } finally {
+    client.release();
+  }
+}
+
+export { createFoodEntry };
+export { getFoodEntryOwnerId };
+export { updateFoodEntry };
+export { updateFoodEntryTime };
+export { deleteFoodEntry };
+export { deleteStaleProviderEntries };
+export { getFoodEntriesByDate };
+export { getFoodEntriesByDateAndMealType };
+export { getFoodEntriesByDateRange };
+export { getFoodEntryByDetails };
+export { copyReviewedFoodEntriesFromUser };
+export { copySelectedFoodEntries };
+export { bulkCreateFoodEntries };
+export { getFoodEntryById };
+export { getFoodEntryComponentsByFoodEntryMealId };
+export { deleteFoodEntryComponentsByFoodEntryMealId };
+export { getFoodEntriesBatch };
+export { getRecentFoodEntries };
+export { getFoodUsage };
+export default {
+  createFoodEntry,
+  getFoodEntryOwnerId,
+  updateFoodEntry,
+  updateFoodEntryTime,
+  deleteFoodEntry,
+  deleteStaleProviderEntries,
+  getFoodEntriesByDate,
+  getFoodEntriesByDateAndMealType,
+  getFoodEntriesByDateRange,
+  getFoodEntryByDetails,
+  copyReviewedFoodEntriesFromUser,
+  copySelectedFoodEntries,
+  bulkCreateFoodEntries,
+  getFoodEntryById,
+  getFoodEntryComponentsByFoodEntryMealId,
+  deleteFoodEntryComponentsByFoodEntryMealId,
+  getFoodEntriesBatch,
+  getRecentFoodEntries,
+  getFoodUsage,
+};
+
+export { bulkCreateFoodEntriesWithClient };

@@ -1,0 +1,1435 @@
+import foodRepository from '../models/foodRepository.js';
+import preferenceService from './preferenceService.js';
+import externalProviderService from './externalProviderService.js';
+import { log } from '../config/logging.js';
+import {
+  sanitizeCustomNutrients,
+  normalizeBarcode,
+} from '../utils/foodUtils.js';
+import {
+  searchOpenFoodFactsByBarcodeFields,
+  mapOpenFoodFactsProduct,
+} from '../integrations/openfoodfacts/openFoodFactsService.js';
+import {
+  searchUsdaFoodsByBarcode,
+  mapUsdaBarcodeProduct,
+} from '../integrations/usda/usdaService.js';
+import {
+  searchFatSecretByBarcode,
+  mapFatSecretFood,
+} from '../integrations/fatsecret/fatsecretService.js';
+import { searchYazioByBarcode } from '../integrations/yazio/yazioService.js';
+import { sanitizeBoolean } from '../models/food.js';
+import type {
+  BulkImportFoodData,
+  FoodInput,
+  FoodUpdate,
+} from '../models/food.js';
+import type { FoodVariantInput } from '../types/nutrition.js';
+import {
+  removeOrphanedImages,
+  removeEntityImageDir,
+} from '../middleware/imageUpload.js';
+import { resolveImageInput, toImageArray } from '../utils/imageLocalizer.js';
+import { resolveTemplateStartDay } from '../utils/timezoneLoader.js';
+import {
+  alcoholGramsForServing,
+  BARCODE_FALLBACK_PROVIDER_ID,
+} from '@workspace/shared';
+
+/** A food row as returned by the repository. */
+interface FoodRow {
+  id: string;
+  provider_type?: string | null;
+  provider_external_id?: string | null;
+  provider_verified?: boolean | null;
+  /** True for a hidden food (a `hide` delete, or a quick add). */
+  is_quick_food?: boolean | null;
+  [column: string]: unknown;
+}
+
+/** An error from a provider call that carries an HTTP status worth surfacing. */
+interface ProviderError extends Error {
+  status?: number;
+}
+
+async function searchFoods(
+  authenticatedUserId: string,
+  name: string | null | undefined,
+  targetUserId: string | null | undefined,
+  exactMatch: boolean,
+  broadMatch: boolean,
+  checkCustom: boolean,
+  limitFromRequest = 10, // Renamed to avoid conflict with preference-based limit
+  mealType: string | undefined = undefined
+) {
+  try {
+    if (targetUserId && targetUserId !== authenticatedUserId) {
+      // Authorization check for targetUserId if needed
+    }
+    if (!name) {
+      // If no search term, return recent and top foods
+      const userPreferences = await preferenceService.getUserPreferences(
+        authenticatedUserId,
+        authenticatedUserId
+      );
+      const limit = userPreferences?.item_display_limit || limitFromRequest;
+      const recentFoods = await foodRepository.getRecentFoods(
+        authenticatedUserId,
+        limit,
+        mealType
+      );
+      const topFoods = await foodRepository.getTopFoods(
+        authenticatedUserId,
+        limit,
+        mealType
+      );
+      return {
+        recentFoods,
+        topFoods,
+      };
+    } else {
+      // Otherwise, perform a regular search
+      const userPreferences = await preferenceService.getUserPreferences(
+        authenticatedUserId,
+        authenticatedUserId
+      );
+      // item_display_limit, not food_display_limit: the column was renamed by
+      // migration 20250720201800 and this read was never updated, so it
+      // resolved to undefined and the preference silently did nothing.
+      const limit = userPreferences?.item_display_limit || limitFromRequest;
+      const foods = await foodRepository.searchFoods(
+        name,
+        targetUserId || authenticatedUserId,
+        exactMatch,
+        broadMatch,
+        checkCustom,
+        limit // Pass the limit to the repository search function
+      );
+      return { searchResults: foods };
+    }
+  } catch (error) {
+    log(
+      'error',
+      `Error searching foods for user ${authenticatedUserId} with name "${name}" in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function refreshExistingExternalFoodMetadata(
+  authenticatedUserId: string,
+  existingFood: FoodRow,
+  foodData: FoodInput
+) {
+  const metadata: Record<string, unknown> = {};
+  const sameProviderIdentity =
+    foodData.provider_type &&
+    foodData.provider_external_id &&
+    existingFood.provider_type === foodData.provider_type &&
+    existingFood.provider_external_id === foodData.provider_external_id;
+
+  if (
+    sameProviderIdentity &&
+    foodData.provider_verified === true &&
+    existingFood.provider_verified !== true
+  ) {
+    metadata.provider_verified = true;
+  }
+
+  // Backfill the provider photo onto a food imported before it had one (or
+  // imported while the image was being dropped upstream). Only fills a gap —
+  // an existing image is the user's, and re-importing must not overwrite it.
+  const incomingImages = resolveImageInput(foodData);
+  if (
+    incomingImages.length > 0 &&
+    toImageArray(existingFood.images).length === 0
+  ) {
+    metadata.images = incomingImages;
+  }
+
+  // Re-importing or re-saving a food the user had hidden puts it back in the
+  // library. Without this, `hide` was a permanent tombstone: the dedup lookups
+  // above still match the hidden row, so the import returned it unchanged and
+  // the food stayed invisible in search with no way to get it back. The same
+  // applies to a row left behind by a quick-add.
+  //
+  // Skipped when the incoming save is itself a quick add -- that is an explicit
+  // "log this once, do not keep it" and must not be promoted to a library food.
+  if (
+    sanitizeBoolean(existingFood.is_quick_food) === true &&
+    sanitizeBoolean(foodData.is_quick_food) !== true
+  ) {
+    metadata.is_quick_food = false;
+  }
+
+  if (Object.keys(metadata).length === 0) {
+    return existingFood;
+  }
+
+  // updateFood localizes the images it just stored and returns the row with
+  // /uploads/... paths. Returning our own `metadata` instead would hand the
+  // caller the raw provider URLs even though the database holds local copies.
+  const updatedFood = await foodRepository.updateFood(
+    existingFood.id,
+    authenticatedUserId,
+    metadata
+  );
+  return updatedFood ?? { ...existingFood, ...metadata };
+}
+
+function deriveAlcoholGramsIfMissing<
+  T extends {
+    serving_size?: unknown;
+    serving_unit?: unknown;
+    abv_percent?: unknown;
+    alcohol_g?: unknown;
+  },
+>(data: T): T {
+  if (
+    data.abv_percent !== undefined &&
+    data.abv_percent !== null &&
+    (data.alcohol_g === undefined ||
+      data.alcohol_g === null ||
+      data.alcohol_g === '')
+  ) {
+    if (data.serving_size && data.serving_unit) {
+      // Shared with the OpenFoodFacts import, which used to derive grams for a
+      // weight serving while this path refused: the same beer then came back
+      // with grams when imported and zero when saved by hand.
+      return {
+        ...data,
+        alcohol_g: alcoholGramsForServing(
+          Number(data.serving_size),
+          String(data.serving_unit),
+          Number(data.abv_percent)
+        ),
+      };
+    }
+  }
+  return data;
+}
+
+async function createFood(authenticatedUserId: string, foodData: FoodInput) {
+  try {
+    if (foodData.barcode) {
+      const existingFood = await foodRepository.findFoodByBarcode(
+        foodData.barcode,
+        authenticatedUserId
+      );
+      // A selected provider product has its own identity. Another source's
+      // barcode match must not replace that choice or overwrite a custom food.
+      const hasProviderIdentity =
+        !!foodData.provider_type && !!foodData.provider_external_id;
+      const sameProviderIdentity =
+        existingFood?.provider_type === foodData.provider_type &&
+        existingFood?.provider_external_id === foodData.provider_external_id;
+      if (existingFood && (!hasProviderIdentity || sameProviderIdentity)) {
+        return refreshExistingExternalFoodMetadata(
+          authenticatedUserId,
+          existingFood,
+          foodData
+        );
+      }
+    }
+    // Dedup by provider (e.g. Yazio product ID) — catches duplicate saves of
+    // the same external food even when no barcode is present on the package.
+    if (foodData.provider_external_id && foodData.provider_type) {
+      const existingFood = await foodRepository.findFoodByProviderExternalId(
+        authenticatedUserId,
+        foodData.provider_external_id,
+        foodData.provider_type
+      );
+      if (existingFood) {
+        return refreshExistingExternalFoodMetadata(
+          authenticatedUserId,
+          existingFood,
+          foodData
+        );
+      }
+    }
+    const processedFoodData = deriveAlcoholGramsIfMissing(foodData);
+    const newFood = await foodRepository.createFood({
+      ...processedFoodData,
+      glycemic_index: processedFoodData.glycemic_index || null,
+      custom_nutrients: sanitizeCustomNutrients(
+        processedFoodData.custom_nutrients
+      ),
+    });
+    return newFood;
+  } catch (error) {
+    log(
+      'error',
+      `Error creating food for user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodById(authenticatedUserId: string, foodId: string) {
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      foodId,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      // If food is not found, it might be a public food or an invalid ID.
+      // Try to fetch it without user_id constraint.
+      const publicFood = await foodRepository.getFoodById(
+        foodId,
+        authenticatedUserId
+      );
+      if (publicFood && !publicFood.is_custom) {
+        // Assuming public foods are not custom
+        return publicFood;
+      }
+      throw new Error('Food not found.');
+    }
+    const food = await foodRepository.getFoodById(foodId, authenticatedUserId);
+    return food;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching food ${foodId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+
+async function updateFood(
+  authenticatedUserId: string,
+  foodId: string,
+  foodData: FoodUpdate
+) {
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      foodId,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      throw new Error('Food not found.');
+    }
+    if (foodOwnerId !== authenticatedUserId) {
+      throw new Error(
+        'Forbidden: You do not have permission to update this food.'
+      );
+    }
+    // Capture the current images so any dropped ones can be unlinked below.
+    const previousImages =
+      foodData.images === undefined
+        ? null
+        : ((await foodRepository.getFoodById(foodId, foodOwnerId))?.images ??
+          []);
+
+    // Update the food's main details
+    const updatedFood = await foodRepository.updateFood(foodId, foodOwnerId, {
+      ...foodData,
+      custom_nutrients: sanitizeCustomNutrients(foodData.custom_nutrients),
+    });
+    if (!updatedFood) {
+      throw new Error('Food not found or not authorized to update.');
+    }
+
+    // Drop upload files the user removed. Best-effort: a failed unlink must not
+    // fail the update, since the database already reflects the new list.
+    if (previousImages) {
+      await removeOrphanedImages(previousImages, updatedFood.images).catch(
+        (error) =>
+          log(
+            'warn',
+            `Error removing orphaned images for food ${foodId}:`,
+            error
+          )
+      );
+    }
+    // The food_entries table now holds the snapshot of nutrient data.
+    // Updating the food or its default variant directly will not affect existing food entries.
+    // If a food's default variant is updated, existing food entries will retain their original snapshot.
+    // New food entries will use the updated default variant's data.
+    // The updateFoodEntriesSnapshot function can be used to update existing entries if needed.
+    return updatedFood;
+  } catch (error) {
+    log(
+      'error',
+      `Error updating food ${foodId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+
+/**
+ * Delete modes offered to the user. Mirrors the exercise side exactly -- the
+ * caller says what it wants and this function either honours it or refuses.
+ *
+ * - `hide`: the food stops appearing in search. Nothing else changes, so every
+ *   diary entry, meal and meal plan keeps working as before.
+ * - `delete`: the library row goes. Meals and meal plans lose it, but diary
+ *   entries survive on their own snapshot with a null food_id.
+ * - `delete_with_history`: a `delete`, plus this user's own diary entries.
+ *
+ * In every mode another user's diary is left alone.
+ */
+type FoodDeleteMode = 'hide' | 'delete' | 'delete_with_history';
+const FOOD_DELETE_MODES: FoodDeleteMode[] = [
+  'hide',
+  'delete',
+  'delete_with_history',
+];
+function isFoodDeleteMode(value: unknown): value is FoodDeleteMode {
+  return FOOD_DELETE_MODES.includes(value as FoodDeleteMode);
+}
+async function deleteFood(
+  authenticatedUserId: string,
+  foodId: string,
+  mode: FoodDeleteMode = 'delete',
+  currentClientDate?: string
+) {
+  log(
+    'info',
+    `deleteFood: Attempting to ${mode} food ${foodId} by user ${authenticatedUserId}.`
+  );
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      foodId,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      log(
+        'warn',
+        `deleteFood: Food ${foodId} not found for user ${authenticatedUserId}.`
+      );
+      throw new Error('Food not found.');
+    }
+    if (foodOwnerId !== authenticatedUserId) {
+      log(
+        'warn',
+        `deleteFood: User ${authenticatedUserId} forbidden from deleting food ${foodId} owned by ${foodOwnerId}.`
+      );
+      throw new Error(
+        'Forbidden: You do not have permission to delete this food.'
+      );
+    }
+
+    if (mode === 'hide') {
+      await foodRepository.updateFood(foodId, foodOwnerId, {
+        is_quick_food: true,
+      });
+      return {
+        message:
+          'Food hidden. It no longer appears in search; existing diary entries, meals and meal plans are unchanged.',
+        status: 'hidden',
+      };
+    }
+
+    const deletionImpact = await foodRepository.getFoodDeletionImpact(
+      foodId,
+      authenticatedUserId
+    );
+    log(
+      'info',
+      `deleteFood: Deletion impact for food ${foodId}: ${JSON.stringify(deletionImpact)}`
+    );
+
+    // meal_foods, meal_plans, meal_plan_template_assignments and food_favorites
+    // all cascade from the library row for EVERY user, not just this one. Diary
+    // entries would survive, but another user's meals and meal plans would
+    // silently lose the food -- so when anyone else still references it, hiding
+    // is the only honest option.
+    if (deletionImpact.otherUserReferences > 0) {
+      log(
+        'info',
+        `deleteFood: Food ${foodId} is referenced by other users. Hiding instead of deleting.`
+      );
+      await foodRepository.updateFood(foodId, foodOwnerId, {
+        is_quick_food: true,
+      });
+      return {
+        message:
+          'Food is used by other users, so it was hidden rather than deleted. Their history, meals and meal plans are unaffected.',
+        status: 'hidden',
+      };
+    }
+
+    const today = await resolveTemplateStartDay(
+      authenticatedUserId,
+      currentClientDate
+    );
+    const deleteResult = await foodRepository.deleteFoodAndDependencies(
+      foodId,
+      authenticatedUserId,
+      today,
+      { deleteHistory: mode === 'delete_with_history' }
+    );
+    if (!deleteResult.success) {
+      throw new Error('Food not found or not authorized to delete.');
+    }
+
+    // food_entries.images holds paths into uploads/foods/<foodId>/, so the image
+    // directory can only go once nothing points at it any more. A plain
+    // `delete` deliberately leaves preserved entries behind, so removing the
+    // directory there would blank the picture on every one of them. Only
+    // delete_with_history clears the last references -- other users were
+    // already ruled out above -- which is the one case where it is safe.
+    if (mode === 'delete_with_history') {
+      await removeEntityImageDir('foods', foodId);
+    }
+
+    return mode === 'delete_with_history'
+      ? {
+          message: `Food deleted along with ${deleteResult.deletedEntries} of your diary entries.`,
+          status: 'deleted_with_history',
+          deletedEntries: deleteResult.deletedEntries,
+        }
+      : {
+          message:
+            'Food deleted. Your logged entries are preserved in the diary.',
+          status: 'deleted',
+        };
+  } catch (error) {
+    log(
+      'error',
+      `Error deleting food ${foodId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodsWithPagination(
+  authenticatedUserId: string,
+  searchTerm: string,
+  foodFilter: string,
+  currentPage: string | number,
+  itemsPerPage: string | number,
+  sortBy: string,
+  providerType?: string
+) {
+  try {
+    const limit = parseInt(String(itemsPerPage), 10) || 10;
+    const offset = ((parseInt(String(currentPage), 10) || 1) - 1) * limit;
+    const [foods, totalCount] = await Promise.all([
+      foodRepository.getFoodsWithPagination(
+        searchTerm,
+        foodFilter,
+        authenticatedUserId,
+        limit,
+        offset,
+        sortBy,
+        providerType
+      ),
+      foodRepository.countFoods(
+        searchTerm,
+        foodFilter,
+        authenticatedUserId,
+        providerType
+      ),
+    ]);
+    return { foods, totalCount };
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching foods with pagination for user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function createFoodVariant(
+  authenticatedUserId: string,
+  variantData: FoodVariantInput
+) {
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      String(variantData.food_id),
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      throw new Error('Food not found.');
+    }
+    if (foodOwnerId !== authenticatedUserId) {
+      throw new Error(
+        'Forbidden: You do not have permission to create a variant for this food.'
+      );
+    }
+    variantData.user_id = authenticatedUserId; // Ensure user_id is set from authenticated user
+    const processedVariantData = deriveAlcoholGramsIfMissing(variantData);
+    const newVariant = await foodRepository.createFoodVariant(
+      {
+        ...processedVariantData,
+        glycemic_index: processedVariantData.glycemic_index || null,
+      },
+      authenticatedUserId
+    );
+    return newVariant;
+  } catch (error) {
+    log(
+      'error',
+      `Error creating food variant for food ${variantData.food_id} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodVariantById(
+  authenticatedUserId: string,
+  variantId: string
+) {
+  try {
+    const variant = await foodRepository.getFoodVariantById(
+      variantId,
+      authenticatedUserId
+    );
+    if (!variant) {
+      throw new Error('Food variant not found.');
+    }
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      variant.food_id,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      throw new Error('Associated food not found.');
+    }
+    return variant;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching food variant ${variantId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+
+async function updateFoodVariant(
+  authenticatedUserId: string,
+  variantId: string,
+  variantData: FoodVariantInput
+) {
+  try {
+    const variant = await foodRepository.getFoodVariantById(
+      variantId,
+      authenticatedUserId
+    );
+    if (!variant) {
+      throw new Error('Food variant not found.');
+    }
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      variant.food_id,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      throw new Error('Associated food not found.');
+    }
+    if (foodOwnerId !== authenticatedUserId) {
+      throw new Error(
+        'Forbidden: You do not have permission to update this food variant.'
+      );
+    }
+    variantData.user_id = authenticatedUserId; // Ensure user_id is set from authenticated user
+    const effectiveServingSize =
+      variantData.serving_size !== undefined
+        ? variantData.serving_size
+        : variant.serving_size;
+    const effectiveServingUnit =
+      variantData.serving_unit !== undefined
+        ? variantData.serving_unit
+        : variant.serving_unit;
+    const effectiveAbv =
+      variantData.abv_percent !== undefined
+        ? variantData.abv_percent
+        : variant.abv_percent;
+    const processedVariantData = { ...variantData };
+    if (
+      effectiveAbv !== null &&
+      effectiveAbv !== undefined &&
+      (processedVariantData.alcohol_g === undefined ||
+        processedVariantData.alcohol_g === null ||
+        processedVariantData.alcohol_g === '')
+    ) {
+      if (effectiveServingSize && effectiveServingUnit) {
+        processedVariantData.alcohol_g = alcoholGramsForServing(
+          Number(effectiveServingSize),
+          String(effectiveServingUnit),
+          Number(effectiveAbv)
+        );
+      }
+    }
+    const updatedVariant = await foodRepository.updateFoodVariant(
+      variantId,
+      {
+        ...processedVariantData,
+        glycemic_index: processedVariantData.glycemic_index || null,
+        custom_nutrients: sanitizeCustomNutrients(
+          processedVariantData.custom_nutrients
+        ),
+      },
+      authenticatedUserId
+    );
+    if (!updatedVariant) {
+      throw new Error('Food variant not found.');
+    }
+    return updatedVariant;
+  } catch (error) {
+    log(
+      'error',
+      `Error updating food variant ${variantId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function deleteFoodVariant(
+  authenticatedUserId: string,
+  variantId: string
+) {
+  try {
+    const variant = await foodRepository.getFoodVariantById(
+      variantId,
+      authenticatedUserId
+    );
+    if (!variant) {
+      throw new Error('Food variant not found.');
+    }
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      variant.food_id,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      throw new Error('Associated food not found.');
+    }
+    if (foodOwnerId !== authenticatedUserId) {
+      throw new Error(
+        'Forbidden: You do not have permission to delete this food variant.'
+      );
+    }
+    const success = await foodRepository.deleteFoodVariant(
+      variantId,
+      authenticatedUserId
+    );
+    if (!success) {
+      throw new Error('Food variant not found.');
+    }
+    return true;
+  } catch (error) {
+    log(
+      'error',
+      `Error deleting food variant ${variantId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodVariantsByFoodId(
+  authenticatedUserId: string,
+  foodId: string
+) {
+  log(
+    'info',
+    `getFoodVariantsByFoodId: Fetching variants for foodId: ${foodId}, authenticatedUserId: ${authenticatedUserId}`
+  );
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      foodId,
+      authenticatedUserId
+    );
+    log(
+      'info',
+      `getFoodVariantsByFoodId: foodOwnerId for ${foodId}: ${foodOwnerId}`
+    );
+    // If food is not found (foodOwnerId is null), return an empty array of variants.
+    // The client-side expects an empty array if no variants exist for a food.
+    if (!foodOwnerId) {
+      log(
+        'warn',
+        `getFoodVariantsByFoodId: Food with ID ${foodId} not found or not owned by user. Returning empty array.`
+      );
+      return [];
+    }
+    // Authorization check: Ensure the authenticated user owns the food,
+    // or if the food is public, allow access.
+    const variants = await foodRepository.getFoodVariantsByFoodId(
+      foodId,
+      authenticatedUserId
+    );
+    log(
+      'info',
+      `getFoodVariantsByFoodId: Found ${variants.length} variants for foodId: ${foodId}`
+    );
+    return variants;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching food variants for food ${foodId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+
+async function bulkCreateFoodVariants(
+  authenticatedUserId: string,
+  variantsData: FoodVariantInput[]
+) {
+  try {
+    const variantsToCreate = await Promise.all(
+      variantsData.map(async (variant: FoodVariantInput) => {
+        const foodOwnerId = await foodRepository.getFoodOwnerId(
+          String(variant.food_id),
+          authenticatedUserId
+        );
+        if (!foodOwnerId || foodOwnerId !== authenticatedUserId) {
+          throw new Error(
+            `Forbidden: You do not have permission to create a variant for food ID ${variant.food_id}.`
+          );
+        }
+        return {
+          ...variant,
+          user_id: authenticatedUserId,
+          glycemic_index: variant.glycemic_index || null,
+        };
+      })
+    );
+    const createdVariants = await foodRepository.bulkCreateFoodVariants(
+      variantsToCreate,
+      authenticatedUserId
+    );
+    return createdVariants;
+  } catch (error) {
+    log(
+      'error',
+      `Error in bulkCreateFoodVariants for user ${authenticatedUserId}:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodDeletionImpact(
+  authenticatedUserId: string,
+  foodId: string
+) {
+  log(
+    'info',
+    `getFoodDeletionImpact: Checking deletion impact for food ${foodId} by user ${authenticatedUserId}`
+  );
+  try {
+    const foodOwnerId = await foodRepository.getFoodOwnerId(
+      foodId,
+      authenticatedUserId
+    );
+    if (!foodOwnerId) {
+      log(
+        'warn',
+        `getFoodDeletionImpact: Food ${foodId} not found for user ${authenticatedUserId}.`
+      );
+      throw new Error('Food not found.');
+    }
+    // No need to check permission here, as foodRepository.getFoodDeletionImpact handles it
+    return await foodRepository.getFoodDeletionImpact(
+      foodId,
+      authenticatedUserId
+    );
+  } catch (error) {
+    log(
+      'error',
+      `Error getting food deletion impact for food ${foodId} by user ${authenticatedUserId} in foodService:`,
+      error
+    );
+    throw error;
+  }
+}
+async function importFoodsInBulk(
+  authenticatedUserId: string,
+  foodDataArray: BulkImportFoodData[],
+  overwrite = false
+) {
+  try {
+    if (!foodDataArray) {
+      log('error', 'importFoodsInBulk: No food data provided.');
+      throw new Error('No food data provided.');
+    }
+    return await foodRepository.createFoodsInBulk(
+      authenticatedUserId,
+      foodDataArray.map((food) => ({
+        ...food,
+        glycemic_index: food.glycemic_index || null,
+        custom_nutrients: sanitizeCustomNutrients(food.custom_nutrients),
+      })),
+      overwrite
+    );
+  } catch (error) {
+    log(
+      'error',
+      `Error importing foods in bulk for user ${authenticatedUserId}:`,
+      error
+    );
+    throw error;
+  }
+}
+async function getFoodsNeedingReview(authenticatedUserId: string) {
+  try {
+    const foodsNeedingReview =
+      await foodRepository.getFoodsNeedingReview(authenticatedUserId);
+    return foodsNeedingReview;
+  } catch (error) {
+    log(
+      'error',
+      `Error getting foods needing review for user ${authenticatedUserId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+async function updateSnapshotForVariant(
+  authenticatedUserId: string,
+  food: FoodInput,
+  variant: FoodVariantInput,
+  syncImages: boolean
+) {
+  const newSnapshotData = {
+    food_name: food.name,
+    brand_name: food.brand,
+    // Photos are snapshotted onto entries at log time, so an explicit sync is
+    // the only thing that refreshes them — same rule as the nutrition fields.
+    images: toImageArray(food.images),
+    serving_size: variant.serving_size,
+    serving_unit: variant.serving_unit,
+    calories: variant.calories,
+    protein: variant.protein,
+    carbs: variant.carbs,
+    fat: variant.fat,
+    saturated_fat: variant.saturated_fat,
+    polyunsaturated_fat: variant.polyunsaturated_fat,
+    monounsaturated_fat: variant.monounsaturated_fat,
+    trans_fat: variant.trans_fat,
+    cholesterol: variant.cholesterol,
+    sodium: variant.sodium,
+    potassium: variant.potassium,
+    dietary_fiber: variant.dietary_fiber,
+    sugars: variant.sugars,
+    vitamin_a: variant.vitamin_a,
+    vitamin_c: variant.vitamin_c,
+    calcium: variant.calcium,
+    iron: variant.iron,
+    caffeine_mg: variant.caffeine_mg,
+    water_ml: variant.water_ml,
+    alcohol_g: variant.alcohol_g,
+    glycemic_index: variant.glycemic_index,
+    custom_nutrients: sanitizeCustomNutrients(variant.custom_nutrients),
+  };
+  const { replacedEntryImages } =
+    await foodRepository.updateFoodEntriesSnapshot(
+      authenticatedUserId,
+      String(food.id),
+      String(variant.id),
+      newSnapshotData,
+      syncImages
+    );
+  // Diary-set photos the sync just overwrote are now referenced by nothing.
+  // removeOrphanedImages re-checks each path against the diary before
+  // unlinking, so a copy still in use elsewhere is left alone.
+  if (replacedEntryImages.length > 0) {
+    await removeOrphanedImages(replacedEntryImages, []).catch((error) => {
+      log(
+        'error',
+        `Error removing replaced diary entry images for food ${food.id}:`,
+        error
+      );
+    });
+  }
+  await foodRepository.clearUserIgnoredUpdate(
+    authenticatedUserId,
+    String(variant.id)
+  );
+}
+/**
+ * `syncImages` distinguishes the two "update past entries" choices: `true`
+ * forces the food's current photos onto every matching entry (replacing photos
+ * the user set on individual diary entries), `false` rewrites nutrition only
+ * and leaves every entry's photo exactly as it is.
+ */
+async function updateFoodEntriesSnapshot(
+  authenticatedUserId: string,
+  foodId: string,
+  variantId: string,
+  syncImages: boolean = true
+) {
+  try {
+    const food = await foodRepository.getFoodById(foodId, authenticatedUserId);
+    if (!food) {
+      throw new Error('Food not found.');
+    }
+    if (variantId) {
+      // Single variant path
+      const variant = await foodRepository.getFoodVariantById(
+        variantId,
+        authenticatedUserId
+      );
+      if (!variant) {
+        throw new Error('Food variant not found.');
+      }
+      await updateSnapshotForVariant(
+        authenticatedUserId,
+        food,
+        variant,
+        syncImages
+      );
+    } else {
+      // All variants path
+      const variants = await foodRepository.getFoodVariantsByFoodId(
+        foodId,
+        authenticatedUserId
+      );
+      for (const variant of variants) {
+        await updateSnapshotForVariant(
+          authenticatedUserId,
+          food,
+          variant,
+          syncImages
+        );
+      }
+    }
+    return { message: 'Food entries updated successfully.' };
+  } catch (error) {
+    log(
+      'error',
+      `Error updating food entries snapshot for user ${authenticatedUserId}, food ${foodId}, variant ${variantId}:`,
+      error
+    );
+    throw error;
+  }
+}
+// `userId` is the active (possibly switched) data context — used to search the
+// local food library and load preferences. `credentialUserId` is the real
+// authenticated actor whose stored provider secrets and OpenFoodFacts session
+// are used, so a delegate can't decrypt a family member's provider keys.
+export interface BarcodeLookupOptions {
+  signal?: AbortSignal;
+  skipLocal?: boolean;
+  skipFallback?: boolean;
+  ignoreDefaultProvider?: boolean;
+  surfaceErrors?: boolean;
+  includeProviderMetadata?: boolean;
+  preferences?: {
+    language?: string | null;
+    default_barcode_provider_id?: string | null;
+    barcode_fallback_open_food_facts?: boolean | null;
+    auto_scale_open_food_facts_imports?: boolean | null;
+  };
+}
+
+async function lookupBarcode(
+  barcode: string,
+  userId: string,
+  providerId: string | undefined,
+  // Defaults to the data-context user for non-delegated callers; routes pass
+  // the real authenticated actor so a delegate can't use a family member's keys.
+  credentialUserId: string = userId,
+  options: BarcodeLookupOptions = {}
+) {
+  // Providers are tried in turn, each failure caught so the next can run.
+  // Strict single-source callers need to distinguish an unavailable provider
+  // from a successful search with no match. Legacy callers only surface errors
+  // carrying an HTTP status (e.g. FatSecret's IP misconfiguration).
+  let surfaceableError: ProviderError | null = null;
+  const sourceMetadata = (sourceId: string, sourceName: string) =>
+    options.includeProviderMetadata
+      ? { providerId: sourceId, providerName: sourceName }
+      : {};
+  const captureSurfaceable = (err: unknown) => {
+    options.signal?.throwIfAborted();
+    // Provider errors can include request URLs, response bodies and credentials.
+    // Expose only a neutral error when the caller asks for strict reporting.
+    const candidate = options.surfaceErrors
+      ? Object.assign(new Error('Barcode provider lookup failed.'), {
+          status: 502,
+        })
+      : (err as ProviderError | null);
+    if (!surfaceableError && candidate?.status) {
+      surfaceableError = candidate;
+    }
+    // Retain the cause for server logs; only surfaceableError reaches callers.
+    return err;
+  };
+  const signalArgs = options.signal
+    ? ([options.signal] as const)
+    : ([] as const);
+  try {
+    options.signal?.throwIfAborted();
+    const localFood = options.skipLocal
+      ? null
+      : await foodRepository.findFoodByBarcode(barcode, userId);
+    options.signal?.throwIfAborted();
+    if (localFood) {
+      return {
+        source: 'local',
+        food: localFood,
+        ...sourceMetadata('local', 'Saved food'),
+      };
+    }
+    // Load user preferences once for provider resolution, language, and auto-scale
+    const userPreferences =
+      options.preferences ??
+      (await preferenceService.getUserPreferences(userId, userId));
+    options.signal?.throwIfAborted();
+    // Resolve the barcode provider (explicit param or user preference)
+    let provider = null;
+    try {
+      const resolvedProviderId =
+        providerId ||
+        (options.ignoreDefaultProvider
+          ? undefined
+          : userPreferences?.default_barcode_provider_id);
+      if (resolvedProviderId) {
+        const details =
+          await externalProviderService.getExternalDataProviderDetails(
+            credentialUserId,
+            resolvedProviderId
+          );
+        if (details?.is_active) {
+          provider = details;
+        }
+      }
+    } catch (providerError) {
+      options.signal?.throwIfAborted();
+      log(
+        'warn',
+        `Barcode provider resolution failed for user ${userId}:`,
+        options.surfaceErrors
+          ? captureSurfaceable(providerError)
+          : providerError
+      );
+    }
+    options.signal?.throwIfAborted();
+    const language = userPreferences?.language || 'en';
+    const autoScale =
+      userPreferences?.auto_scale_open_food_facts_imports ?? true;
+    if (
+      options.surfaceErrors &&
+      ((provider?.provider_type === 'usda' && !provider.app_key) ||
+        ((provider?.provider_type === 'fatsecret' ||
+          provider?.provider_type === 'yazio') &&
+          (!provider.app_id || !provider.app_key)))
+    ) {
+      captureSurfaceable(new Error('Missing required provider credentials.'));
+    }
+    let triedOpenFoodFacts = false;
+    // Try FatSecret if provider is configured
+    if (
+      provider?.provider_type === 'fatsecret' &&
+      provider.app_id &&
+      provider.app_key
+    ) {
+      try {
+        const fatSecretData =
+          options.surfaceErrors || options.signal
+            ? await searchFatSecretByBarcode(
+                barcode,
+                provider.app_id,
+                provider.app_key,
+                options.surfaceErrors === true,
+                ...signalArgs
+              )
+            : await searchFatSecretByBarcode(
+                barcode,
+                provider.app_id,
+                provider.app_key
+              );
+        options.signal?.throwIfAborted();
+        if (fatSecretData && fatSecretData.food) {
+          fatSecretData.food.barcode = barcode;
+          return {
+            source: 'fatsecret',
+            food: mapFatSecretFood(fatSecretData),
+            barcode_raw: fatSecretData,
+            ...sourceMetadata(
+              provider.id,
+              provider.provider_name ?? 'FatSecret'
+            ),
+          };
+        }
+      } catch (fsError) {
+        log(
+          'warn',
+          `FatSecret barcode lookup failed for ${barcode}:`,
+          captureSurfaceable(fsError)
+        );
+      }
+    }
+    // Try USDA if provider is configured
+    if (provider?.provider_type === 'usda' && provider.app_key) {
+      try {
+        // Determine which barcode forms to search USDA with.
+        // USDA uses text search and may store UPC-A (12) or EAN-13 (13),
+        // so we try the alternate form if the first search doesn't match.
+        const normalizedBarcode = normalizeBarcode(barcode);
+        const alternateBarcodes = [barcode];
+        if (barcode.length === 12) {
+          alternateBarcodes.push('0' + barcode);
+        } else if (barcode.length === 13 && barcode.startsWith('0')) {
+          alternateBarcodes.push(barcode.slice(1));
+        }
+        let match = null;
+        for (const searchBarcode of alternateBarcodes) {
+          const usdaData = await searchUsdaFoodsByBarcode(
+            searchBarcode,
+            provider.app_key,
+            ...signalArgs
+          );
+          options.signal?.throwIfAborted();
+          match = (usdaData?.foods || []).find(
+            (f: { gtinUpc?: string; description?: string }) =>
+              normalizeBarcode(f.gtinUpc) === normalizedBarcode && f.description
+          );
+          if (match) break;
+        }
+        if (match) {
+          return {
+            source: 'usda',
+            food: mapUsdaBarcodeProduct(match),
+            barcode_raw: match,
+            ...sourceMetadata(provider.id, provider.provider_name ?? 'USDA'),
+          };
+        }
+      } catch (usdaError) {
+        log(
+          'warn',
+          `USDA barcode lookup failed for ${barcode}:`,
+          captureSurfaceable(usdaError)
+        );
+      }
+    }
+    // Try YAZIO if provider is configured. This uses YAZIO's private product
+    // search API and is experimental; failures should not block other providers.
+    if (
+      provider?.provider_type === 'yazio' &&
+      provider.app_id &&
+      provider.app_key
+    ) {
+      try {
+        const yazioFood = await searchYazioByBarcode(
+          barcode,
+          {
+            username: provider.app_id,
+            password: provider.app_key,
+            baseUrl: provider.base_url,
+            language,
+          },
+          ...signalArgs
+        );
+        options.signal?.throwIfAborted();
+        if (yazioFood) {
+          return {
+            source: 'yazio',
+            food: yazioFood,
+            barcode_raw: yazioFood,
+            ...sourceMetadata(provider.id, provider.provider_name ?? 'YAZIO'),
+          };
+        }
+      } catch (yazioError) {
+        log(
+          'warn',
+          `YAZIO barcode lookup failed for ${barcode}:`,
+          captureSurfaceable(yazioError)
+        );
+      }
+    }
+    // Try OpenFoodFacts if it is the configured primary provider
+    if (provider?.provider_type === 'openfoodfacts') {
+      triedOpenFoodFacts = true;
+      try {
+        const offData = await searchOpenFoodFactsByBarcodeFields(
+          barcode,
+          undefined,
+          language,
+          credentialUserId,
+          provider.id,
+          provider.is_public === true ? 'global' : 'personal',
+          ...signalArgs
+        );
+        options.signal?.throwIfAborted();
+        if (offData?.status === 1 && offData.product) {
+          const food = mapOpenFoodFactsProduct(offData.product, {
+            autoScale,
+            language,
+          });
+          if (food.name) {
+            return {
+              source: 'openfoodfacts',
+              food,
+              barcode_raw: offData.product,
+              ...sourceMetadata(
+                provider.id,
+                provider.provider_name ?? 'Open Food Facts'
+              ),
+            };
+          }
+        }
+      } catch (error) {
+        log(
+          'warn',
+          `OpenFoodFacts barcode lookup failed for ${barcode}:`,
+          captureSurfaceable(error)
+        );
+      }
+    }
+    // Fall back to OpenFoodFacts if not already tried and user preference allows it
+    if (
+      !options.skipFallback &&
+      !triedOpenFoodFacts &&
+      userPreferences?.barcode_fallback_open_food_facts !== false
+    ) {
+      // Only look up a credentialed OFF provider when none is already
+      // resolved. Avoids an extra DB round-trip on every OFF barcode lookup
+      // for users without configured credentials.
+      let offProvider: {
+        id: string;
+        scope: 'personal' | 'global';
+      } | null = null;
+      if (provider?.provider_type === 'openfoodfacts') {
+        offProvider = {
+          id: provider.id,
+          scope: provider.is_public === true ? 'global' : 'personal',
+        };
+      } else {
+        try {
+          const offProviderId =
+            await externalProviderService.getActiveOpenFoodFactsProviderId(
+              credentialUserId
+            );
+          offProvider = offProviderId
+            ? { id: offProviderId, scope: 'personal' }
+            : null;
+        } catch (fallbackError) {
+          options.signal?.throwIfAborted();
+          log(
+            'debug',
+            'OpenFoodFacts fallback provider resolution failed:',
+            options.surfaceErrors
+              ? captureSurfaceable(fallbackError)
+              : fallbackError
+          );
+        }
+      }
+      options.signal?.throwIfAborted();
+      try {
+        const offData = await searchOpenFoodFactsByBarcodeFields(
+          barcode,
+          undefined,
+          language,
+          offProvider ? credentialUserId : undefined,
+          offProvider?.id,
+          offProvider?.scope ?? 'personal',
+          ...signalArgs
+        );
+        options.signal?.throwIfAborted();
+        if (offData?.status === 1 && offData.product) {
+          const food = mapOpenFoodFactsProduct(offData.product, {
+            autoScale,
+            language,
+          });
+          if (food.name) {
+            let fallbackName = 'Open Food Facts';
+            if (options.includeProviderMetadata && offProvider) {
+              try {
+                const details =
+                  await externalProviderService.getExternalDataProviderDetails(
+                    credentialUserId,
+                    offProvider.id
+                  );
+                fallbackName = details?.provider_name || fallbackName;
+              } catch {
+                // Display metadata must not discard a successful product match.
+              }
+            }
+            options.signal?.throwIfAborted();
+            return {
+              source: 'openfoodfacts',
+              food,
+              barcode_raw: offData.product,
+              ...sourceMetadata(
+                offProvider?.id ?? BARCODE_FALLBACK_PROVIDER_ID,
+                fallbackName
+              ),
+            };
+          }
+        }
+      } catch (error) {
+        log(
+          'warn',
+          `OpenFoodFacts lookup failed for barcode ${barcode}:`,
+          captureSurfaceable(error)
+        );
+      }
+    }
+    // Every provider failed: report a misconfiguration rather than "not found".
+    if (surfaceableError) {
+      throw surfaceableError;
+    }
+    return { source: 'not_found', food: null };
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    log('error', `Error looking up barcode ${barcode}:`, error);
+    throw error;
+  }
+}
+async function addFoodFavorite(authenticatedUserId: string, foodId: string) {
+  // Ensure the food exists and is accessible to this user before starring it.
+  // getFoodById throws 'Food not found.' for inaccessible/invalid ids.
+  await getFoodById(authenticatedUserId, foodId);
+  await foodRepository.addFoodFavorite(authenticatedUserId, foodId);
+  return { food_id: foodId, is_favorite: true };
+}
+async function removeFoodFavorite(authenticatedUserId: string, foodId: string) {
+  await foodRepository.removeFoodFavorite(authenticatedUserId, foodId);
+  return { food_id: foodId, is_favorite: false };
+}
+export { searchFoods };
+export { addFoodFavorite, removeFoodFavorite };
+export { createFood };
+export { getFoodById };
+export { updateFood };
+export { deleteFood };
+export { isFoodDeleteMode };
+export type { FoodDeleteMode };
+export { getFoodsWithPagination };
+export { getFoodVariantById };
+export { createFoodVariant };
+export { updateFoodVariant };
+export { deleteFoodVariant };
+export { getFoodVariantsByFoodId };
+export { bulkCreateFoodVariants };
+export { getFoodDeletionImpact };
+export { importFoodsInBulk };
+export { getFoodsNeedingReview };
+export { updateFoodEntriesSnapshot };
+export { lookupBarcode };
+export { mapOpenFoodFactsProduct };
+export { mapFatSecretFood };
+export { mapUsdaBarcodeProduct };
+export default {
+  searchFoods,
+  addFoodFavorite,
+  removeFoodFavorite,
+  createFood,
+  getFoodById,
+  updateFood,
+  deleteFood,
+  isFoodDeleteMode,
+  getFoodsWithPagination,
+  getFoodVariantById,
+  createFoodVariant,
+  updateFoodVariant,
+  deleteFoodVariant,
+  getFoodVariantsByFoodId,
+  bulkCreateFoodVariants,
+  getFoodDeletionImpact,
+  importFoodsInBulk,
+  getFoodsNeedingReview,
+  updateFoodEntriesSnapshot,
+  lookupBarcode,
+  mapOpenFoodFactsProduct,
+  mapFatSecretFood,
+  mapUsdaBarcodeProduct,
+};

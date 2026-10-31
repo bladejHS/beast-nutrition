@@ -1,0 +1,40 @@
+###############################################################################
+# SparkyFitness CODEOWNERS
+# Protects governance and CI files.
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Legal / Licensing
+# ---------------------------------------------------------------------------
+
+/LICENSE                         @CodeWithCJ
+/CONTRIBUTING.md                 @CodeWithCJ
+/announcement.md                 @CodeWithCJ
+
+# ---------------------------------------------------------------------------
+# Repository governance
+# ---------------------------------------------------------------------------
+
+/.github/CODEOWNERS              @CodeWithCJ
+/.github/pull_request_template.md @CodeWithCJ
+/.github/FUNDING.yml             @CodeWithCJ
+
+# ---------------------------------------------------------------------------
+# GitHub Actions & Workflows
+# ---------------------------------------------------------------------------
+
+/.github/workflows/              @CodeWithCJ
+
+# ---------------------------------------------------------------------------
+# Release configuration
+# ---------------------------------------------------------------------------
+
+/.github/release.yml             @CodeWithCJ
+
+# ---------------------------------------------------------------------------
+# Tag site (tag.sparkyfitness.com)
+# Serves the files Apple and Google use to decide which apps open NFC tag
+# links; a change here can redirect those links to another app.
+# ---------------------------------------------------------------------------
+
+/SparkyFitnessTag/               @CodeWithCJ

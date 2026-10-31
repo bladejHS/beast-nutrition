@@ -1,0 +1,261 @@
+import { Ionicons } from '@expo/vector-icons';
+import { SymbolView, SymbolViewProps } from 'expo-symbols';
+import React from 'react';
+import { Platform, StyleProp, ViewStyle } from 'react-native';
+
+/**
+ * Icon mapping from semantic names to platform-specific icons.
+ * - sf: SF Symbol name (iOS)
+ * - ion: Ionicon name (Android)
+ */
+const ICON_MAP = {
+  // Navigation
+  'chevron-down': { sf: 'chevron.down', ion: 'chevron-down' },
+  'chevron-up': { sf: 'chevron.up', ion: 'chevron-up' },
+  'chevron-forward': { sf: 'chevron.right', ion: 'chevron-forward' },
+  'chevron-back': { sf: 'chevron.left', ion: 'chevron-back' },
+  'chevron-expand': { sf: 'chevron.up.chevron.down', ion: 'chevron-expand' },
+
+  // Actions
+  copy: { sf: 'doc.on.doc', ion: 'copy-outline' },
+  trash: { sf: 'trash', ion: 'trash-outline' },
+  paste: { sf: 'doc.on.clipboard', ion: 'clipboard-outline' },
+  eye: { sf: 'eye', ion: 'eye-outline' },
+  'eye-off': { sf: 'eye.slash', ion: 'eye-off-outline' },
+  'add-circle': { sf: 'plus.circle', ion: 'add-circle-outline' },
+  'remove-circle': { sf: 'minus.circle', ion: 'remove-circle-outline' },
+  checkmark: { sf: 'checkmark', ion: 'checkmark' },
+  settings: { sf: 'gearshape.fill', ion: 'settings' },
+  add: { sf: 'plus', ion: 'add' },
+  remove: { sf: 'minus', ion: 'remove' },
+  'arrow-up': { sf: 'arrow.up', ion: 'arrow-up' },
+  close: { sf: 'xmark', ion: 'close' },
+  'ellipsis-horizontal': { sf: 'ellipsis', ion: 'ellipsis-horizontal' },
+  search: { sf: 'magnifyingglass', ion: 'search-outline' },
+  save: { sf: 'square.and.arrow.down', ion: 'save-outline' },
+  share: { sf: 'square.and.arrow.up', ion: 'share-outline' },
+  microphone: { sf: 'mic.fill', ion: 'mic' },
+  'microphone-off': { sf: 'mic.slash.fill', ion: 'mic-off' },
+  bookmark: { sf: 'bookmark', ion: 'bookmark-outline' },
+  'bookmark-filled': { sf: 'bookmark.fill', ion: 'bookmark' },
+  star: { sf: 'star.fill', ion: 'star' },
+  water: { sf: 'drop.fill', ion: 'water' },
+  link: { sf: 'link', ion: 'link-outline' },
+  list: { sf: 'list.bullet', ion: 'list-outline' },
+  'checkmark-circle': {
+    sf: 'checkmark.circle',
+    ion: 'checkmark-circle-outline',
+  },
+  'checkmark-circle-filled': {
+    sf: 'checkmark.circle.fill',
+    ion: 'checkmark-circle',
+  },
+  'radio-button-on': { sf: 'circle.inset.filled', ion: 'radio-button-on' },
+  'radio-button-off': { sf: 'circle', ion: 'radio-button-off' },
+  'camera-reverse': { sf: 'camera.rotate', ion: 'camera-reverse-outline' },
+  camera: { sf: 'camera', ion: 'camera-outline' },
+  'photo-library': { sf: 'photo.on.rectangle', ion: 'images-outline' },
+  pencil: { sf: 'pencil', ion: 'create-outline' },
+  pause: { sf: 'pause.fill', ion: 'pause' },
+  replay: { sf: 'arrow.counterclockwise', ion: 'refresh' },
+  'volume-on': { sf: 'speaker.wave.2.fill', ion: 'volume-high' },
+  'volume-off': { sf: 'speaker.slash.fill', ion: 'volume-mute' },
+  play: { sf: 'play.fill', ion: 'play' },
+  stop: { sf: 'stop.fill', ion: 'stop' },
+  forward: { sf: 'forward.fill', ion: 'play-skip-forward' },
+  'skip-forward': { sf: 'forward.end.fill', ion: 'play-skip-forward' },
+  repeat: { sf: 'repeat', ion: 'repeat' },
+  measurements: { sf: 'ruler', ion: 'analytics-outline' },
+  scale: { sf: 'scalemass', ion: 'scale-outline' },
+  // Android uses -outline variants for stroke-weight consistency with the set.
+  'reorder-handle': { sf: 'line.3.horizontal', ion: 'reorder-three-outline' },
+  'swap-vertical': { sf: 'arrow.up.arrow.down', ion: 'swap-vertical-outline' },
+  'swap-horizontal': {
+    sf: 'arrow.left.arrow.right',
+    ion: 'swap-horizontal-outline',
+  },
+  'arrow-undo': { sf: 'arrow.uturn.backward', ion: 'arrow-undo-outline' },
+
+  // Status
+  'shield-checkmark': {
+    sf: 'checkmark.shield',
+    ion: 'shield-checkmark-outline',
+  },
+  'cloud-offline': { sf: 'icloud.slash', ion: 'cloud-offline-outline' },
+  'alert-circle': { sf: 'exclamationmark.circle', ion: 'alert-circle-outline' },
+  warning: { sf: 'exclamationmark.triangle.fill', ion: 'warning' },
+  'info-circle': { sf: 'info.circle', ion: 'information-circle-outline' },
+  'help-circle': { sf: 'questionmark.circle', ion: 'help-circle-outline' },
+  wrench: { sf: 'wrench', ion: 'build-outline' },
+  globe: { sf: 'globe', ion: 'globe-outline' },
+  people: { sf: 'person.2.fill', ion: 'people' },
+  wifi: { sf: 'wifi', ion: 'wifi-outline' },
+  location: { sf: 'mappin.and.ellipse', ion: 'location-outline' },
+
+  // Food
+  food: { sf: 'fork.knife', ion: 'restaurant' },
+
+  // Meals
+  meal: { sf: 'square.stack.3d.up.fill', ion: 'layers' },
+  'meal-breakfast': { sf: 'sunrise.fill', ion: 'sunny' },
+  'meal-lunch': { sf: 'sun.max.fill', ion: 'partly-sunny' },
+  'meal-dinner': { sf: 'moon.stars.fill', ion: 'moon' },
+  'meal-snack': { sf: 'clock.fill', ion: 'time' },
+
+  // Exercise
+  timer: { sf: 'timer', ion: 'timer-outline' },
+  clock: { sf: 'clock', ion: 'time-outline' },
+  history: { sf: 'clock.arrow.circlepath', ion: 'time-outline' },
+  trophy: { sf: 'trophy.fill', ion: 'trophy' },
+  'trophy-outline': { sf: 'trophy', ion: 'trophy-outline' },
+  exercise: { sf: 'flame.fill', ion: 'flame' },
+  'exercise-running': { sf: 'figure.run', ion: 'walk-outline' },
+  'exercise-jumprope': { sf: 'figure.jumprope', ion: 'fitness-outline' },
+  'exercise-running-filled': { sf: 'figure.run', ion: 'walk' },
+  'exercise-cycling': { sf: 'figure.outdoor.cycle', ion: 'bicycle-outline' },
+  'exercise-swimming': { sf: 'figure.pool.swim', ion: 'water-outline' },
+  'exercise-walking': { sf: 'figure.walk', ion: 'walk-outline' },
+  'exercise-hiking': { sf: 'figure.hiking', ion: 'walk-outline' },
+  'exercise-weights': {
+    sf: 'figure.strengthtraining.traditional',
+    ion: 'barbell-outline',
+  },
+  'exercise-yoga': { sf: 'figure.yoga', ion: 'body-outline' },
+  'exercise-tennis': { sf: 'figure.tennis', ion: 'tennisball-outline' },
+  'exercise-basketball': { sf: 'figure.basketball', ion: 'basketball-outline' },
+  'exercise-soccer': { sf: 'figure.soccer', ion: 'football-outline' },
+  'exercise-rowing': { sf: 'figure.rower', ion: 'fitness-outline' },
+  'exercise-elliptical': { sf: 'figure.elliptical', ion: 'fitness-outline' },
+  'exercise-dance': { sf: 'figure.dance', ion: 'fitness-outline' },
+  'exercise-boxing': { sf: 'figure.boxing', ion: 'fitness-outline' },
+  'exercise-pilates': { sf: 'figure.pilates', ion: 'body-outline' },
+  'exercise-stair': { sf: 'figure.stair.stepper', ion: 'fitness-outline' },
+  'exercise-default': { sf: 'figure.run', ion: 'fitness-outline' },
+
+  // Tabs
+  'tab-dashboard': { sf: 'square.grid.2x2.fill', ion: 'grid' },
+  'tab-library': { sf: 'books.vertical.fill', ion: 'library' },
+
+  // Charts/Data
+  'chart-bar': { sf: 'chart.bar.fill', ion: 'bar-chart' },
+  sync: { sf: 'arrow.triangle.2.circlepath', ion: 'sync' },
+  book: { sf: 'book.fill', ion: 'book' },
+  'document-text': { sf: 'doc.text', ion: 'document-text-outline' },
+  flame: { sf: 'flame', ion: 'flame-outline' },
+  scan: { sf: 'barcode.viewfinder', ion: 'barcode-outline' },
+  'flashlight-on': { sf: 'flashlight.on.fill', ion: 'flash' },
+  'flashlight-off': { sf: 'flashlight.off.fill', ion: 'flash-off' },
+
+  // Settings
+  server: { sf: 'server.rack', ion: 'server-outline' },
+  'health-data-sync': { sf: 'heart', ion: 'heart-outline' },
+  'calorie-settings': { sf: 'flame', ion: 'flame-outline' },
+  'food-search-settings': { sf: 'magnifyingglass', ion: 'search-outline' },
+  'dashboard-settings': { sf: 'square.grid.2x2', ion: 'grid-outline' },
+  'diary-settings': { sf: 'book', ion: 'book-outline' },
+  'measurements-settings': { sf: 'ruler', ion: 'speedometer-outline' },
+  'workout-settings': { sf: 'dumbbell', ion: 'barbell-outline' },
+  'watch-settings': { sf: 'applewatch', ion: 'watch-outline' },
+  'app-settings': { sf: 'slider.horizontal.3', ion: 'options-outline' },
+  logs: { sf: 'doc.plaintext', ion: 'document-text-outline' },
+  about: { sf: 'info.circle', ion: 'information-circle-outline' },
+  'whats-new': { sf: 'gift', ion: 'gift-outline' },
+
+  // AI features
+  sparkles: { sf: 'sparkles', ion: 'sparkles' },
+
+  // Biometrics/Security
+  fingerprint: { sf: 'touchid', ion: 'finger-print-outline' },
+  'lock-closed': { sf: 'lock.fill', ion: 'lock-closed-outline' },
+  'lock-open': { sf: 'lock.open', ion: 'lock-open-outline' },
+  'share-public': {
+    sf: 'square.and.arrow.up',
+    ion: 'share-social-outline',
+    useIoniconOnIOS: true,
+  },
+
+  // Wellness / Cycle
+  // Must stay neutral in every tint: this fronts cycle tracking, which renders
+  // under a "Wellness" label when discreet mode is on. A moon or calendar-heart
+  // would give the feature away, and a droplet reads as a blood drop when a
+  // caller tints it red or pink.
+  wellness: { sf: 'leaf', ion: 'leaf-outline' },
+  'wellness-filled': { sf: 'leaf.fill', ion: 'leaf' },
+  medication: { sf: 'pills', ion: 'medkit-outline' },
+  calendar: { sf: 'calendar', ion: 'calendar-outline' },
+  symptoms: { sf: 'cross.case', ion: 'medkit-outline' },
+  mood: { sf: 'face.smiling', ion: 'happy-outline' },
+  'check-in': { sf: 'checklist', ion: 'checkbox-outline' },
+
+  // Sleep
+  'sleep-wake-up': { sf: 'alarm.fill', ion: 'alarm' },
+  'sleep-nap': { sf: 'zzz', ion: 'moon-outline' },
+  'sleep-bedtime': { sf: 'bed.double.fill', ion: 'bed' },
+  'sleep-score': { sf: 'star.fill', ion: 'star' },
+  spo2: { sf: 'lungs.fill', ion: 'pulse' },
+  'heart-rate': { sf: 'heart.fill', ion: 'heart' },
+} as const;
+
+export type IconName = keyof typeof ICON_MAP;
+
+interface IconProps {
+  name: IconName;
+  size?: number;
+  color?: string;
+  style?: StyleProp<ViewStyle>;
+  weight?: SymbolViewProps['weight'];
+  // Forwarded to the underlying glyph so a meaningful icon (e.g. the favorite
+  // star) is announced. Omit for purely decorative icons sitting next to text.
+  accessibilityLabel?: string;
+}
+
+/**
+ * Cross-platform icon component.
+ * Uses SF Symbols on iOS and Ionicons on Android.
+ */
+const Icon: React.FC<IconProps> = ({
+  name,
+  size = 24,
+  color = '#000000',
+  style,
+  weight = 'regular',
+  accessibilityLabel,
+}) => {
+  const mapping = ICON_MAP[name];
+
+  if (!mapping) {
+    if (__DEV__) {
+      console.warn(`[Icon] Unknown icon name: "${String(name)}"`);
+    }
+    return null;
+  }
+
+  const useIoniconOnIOS =
+    'useIoniconOnIOS' in mapping &&
+    (mapping as { useIoniconOnIOS?: boolean }).useIoniconOnIOS;
+
+  if (Platform.OS === 'ios' && !useIoniconOnIOS) {
+    return (
+      <SymbolView
+        name={mapping.sf}
+        size={size}
+        tintColor={color}
+        style={style}
+        weight={weight}
+        accessibilityLabel={accessibilityLabel}
+      />
+    );
+  }
+
+  return (
+    <Ionicons
+      name={mapping.ion as keyof typeof Ionicons.glyphMap}
+      size={size}
+      color={color}
+      style={style}
+      accessibilityLabel={accessibilityLabel}
+    />
+  );
+};
+
+export default Icon;

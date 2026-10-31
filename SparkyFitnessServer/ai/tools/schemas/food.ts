@@ -1,0 +1,990 @@
+import { z } from 'zod';
+import { NOTES_MAX_LENGTH } from '@workspace/shared';
+import {
+  dateSchema,
+  optionalDateSchema,
+  optionalEntryTimeSchema,
+  uuidSchema,
+  mealTypeEnum,
+  searchTypeEnum,
+  foodProviderTypeEnum,
+  entryTypeEnum,
+  giIndexEnum,
+  paginationSchema,
+} from './common.js';
+
+// Freeform markdown note on a food or meal template. Shared by the strict
+// union members and the flat published input schema so both carry the same
+// bound as the editors on web and mobile.
+const notesSchema = z.string().max(NOTES_MAX_LENGTH).optional();
+
+// Keep barcode as a string so leading zeroes survive. This matches the existing
+// barcode lookup contract rather than assuming a single barcode standard.
+const foodBarcodeSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{8,14}$/, 'Barcode must be 8-14 digits');
+
+// Mirrors the web/mobile "Quick Add" checkbox (foods.is_quick_food). Shared by
+// the strict create_food union member and the flat published input schema so
+// both carry the same opt-in-only wording.
+const quickFoodSchema = z
+  .boolean()
+  .optional()
+  .describe(
+    'Quick Add: log this food to the diary without adding it to the user\'s reusable food list (hidden from food search, favorites, and recents). Set true ONLY when the user explicitly asks for it — "quick add", "don\'t save this to my foods", "just log it". Defaults to false. Requires meal_type_id (or meal_type) in the same call. It only skips saving a NEW food: on log_food, and on log_external_food when the food is already in the list, the existing food stays visible and the reply says Quick Add was not applied.'
+  );
+
+const searchFoodSchema = z
+  .object({
+    action: z.literal('search_food'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Name or part of food name to search'),
+    search_type: searchTypeEnum.describe('Type of search: exact or broad'),
+    ...paginationSchema.shape,
+  })
+  .strict();
+
+const lookupFoodNutritionSchema = z
+  .object({
+    action: z.literal('lookup_food_nutrition'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Name of the food to lookup'),
+    provider_type: foodProviderTypeEnum
+      .optional()
+      .describe(
+        'Optional: Force a specific provider search, bypassing the cascade lookup'
+      ),
+  })
+  .strict();
+
+const listMealTypesSchema = z
+  .object({
+    action: z.literal('list_meal_types'),
+  })
+  .strict();
+
+// food_name/unit/quantity/entry_date are optional so a model holding a food_id
+// from a lookup can log with just (food_id, meal_type): the handler resolves
+// the unit from the food's default variant, defaults quantity to 1, and
+// defaults the date to today. Requiring all four tripped small local models
+// into dead ends.
+const logFoodSchema = z
+  .object({
+    action: z.literal('log_food'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the food item (required when food_id is omitted)'),
+    food_id: uuidSchema.optional().describe('UUID of the food item (if known)'),
+    variant_id: uuidSchema
+      .optional()
+      .describe('UUID of the food variant (if known)'),
+    quantity: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .default(1)
+      .describe('Amount consumed (defaults to 1 serving when omitted)'),
+    unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe(
+        "Consumed unit. Use a concrete matching unit such as 'g' or 'ml', or explicit 'serving' (for example quantity:0.75). Do not put a reference size such as '100 g' in unit."
+      ),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'Built-in meal type fallback; ignored when meal_type_id is provided'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('Meal type UUID, including custom meal types'),
+    entry_date: optionalDateSchema,
+    entry_time: optionalEntryTimeSchema,
+    is_quick_food: quickFoodSchema,
+  })
+  .strict();
+
+// One-call bridge from an external lookup_food_nutrition match to the diary:
+// the handler re-runs the provider lookup server-side, saves the matched food
+// with the provider's full nutrition, and logs it. Exists because small local
+// models reliably fail the copy-every-nutrient-into-create_food hop.
+const logExternalFoodSchema = z
+  .object({
+    action: z.literal('log_external_food'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Food name to look up and log — use the exact name from the lookup_food_nutrition result'
+      ),
+    external_id: z
+      .string()
+      .max(100)
+      .optional()
+      .describe(
+        "The lookup result's External ID, to pin the exact provider item (optional)"
+      ),
+    provider_type: foodProviderTypeEnum
+      .optional()
+      .describe('Provider the lookup match came from (optional)'),
+    quantity: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Number of servings consumed (defaults to 1)'),
+    unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe("Unit of measurement (defaults to 'serving')"),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'Built-in meal type fallback; ignored when meal_type_id is provided'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('Meal type UUID, including custom meal types'),
+    entry_date: optionalDateSchema,
+    entry_time: optionalEntryTimeSchema,
+    is_quick_food: quickFoodSchema,
+  })
+  .strict();
+
+const createFoodSchema = z
+  .object({
+    action: z
+      .literal('create_food')
+      .describe(
+        'Create a food from verified label/source values or an explicitly requested estimate. Preserve unknown nutrients as omitted fields; never invent micros or use an estimate to hide a provider outage.'
+      ),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Exact product or recipe name, preserving brand, variety and raw/cooked distinctions.'
+      ),
+    brand: z.string().max(200).optional().describe('Brand name of the food'),
+    barcode: foodBarcodeSchema
+      .optional()
+      .describe(
+        'Product barcode; stored as a string, including leading zeroes'
+      ),
+    notes: notesSchema.describe(
+      'Optional markdown reference note for recipes, preparation details, or ingredients. Keep the exact product name in food_name; put preparation details here.'
+    ),
+    calories: z.coerce.number().min(0).describe('Calories (kcal)'),
+    protein: z.coerce.number().min(0).describe('Protein (g)'),
+    carbs: z.coerce.number().min(0).describe('Carbohydrates (g)'),
+    fat: z.coerce.number().min(0).describe('Total fat (g)'),
+    saturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Saturated fat (g). Include only when supported by the source; omit when unknown.'
+      ),
+    polyunsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Polyunsaturated fat (g). Include only when supported by the source; omit when unknown.'
+      ),
+    monounsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Monounsaturated fat (g). Include only when supported by the source; omit when unknown.'
+      ),
+    trans_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Trans fat (g). Include only when supported by the source; omit when unknown.'
+      ),
+    cholesterol: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Cholesterol (mg). Include only when supported by the source; omit when unknown.'
+      ),
+    sodium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Sodium (mg). Include only when supported by the source; omit when unknown.'
+      ),
+    potassium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Potassium (mg). Include only when supported by the source; omit when unknown.'
+      ),
+    fiber: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Dietary fiber (g). Include only when supported by the source; omit when unknown.'
+      ),
+    sugar: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Sugars (g). Include only when supported by the source; omit when unknown.'
+      ),
+    vitamin_a: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Vitamin A (% Daily Value). Include only when supported by the source; omit when unknown.'
+      ),
+    vitamin_c: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Vitamin C (% Daily Value). Include only when supported by the source; omit when unknown.'
+      ),
+    calcium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Calcium (% Daily Value). Include only when supported by the source; omit when unknown.'
+      ),
+    iron: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Iron (% Daily Value). Include only when supported by the source; omit when unknown.'
+      ),
+    caffeine_mg: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Caffeine (mg) per serving_size. Include only when supported by the source; omit when unknown.'
+      ),
+    alcohol_g: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Alcohol / pure ethanol (g) per serving_size. Include only when supported by the source; omit when unknown.'
+      ),
+    water_ml: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        "Water content (ml) per serving_size. Only set this for a solid or count-based food with meaningful water content — fruit, vegetables, soup, yogurt. Skip it when the food is already logged in a volume unit (ml, l, fl oz): the app credits that logged volume as water automatically, so setting this too would double it. Never guess for foods where water content isn't meaningful (bread, chips, meat)."
+      ),
+    gi: giIndexEnum
+      .optional()
+      .describe(
+        'Glycemic Index classification. Include only when supported by the source; omit when unknown.'
+      ),
+    quantity: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Default serving size value'),
+    unit: z.string().max(50).optional().describe('Default serving size unit'),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'Optional built-in meal type fallback for automatic logging; ignored when meal_type_id is provided'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe(
+        'Optional meal type UUID for automatic logging, including custom meal types'
+      ),
+    entry_date: optionalDateSchema.describe(
+      'Optional: Date for automatic log (YYYY-MM-DD)'
+    ),
+    entry_time: optionalEntryTimeSchema,
+    is_quick_food: quickFoodSchema,
+  })
+  .strict();
+
+const searchMealSchema = z
+  .object({
+    action: z.literal('search_meal'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Name or part of meal template name to search'),
+  })
+  .strict();
+
+const logMealSchema = z
+  .object({
+    action: z.literal('log_meal'),
+    meal_id: uuidSchema
+      .optional()
+      .describe('UUID of the meal template (if known)'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the meal template (alternative to ID)'),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'Built-in meal type fallback; ignored when meal_type_id is provided'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('Meal type UUID, including custom meal types'),
+    entry_date: dateSchema,
+    quantity: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Multiplier for the meal template'),
+    unit: z
+      .string()
+      .max(50)
+      .optional()
+      .describe('Unit for the meal template multiplier'),
+  })
+  .strict();
+
+const listDiarySchema = z
+  .object({
+    action: z.literal('list_diary'),
+    entry_date: optionalDateSchema,
+  })
+  .strict();
+
+const deleteEntrySchema = z
+  .object({
+    action: z.literal('delete_entry'),
+    entry_id: uuidSchema.optional().describe('UUID of the entry to delete'),
+    entry_type: entryTypeEnum
+      .optional()
+      .describe("Type of diary entry (defaults to 'food_entry')"),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "The entry's food name — alternative to entry_id, resolved against the diary for entry_date"
+      ),
+    entry_date: dateSchema
+      .optional()
+      .describe('Diary date food_name is resolved against (defaults to today)'),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'Narrows food_name resolution when the same food appears in several meals'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('Custom meal type UUID narrowing food_name resolution'),
+  })
+  .strict()
+  .refine((v) => v.entry_id || v.food_name, {
+    message: 'Provide entry_id or food_name',
+  })
+  .refine(
+    (v) => !(!v.entry_id && v.food_name && v.entry_type === 'food_entry_meal'),
+    {
+      message:
+        'food_name resolves food entries only — pass entry_id for a food_entry_meal',
+    }
+  );
+
+const updateEntrySchema = z
+  .object({
+    action: z.literal('update_entry'),
+    entry_id: uuidSchema.optional().describe('UUID of the entry to update'),
+    entry_type: entryTypeEnum
+      .optional()
+      .describe("Type of diary entry (defaults to 'food_entry')"),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        "The entry's food name — alternative to entry_id, resolved against the diary for entry_date"
+      ),
+    entry_date: dateSchema
+      .optional()
+      .describe('Diary date food_name is resolved against (defaults to today)'),
+    quantity: z.coerce.number().min(0).optional().describe('New amount'),
+    unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe('New unit of measurement'),
+    meal_type: mealTypeEnum
+      .optional()
+      .describe(
+        'NEW built-in meal type to move the entry to; ignored when meal_type_id is provided'
+      ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('New meal type UUID, including custom meal types'),
+  })
+  .strict()
+  .refine((v) => v.entry_id || v.food_name, {
+    message: 'Provide entry_id or food_name',
+  })
+  .refine(
+    (v) => !(!v.entry_id && v.food_name && v.entry_type === 'food_entry_meal'),
+    {
+      message:
+        'food_name resolves food entries only — pass entry_id for a food_entry_meal',
+    }
+  );
+
+const setFoodBarcodeSchema = z
+  .object({
+    action: z.literal('set_food_barcode'),
+    food_id: uuidSchema.describe('Food UUID whose product metadata is updated'),
+    barcode: foodBarcodeSchema.describe(
+      'Product barcode; stored as a string, including leading zeroes'
+    ),
+  })
+  .strict();
+
+const updateFoodVariantSchema = z
+  .object({
+    action: z.literal('update_food_variant'),
+    food_id: uuidSchema
+      .optional()
+      .describe(
+        'Food UUID from search_food. Required unless variant_id is provided. Do not call update_food_variant with only nutrient fields.'
+      ),
+    variant_id: uuidSchema
+      .optional()
+      .describe(
+        'Food variant UUID to update. If omitted, the default variant for food_id is updated.'
+      ),
+    serving_size: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated serving size value'),
+    serving_unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe('Updated serving unit'),
+    calories: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated calories (kcal)'),
+    protein: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated protein (g)'),
+    carbs: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated carbohydrates (g)'),
+    fat: z.coerce.number().min(0).optional().describe('Updated total fat (g)'),
+    saturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated saturated fat (g)'),
+    polyunsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated polyunsaturated fat (g)'),
+    monounsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated monounsaturated fat (g)'),
+    trans_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated trans fat (g)'),
+    cholesterol: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated cholesterol (mg)'),
+    sodium: z.coerce.number().min(0).optional().describe('Updated sodium (mg)'),
+    potassium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated potassium (mg)'),
+    fiber: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated dietary fiber (g)'),
+    sugar: z.coerce.number().min(0).optional().describe('Updated sugars (g)'),
+    vitamin_a: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated Vitamin A (% Daily Value)'),
+    vitamin_c: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated Vitamin C (% Daily Value)'),
+    calcium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated calcium (% Daily Value)'),
+    iron: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated iron (% Daily Value)'),
+    caffeine_mg: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Updated caffeine (mg) per serving_size'),
+    alcohol_g: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Updated alcohol / pure ethanol (g) per serving_size. Informational only — never added to calories.'
+      ),
+    water_ml: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe(
+        'Updated water content (ml) per serving_size. Skip when the food is logged in a volume unit (ml, l, fl oz) — that logged volume is already credited as water automatically.'
+      ),
+    gi: giIndexEnum
+      .optional()
+      .describe('Updated Glycemic Index classification'),
+    update_existing_entries: z.coerce
+      .boolean()
+      .optional()
+      .default(false)
+      .describe(
+        'If true, also updates existing diary food entries referencing this variant. Defaults to false.'
+      ),
+  })
+  .strict();
+
+const copyFromYesterdaySchema = z
+  .object({
+    action: z.literal('copy_from_yesterday'),
+    target_date: optionalDateSchema.describe(
+      'Date to copy entries to (defaults to today)'
+    ),
+    source_date: optionalDateSchema.describe(
+      'Date to copy entries from (defaults to yesterday)'
+    ),
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('UUID of a built-in or custom meal type'),
+    meal_type: z
+      .string()
+      .max(50)
+      .optional()
+      .describe("Specific meal type to copy (e.g., 'breakfast')"),
+  })
+  .strict();
+
+const saveAsMealTemplateSchema = z
+  .object({
+    action: z.literal('save_as_meal_template'),
+    entry_date: dateSchema,
+    meal_type_id: uuidSchema
+      .optional()
+      .describe('UUID of a built-in or custom meal type'),
+    meal_type: z
+      .string()
+      .min(1)
+      .max(50)
+      .optional()
+      .describe("Built-in meal type fallback (e.g., 'lunch')"),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Short, concise name for the meal template (2-4 words max, e.g. "Chicken Rice Bowl")'
+      ),
+    description: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe(
+        'Short tag or label (under 50 chars). Put recipe steps, instructions, or long details in notes, not description'
+      ),
+    notes: notesSchema.describe(
+      'Optional markdown reference note for the meal template (recipes, preparation instructions). Put detailed info here.'
+    ),
+  })
+  .strict();
+
+const setFoodNotesSchema = z
+  .object({
+    action: z.literal('set_food_notes'),
+    food_id: uuidSchema
+      .optional()
+      .describe('UUID of the food whose note is being set'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the food (alternative to food_id)'),
+    notes: z
+      .string()
+      .max(NOTES_MAX_LENGTH)
+      .describe(
+        'The markdown note to store; pass an empty string to clear it. Replaces any existing note outright, so include the parts the user wants to keep.'
+      ),
+  })
+  .strict();
+
+const deleteFoodSchema = z
+  .object({
+    action: z.literal('delete_food'),
+    food_id: uuidSchema.optional().describe('UUID of the food to delete'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the food to delete (alternative to ID)'),
+  })
+  .strict();
+
+const logWaterSchema = z
+  .object({
+    action: z.literal('log_water'),
+    amount_ml: z.coerce
+      .number()
+      .min(0)
+      .describe('Amount of water in milliliters'),
+    entry_date: dateSchema.describe('Date to log the water for'),
+  })
+  .strict();
+
+const getNutritionalSummarySchema = z
+  .object({
+    action: z.literal('get_nutritional_summary'),
+    start_date: dateSchema.describe('Start date for the summary range'),
+    end_date: dateSchema.describe('End date for the summary range'),
+  })
+  .strict();
+
+const getWaterHistorySchema = z
+  .object({
+    action: z.literal('get_water_history'),
+    start_date: dateSchema
+      .optional()
+      .describe('Start date for the history range'),
+    end_date: dateSchema.optional().describe('End date for the history range'),
+  })
+  .strict();
+
+export const manageFoodSchema = z.discriminatedUnion('action', [
+  searchFoodSchema,
+  lookupFoodNutritionSchema,
+  listMealTypesSchema,
+  logFoodSchema,
+  logExternalFoodSchema,
+  createFoodSchema,
+  searchMealSchema,
+  logMealSchema,
+  listDiarySchema,
+  deleteEntrySchema,
+  setFoodNotesSchema,
+  deleteFoodSchema,
+  updateEntrySchema,
+  setFoodBarcodeSchema,
+  updateFoodVariantSchema,
+  copyFromYesterdaySchema,
+  saveAsMealTemplateSchema,
+  logWaterSchema,
+  getNutritionalSummarySchema,
+  getWaterHistorySchema,
+]);
+
+export type ManageFoodInput = z.infer<typeof manageFoodSchema>;
+
+// Flat input shape published to the LLM as `inputSchema`. Runtime validation
+// uses `manageFoodSchema` (the discriminated union) inside the tool handler
+// via `safeParse`, so strict per-action validation is preserved while the
+// published schema stays a plain object the model can fill in.
+export const manageFoodInput = z.object({
+  action: z
+    .enum([
+      'search_food',
+      'lookup_food_nutrition',
+      'list_meal_types',
+      'log_food',
+      'log_external_food',
+      'create_food',
+      'search_meal',
+      'log_meal',
+      'list_diary',
+      'delete_entry',
+      'delete_food',
+      'update_entry',
+      'set_food_notes',
+      'set_food_barcode',
+      'update_food_variant',
+      'copy_from_yesterday',
+      'save_as_meal_template',
+      'log_water',
+      'get_nutritional_summary',
+      'get_water_history',
+    ])
+    .optional()
+    .describe(
+      'Optional action to perform (server infers if omitted); see tool description for per-action fields.'
+    ),
+  // food identity
+  food_name: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      'Food name — required for search_food/log_food/log_external_food/create_food/delete_food (alternative to food_id)'
+    ),
+  // Published as plain strings (advisory; the per-action union enforces UUID)
+  // so a model passing a lookup result's External ID reaches the handler and
+  // gets a chat-visible correction instead of an SDK-level type error.
+  food_id: z
+    .string()
+    .optional()
+    .describe(
+      'Internal food UUID — alternative to food_name. NOT the External ID from lookup_food_nutrition results. For update_food_variant, required: run search_food first and pass this id (no food_name fallback).'
+    ),
+  variant_id: z
+    .string()
+    .optional()
+    .describe(
+      'Food variant UUID. For update_food_variant, an alternative to food_id; one of the two is required.'
+    ),
+  external_id: z
+    .string()
+    .max(100)
+    .optional()
+    .describe(
+      "For log_external_food: the lookup result's External ID pinning the exact provider item"
+    ),
+  update_existing_entries: z.coerce
+    .boolean()
+    .optional()
+    .describe(
+      'For update_food_variant: if true, also updates existing diary entries referencing this variant'
+    ),
+  serving_size: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('For update_food_variant: updated serving size value'),
+  serving_unit: z
+    .string()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe('For update_food_variant: updated serving unit'),
+  brand: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Brand name — for create_food'),
+  barcode: foodBarcodeSchema
+    .optional()
+    .describe('Product barcode for create_food or set_food_barcode'),
+  // serving
+  quantity: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      "Amount consumed (units defined by 'unit'). For create_food, also the serving the nutrients are for."
+    ),
+  unit: z
+    .string()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Unit of measurement ('g', 'serving', 'piece', etc.)"),
+  // meal / diary
+  meal_type: mealTypeEnum
+    .optional()
+    .describe(
+      'Built-in fallback: breakfast | lunch | dinner | snacks. Ignored when meal_type_id is provided.'
+    ),
+  meal_type_id: uuidSchema
+    .optional()
+    .describe(
+      'Meal type UUID for logging or moving entries, including custom meal types'
+    ),
+  entry_date: dateSchema.optional().describe('Date for the entry (YYYY-MM-DD)'),
+  entry_time: optionalEntryTimeSchema,
+  is_quick_food: quickFoodSchema,
+  meal_id: uuidSchema.optional().describe('Meal template UUID'),
+  meal_name: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Meal template name'),
+  // search
+  search_type: searchTypeEnum
+    .optional()
+    .describe('exact | broad — for search_food'),
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe('Pagination limit'),
+  offset: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Pagination offset'),
+  // macros (for create_food)
+  calories: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Calories (kcal) — required for create_food'),
+  protein: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Protein (g) — required for create_food'),
+  carbs: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Carbohydrates (g) — required for create_food'),
+  fat: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Total fat (g) — required for create_food'),
+  saturated_fat: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Saturated fat (g)'),
+  polyunsaturated_fat: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Polyunsaturated fat (g)'),
+  monounsaturated_fat: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Monounsaturated fat (g)'),
+  trans_fat: z.coerce.number().min(0).optional().describe('Trans fat (g)'),
+  cholesterol: z.coerce.number().min(0).optional().describe('Cholesterol (mg)'),
+  sodium: z.coerce.number().min(0).optional().describe('Sodium (mg)'),
+  potassium: z.coerce.number().min(0).optional().describe('Potassium (mg)'),
+  fiber: z.coerce.number().min(0).optional().describe('Dietary fiber (g)'),
+  sugar: z.coerce.number().min(0).optional().describe('Sugars (g)'),
+  vitamin_a: z.coerce.number().min(0).optional().describe('Vitamin A (% DV)'),
+  vitamin_c: z.coerce.number().min(0).optional().describe('Vitamin C (% DV)'),
+  calcium: z.coerce.number().min(0).optional().describe('Calcium (% DV)'),
+  iron: z.coerce.number().min(0).optional().describe('Iron (% DV)'),
+  caffeine_mg: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Caffeine (mg) — for create_food/update_food_variant, per serving_size'
+    ),
+  alcohol_g: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Alcohol / pure ethanol (g) — for create_food/update_food_variant, per serving_size. Informational only, never added to calories.'
+    ),
+  water_ml: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe(
+      'Water content (ml) — for create_food/update_food_variant, per serving_size. Skip when the food is logged in a volume unit (ml, l, fl oz); that logged volume is already credited as water automatically.'
+    ),
+  gi: giIndexEnum.optional().describe('Glycemic index classification'),
+  // entry / diary management
+  entry_id: uuidSchema.optional().describe('Diary entry UUID'),
+  entry_type: entryTypeEnum.optional().describe('food_entry | food_entry_meal'),
+  description: z
+    .string()
+    .max(1000)
+    .optional()
+    .describe('Description (for save_as_meal_template)'),
+  notes: notesSchema.describe(
+    'Markdown reference note (for create_food / save_as_meal_template / set_food_notes; empty string clears it)'
+  ),
+  // copy_from_yesterday
+  target_date: optionalDateSchema.describe('Target date (defaults to today)'),
+  source_date: optionalDateSchema.describe(
+    'Source date (defaults to yesterday)'
+  ),
+  // water
+  amount_ml: z.coerce
+    .number()
+    .min(0)
+    .optional()
+    .describe('Water amount in milliliters'),
+  // range queries
+  start_date: dateSchema.optional().describe('Start date for range queries'),
+  end_date: dateSchema.optional().describe('End date for range queries'),
+  // explicit search provider
+  provider_type: foodProviderTypeEnum
+    .optional()
+    .describe('Optional: Force a specific provider search (e.g. USDA)'),
+});

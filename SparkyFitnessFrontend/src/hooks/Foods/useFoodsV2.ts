@@ -1,0 +1,107 @@
+import {
+  searchFoodsV2,
+  searchBarcodeV2,
+  getFoodDetailsV2,
+} from '@/api/Foods/foodService';
+
+import i18n from 'i18next';
+import { barcodeKeys } from '@/api/keys/barcodes';
+export const v2FoodKeys = {
+  all: ['v2', 'foods'] as const,
+  search: (
+    providerType: string,
+    query: string,
+    providerId?: string,
+    pageSize?: number,
+    autoScale?: boolean,
+    page?: number
+  ) =>
+    [
+      ...v2FoodKeys.all,
+      'search',
+      providerType,
+      query,
+      providerId,
+      pageSize,
+      autoScale,
+      page,
+    ] as const,
+  barcode: (
+    barcode: string,
+    providerId?: string,
+    accountId?: string,
+    profileId?: string
+  ) => barcodeKeys.lookup(accountId, barcode, providerId, profileId),
+  details: (providerType: string, externalId: string, providerId?: string) =>
+    [
+      ...v2FoodKeys.all,
+      'details',
+      providerType,
+      externalId,
+      providerId,
+    ] as const,
+};
+
+export const searchFoodsV2Options = (
+  providerType: string,
+  query: string,
+  providerId?: string,
+  pageSize?: number,
+  autoScale?: boolean,
+  page?: number
+) => ({
+  queryKey: v2FoodKeys.search(
+    providerType,
+    query,
+    providerId,
+    pageSize,
+    autoScale,
+    page
+  ),
+  queryFn: () =>
+    searchFoodsV2(providerType, query, providerId, page, pageSize, autoScale),
+  staleTime: 1000 * 60 * 5,
+  enabled: !!query,
+  meta: {
+    errorMessage: i18n.t(
+      'hooks.useFoodsV2.failedToSearchFoods',
+      'Failed to search {{providerType}} foods.',
+      { providerType }
+    ),
+  },
+});
+
+export const searchBarcodeV2Options = (
+  barcode: string,
+  providerId?: string,
+  accountId?: string,
+  profileId?: string
+) => ({
+  queryKey: v2FoodKeys.barcode(barcode, providerId, accountId, profileId),
+  queryFn: () => searchBarcodeV2(barcode, providerId),
+  staleTime: 1000 * 60 * 5,
+  meta: {
+    errorMessage: i18n.t(
+      'hooks.useFoodsV2.failedToSearchBarcode',
+      'Failed to search barcode.'
+    ),
+  },
+});
+
+export const foodDetailsV2Options = (
+  providerType: string,
+  externalId: string,
+  providerId?: string
+) => ({
+  queryKey: v2FoodKeys.details(providerType, externalId, providerId),
+  queryFn: () => getFoodDetailsV2(providerType, externalId, providerId),
+  staleTime: 1000 * 60 * 5,
+  enabled: !!externalId,
+  meta: {
+    errorMessage: i18n.t(
+      'hooks.useFoodsV2.failedToLoadFoodDetails',
+      'Failed to load {{providerType}} food details.',
+      { providerType }
+    ),
+  },
+});

@@ -1,0 +1,40 @@
+# GitHub's native auto-generated release notes config.
+#
+# Only `changelog.exclude` and `changelog.categories` are part of the schema.
+# There is NO `template:` key and no $CHANGELOG / $CONTRIBUTORS variables here —
+# those belong to Release Drafter, and GitHub silently discards anything it does
+# not recognise. Do not add them back.
+#
+# The Support / Upgrade Notice / Key Highlights preamble lives in
+# .github/release-preamble.md and is stitched onto the generated notes by the
+# "Draft release" workflow (.github/workflows/draft-release.yml).
+changelog:
+  exclude:
+    labels:
+      - duplicate
+      - invalid
+      - wontfix
+      - question
+      - "good first issue"
+      - "help wanted"
+      - eas-build
+      - skip-changelog
+      - "autorelease: pending"
+      - "autorelease: tagged"
+      - refactor
+  categories:
+    - title: "Security"
+      labels:
+        - security
+    - title: "Features"
+      labels:
+        - enhancement
+    - title: "Fixes"
+      labels:
+        - bug
+    - title: "Documentation"
+      labels:
+        - documentation
+    - title: "Other Changes"
+      labels:
+        - "*"

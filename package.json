@@ -1,0 +1,31 @@
+{
+  "packageManager": "pnpm@10.33.4",
+  "type": "module",
+  "scripts": {
+    "prepare": "husky",
+    "set-version": "node scripts/set-version.js",
+    "reset-dev": "./scripts/reset-dev.sh"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.0",
+    "prettier": "3.9.10"
+  },
+  "lint-staged": {
+    "shared/**/*.{ts,json}": [
+      "npx prettier --write --log-level warn --ignore-path shared/.prettierignore"
+    ],
+    "SparkyFitnessFrontend/**/*.{ts,tsx}": [
+      "npx prettier --write --log-level warn --ignore-path SparkyFitnessFrontend/.prettierignore"
+    ],
+    "SparkyFitnessServer/**/*.{js,ts}": [
+      "npx prettier --write --log-level warn --ignore-path SparkyFitnessServer/.prettierignore"
+    ],
+    "SparkyFitnessMobile/**/*.{ts,tsx,js,jsx,mjs,cjs}": [
+      "npx prettier --write --log-level warn --ignore-path SparkyFitnessMobile/.prettierignore"
+    ]
+  },
+  "dependencies": {
+    "js-yaml": "^5.4.1"
+  }
+}

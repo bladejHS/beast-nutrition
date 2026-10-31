@@ -1,0 +1,757 @@
+import { vi, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import chatRepository from '../models/chatRepository.js';
+import preferenceRepository from '../models/preferenceRepository.js';
+import { estimateFoodPhotoNutrition } from '../services/foodPhotoEstimationService.js';
+
+vi.mock('../models/chatRepository');
+vi.mock('../models/preferenceRepository');
+// Read by utils/outboundUrlPolicy's resolveAiNetworkPolicy. Default false
+// keeps these cases off the real database.
+vi.mock('../models/globalSettingsRepository.js', () => ({
+  isPrivateNetworkAiAllowed: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('../config/logging', () => ({ log: vi.fn() }));
+// Matching is a separate service with its own tests and its own DB access;
+// this file covers prompt building and provider dispatch.
+vi.mock('../services/foodPhotoMatchService.js', () => ({
+  attachFoodMatches: vi.fn(
+    async (_userId: string, estimate: unknown) => estimate
+  ),
+}));
+
+// Mock the undici Agent so the Ollama path never constructs a real agent.
+// (global.fetch is mocked per-test; the dispatcher option is ignored by it.)
+// This suite drives the real dispatchAiRequest, so it needs the same
+// transport stubs as providerDispatch.test.ts.
+vi.mock('undici', () => {
+  // Regular function (not arrow) so it is constructable via `new Agent(...)`.
+  const Agent = vi.fn(function () {
+    return { destroy: vi.fn() };
+  });
+  const buildConnector = vi.fn(() => vi.fn());
+  // Pass-through, so assertions on the dispatcher still see the Agent.
+  const Dispatcher1Wrapper = vi.fn(function (inner: unknown) {
+    return inner;
+  });
+  return {
+    default: { Agent, buildConnector, Dispatcher1Wrapper },
+    Agent,
+    buildConnector,
+    Dispatcher1Wrapper,
+  };
+});
+
+// The vision features resolve through the vision pointer, which falls back to
+// the active/default service. The service consults getActiveVisionAiServiceSetting.
+const mockGetVisionSetting = vi.mocked(
+  chatRepository.getActiveVisionAiServiceSetting
+);
+const mockGetBackendSetting = vi.mocked(
+  chatRepository.getAiServiceSettingForBackend
+);
+const mockGetUserPreferences = vi.mocked(
+  preferenceRepository.getUserPreferences
+);
+
+const TEST_USER_ID = 'user-123';
+const TEST_BASE64 = 'iVBORw0KGgoAAAANSUhEUg==';
+const TEST_MIME = 'image/jpeg';
+
+const makeSetting = (overrides: Record<string, unknown> = {}) => ({
+  id: 'setting-1',
+  service_name: 'My Provider',
+  service_type: 'google',
+  is_active: true,
+  model_name: 'gemini-2.5-flash',
+  is_public: false,
+  source: 'user',
+  ...overrides,
+});
+
+const makeServiceDetail = (overrides: Record<string, unknown> = {}) => ({
+  id: 'setting-1',
+  service_type: 'google',
+  model_name: 'gemini-2.5-flash',
+  api_key: 'gem-key',
+  custom_url: null,
+  timeout: null,
+  ...overrides,
+});
+
+// Satisfies foodPhotoEstimateResponseSchema; reused as both the upstream
+// payload and the expected parsed estimate.
+const sampleEstimate = {
+  meal_summary: 'Grilled chicken with rice',
+  overall_confidence: 'high',
+  confidence_reason: 'Clear, well-lit photo',
+  items: [
+    {
+      name: 'grilled chicken breast',
+      estimated_grams: 150,
+      portion_description: '1 medium breast',
+      preparation: 'grilled',
+      calories_kcal: 250,
+      protein_g: 45,
+      carbs_g: 0,
+      fat_g: 6,
+      fiber_g: 0,
+      sugar_g: 0,
+      item_confidence: 'high',
+      assumptions: [],
+    },
+  ],
+  totals: {
+    calories_kcal: 250,
+    protein_g: 45,
+    carbs_g: 0,
+    fat_g: 6,
+    fiber_g: 0,
+    sugar_g: 0,
+    total_grams: 150,
+  },
+  user_weight_reconciliation: '',
+  clarifying_questions: [],
+};
+
+// Per-family upstream response-body factories matching each provider's wire
+// shape. Every family delivers the payload as a JSON *string* the helper
+// parses; anthropic's arrives in a text block after any thinking blocks.
+function googleBody(payload: unknown) {
+  return {
+    candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }],
+  };
+}
+function openAiBody(payload: unknown) {
+  return {
+    choices: [
+      { finish_reason: 'stop', message: { content: JSON.stringify(payload) } },
+    ],
+  };
+}
+// The request asks for JSON outputs (`output_config.format`), and the models
+// that think by default put a thinking block ahead of the answer.
+function anthropicJsonBody(payload: unknown) {
+  return {
+    stop_reason: 'end_turn',
+    content: [
+      { type: 'thinking', thinking: '', signature: 'sig' },
+      { type: 'text', text: JSON.stringify(payload) },
+    ],
+  };
+}
+function ollamaBody(payload: unknown) {
+  return { message: { content: JSON.stringify(payload) } };
+}
+
+type ProviderFamily = 'google' | 'openai' | 'anthropic' | 'ollama';
+
+function familyFor(serviceType: string): ProviderFamily {
+  switch (serviceType) {
+    case 'google':
+      return 'google';
+    case 'anthropic':
+      return 'anthropic';
+    case 'ollama':
+      return 'ollama';
+    default:
+      return 'openai';
+  }
+}
+
+function bodyFor(serviceType: string, payload: unknown) {
+  switch (familyFor(serviceType)) {
+    case 'google':
+      return googleBody(payload);
+    case 'anthropic':
+      return anthropicJsonBody(payload);
+    case 'ollama':
+      return ollamaBody(payload);
+    default:
+      return openAiBody(payload);
+  }
+}
+
+function mockFetch(
+  jsonBody: unknown,
+  init: { ok?: boolean; status?: number } = {}
+) {
+  const m = vi.fn().mockResolvedValue({
+    ok: init.ok ?? true,
+    status: init.status ?? 200,
+    text: async () => (typeof jsonBody === 'string' ? jsonBody : ''),
+    json: async () => jsonBody,
+  });
+  global.fetch = m as typeof global.fetch;
+  return m;
+}
+
+function capturedBody(m: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const call = m.mock.calls[0];
+  const init = call[1] as { body: string };
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
+// The prompt-building tests run against google, where the prompt lives in the
+// last (text) part of the request body.
+function googlePromptText(body: Record<string, unknown>): string {
+  const parts = (body.contents as Array<{ parts: Array<{ text?: string }> }>)[0]
+    .parts;
+  return parts.find((p) => typeof p.text === 'string')?.text ?? '';
+}
+
+describe('estimateFoodPhotoNutrition', () => {
+  const originalFetch = global.fetch;
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  // Each entry sets the backend detail used for dispatch. The provider comes
+  // from the backend mock, not the active-setting mock.
+  const PROVIDER_CASES: {
+    service_type: string;
+    api_key: string | null;
+    custom_url?: string;
+  }[] = [
+    { service_type: 'google', api_key: 'gem-key' },
+    { service_type: 'openai', api_key: 'sk-test' },
+    { service_type: 'anthropic', api_key: 'anth-key' },
+    { service_type: 'mistral', api_key: 'mistral-key' },
+    { service_type: 'groq', api_key: 'groq-key' },
+    { service_type: 'openrouter', api_key: 'or-key' },
+    {
+      service_type: 'openai_compatible',
+      api_key: 'oc-key',
+      custom_url: 'https://example.local/v1',
+    },
+    {
+      service_type: 'custom',
+      api_key: 'custom-key',
+      custom_url: 'https://example.local/api/foo',
+    },
+    {
+      service_type: 'ollama',
+      api_key: null,
+      custom_url: 'http://localhost:11434',
+    },
+  ];
+
+  describe('all-provider happy path', () => {
+    it.each(PROVIDER_CASES)(
+      'returns the parsed estimate for $service_type',
+      async ({ service_type, api_key, custom_url }) => {
+        mockGetVisionSetting.mockResolvedValue(makeSetting({ service_type }));
+        mockGetBackendSetting.mockResolvedValue(
+          makeServiceDetail({
+            service_type,
+            api_key,
+            custom_url: custom_url ?? null,
+          })
+        );
+        mockFetch(bodyFor(service_type, sampleEstimate));
+
+        const result = await estimateFoodPhotoNutrition({
+          base64Image: TEST_BASE64,
+          mimeType: TEST_MIME,
+          userId: TEST_USER_ID,
+          actorIsAdmin: service_type === 'ollama',
+        });
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.estimate.meal_summary).toBe(
+            'Grilled chicken with rice'
+          );
+          expect(result.estimate.totals.calories_kcal).toBe(250);
+        }
+      }
+    );
+  });
+
+  describe('service plumbing', () => {
+    it('returns INVALID_REQUEST when no image is supplied', async () => {
+      const result = await estimateFoodPhotoNutrition({
+        images: [],
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe('INVALID_REQUEST');
+      }
+    });
+
+    it('returns NO_AI_CONFIGURED when getActiveVisionAiServiceSetting returns null', async () => {
+      mockGetVisionSetting.mockResolvedValue(null);
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe('NO_AI_CONFIGURED');
+      }
+    });
+
+    it('returns NO_AI_CONFIGURED when getAiServiceSettingForBackend returns null', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(null);
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe('NO_AI_CONFIGURED');
+      }
+    });
+
+    it('returns API_KEY_MISSING when a non-ollama provider has no api_key', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({ api_key: null })
+      );
+      const fetchSpy = vi.fn();
+      global.fetch = fetchSpy as typeof global.fetch;
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe('API_KEY_MISSING');
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('prompt building (service-owned)', () => {
+    beforeEach(() => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+    });
+
+    it('renders the weight slot the caller supplies', async () => {
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+        weightSlot: '16 oz (approximately 454 g)',
+      });
+      expect(googlePromptText(capturedBody(m))).toContain(
+        '16 oz (approximately 454 g)'
+      );
+    });
+
+    it('renders an empty weight slot when no weight is provided', async () => {
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(googlePromptText(capturedBody(m))).toContain(
+        'User-provided total weight (optional): ""'
+      );
+    });
+
+    it('keeps the singular prompt for a single image', async () => {
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        images: [{ base64: 'aW1n', mimeType: 'image/jpeg' }],
+        userId: TEST_USER_ID,
+      });
+      const prompt = googlePromptText(capturedBody(m));
+      expect(prompt).toContain('Analyze the meal photo');
+      expect(prompt).not.toContain('ONE meal');
+    });
+
+    it('tells the model multiple images are one meal when given several', async () => {
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        images: [
+          { base64: 'aW1nMQ==', mimeType: 'image/jpeg' },
+          { base64: 'aW1nMg==', mimeType: 'image/jpeg' },
+        ],
+        userId: TEST_USER_ID,
+      });
+      const prompt = googlePromptText(capturedBody(m));
+      expect(prompt).toContain('2 provided photos');
+      expect(prompt).toContain('ONE meal');
+    });
+
+    it('defaults prompt output language to English and enforces food-name-only rule when user language is unset', async () => {
+      mockGetUserPreferences.mockResolvedValue(undefined);
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      const prompt = googlePromptText(capturedBody(m));
+      expect(mockGetUserPreferences).toHaveBeenCalledWith(TEST_USER_ID);
+      expect(prompt).toContain(
+        'The "name" field must be ONLY the food name, as it would appear on a label'
+      );
+      expect(prompt).toContain('in English,');
+    });
+
+    it('instructs the model to use the user configured language (e.g. German)', async () => {
+      mockGetUserPreferences.mockResolvedValue({ language: 'de' });
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      const prompt = googlePromptText(capturedBody(m));
+      expect(prompt).toContain('in German (de),');
+      expect(prompt).toContain(
+        'including foods whose common name you know in English'
+      );
+      expect(prompt).toContain(
+        'Keep enum fields ("overall_confidence" and "item_confidence") in English ("high", "medium", "low").'
+      );
+    });
+
+    it('resolves regional language tags like pt-BR for the prompt', async () => {
+      mockGetUserPreferences.mockResolvedValue({ language: 'pt-BR' });
+      const m = mockFetch(googleBody(sampleEstimate));
+      await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      const prompt = googlePromptText(capturedBody(m));
+      expect(prompt).toContain('in Brazilian Portuguese (pt-BR),');
+    });
+
+    it('falls back to English when loading user preferences rejects', async () => {
+      mockGetUserPreferences.mockRejectedValue(new Error('db unavailable'));
+      const m = mockFetch(googleBody(sampleEstimate));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      const prompt = googlePromptText(capturedBody(m));
+      expect(prompt).toContain('in English,');
+    });
+
+    it.each([['zz'], ['invalid_tag_12345']])(
+      'falls back to English when user language tag %s is unknown or invalid',
+      async (language) => {
+        mockGetUserPreferences.mockResolvedValue({ language });
+        const m = mockFetch(googleBody(sampleEstimate));
+        await estimateFoodPhotoNutrition({
+          base64Image: TEST_BASE64,
+          mimeType: TEST_MIME,
+          userId: TEST_USER_ID,
+        });
+        const prompt = googlePromptText(capturedBody(m));
+        expect(prompt).toContain('in English,');
+        expect(prompt).not.toContain(language);
+      }
+    );
+  });
+
+  describe('dispatch category → food-photo code mapping', () => {
+    function mockGoogle() {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+    }
+    function mockOpenAi() {
+      mockGetVisionSetting.mockResolvedValue(
+        makeSetting({ service_type: 'openai' })
+      );
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({ service_type: 'openai', api_key: 'sk-test' })
+      );
+    }
+
+    const estimate = () =>
+      estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+
+    it.each([['TimeoutError'], ['AbortError']])(
+      'maps a %s fetch rejection → TIMEOUT',
+      async (errorName) => {
+        mockGoogle();
+        const err = new Error('aborted');
+        err.name = errorName;
+        global.fetch = vi.fn().mockRejectedValue(err) as typeof global.fetch;
+        const result = await estimate();
+        expect(result.success).toBe(false);
+        if (!result.success) expect(result.code).toBe('TIMEOUT');
+      }
+    );
+
+    it('maps a non-2xx upstream response → UPSTREAM_ERROR', async () => {
+      mockGoogle();
+      mockFetch('Internal server error', { ok: false, status: 500 });
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('UPSTREAM_ERROR');
+    });
+
+    it('maps an openai patch limit 400 → IMAGE_TOO_LARGE', async () => {
+      mockOpenAi();
+      mockFetch(
+        JSON.stringify({
+          error: {
+            message:
+              'The image you provided requires 48960 patches after processing, exceeding the limit of 30000. Please resize the image and try again.',
+            type: 'invalid_request_error',
+            param: 'messages',
+            code: 'invalid_value',
+          },
+        }),
+        { ok: false, status: 400 }
+      );
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.code).toBe('IMAGE_TOO_LARGE');
+        expect(result.error).toBe(
+          'The image is too large for AI analysis. Please try another photo.'
+        );
+      }
+    });
+
+    it('maps an openai refusal → CONTENT_BLOCKED', async () => {
+      mockOpenAi();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({
+          choices: [
+            { finish_reason: 'stop', message: { refusal: "I can't help" } },
+          ],
+        }),
+      }) as typeof global.fetch;
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('CONTENT_BLOCKED');
+    });
+
+    it('maps an empty response body → CONTENT_BLOCKED', async () => {
+      // Today's extractors only reject non-string content, so an empty string
+      // would fall through to JSON.parse('') → PARSE_ERROR. The helper treats
+      // empty/whitespace as no_content, which we map to CONTENT_BLOCKED.
+      mockOpenAi();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { content: '' } }],
+        }),
+      }) as typeof global.fetch;
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('CONTENT_BLOCKED');
+    });
+
+    it('maps invalid JSON → PARSE_ERROR', async () => {
+      mockOpenAi();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({
+          choices: [
+            { finish_reason: 'stop', message: { content: 'not json at all' } },
+          ],
+        }),
+      }) as typeof global.fetch;
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('PARSE_ERROR');
+    });
+
+    it("maps finish_reason 'length' (truncated) → PARSE_ERROR", async () => {
+      mockOpenAi();
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '',
+        json: async () => ({
+          choices: [
+            {
+              finish_reason: 'length',
+              message: { content: '{"meal_summary":"partial"}' },
+            },
+          ],
+        }),
+      }) as typeof global.fetch;
+      const result = await estimate();
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('PARSE_ERROR');
+    });
+
+    it('rejects HEIC to anthropic with UNSUPPORTED_MIME_TYPE before any upstream call', async () => {
+      mockGetVisionSetting.mockResolvedValue(
+        makeSetting({ service_type: 'anthropic' })
+      );
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({ service_type: 'anthropic', api_key: 'anth-key' })
+      );
+      const fetchSpy = vi.fn();
+      global.fetch = fetchSpy as typeof global.fetch;
+      const result = await estimateFoodPhotoNutrition({
+        images: [{ base64: 'aGVsbG8=', mimeType: 'image/heic' }],
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('UNSUPPORTED_MIME_TYPE');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('maps a blank custom_url on ollama → NO_AI_CONFIGURED', async () => {
+      mockGetVisionSetting.mockResolvedValue(
+        makeSetting({ service_type: 'ollama' })
+      );
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({
+          service_type: 'ollama',
+          api_key: null,
+          custom_url: '   ',
+        })
+      );
+      const fetchSpy = vi.fn();
+      global.fetch = fetchSpy as typeof global.fetch;
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('NO_AI_CONFIGURED');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('domain validation', () => {
+    it('derives missing totals rather than failing the whole estimate', async () => {
+      // Models routinely omit `totals`. Rejecting the payload would cost the
+      // user an estimate they already paid an AI call for, so it is summed
+      // from the items instead.
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+      const wrongShape: Record<string, unknown> = { ...sampleEstimate };
+      delete wrongShape.totals;
+      mockFetch(googleBody(wrongShape));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.totals.calories_kcal).toBeGreaterThan(0);
+      }
+    });
+
+    it('normalizes string assumptions from local models into an array', async () => {
+      mockGetVisionSetting.mockResolvedValue(
+        makeSetting({ service_type: 'openai_compatible' })
+      );
+      mockGetBackendSetting.mockResolvedValue(
+        makeServiceDetail({
+          service_type: 'openai_compatible',
+          custom_url: 'https://example.local/v1',
+        })
+      );
+      const stringAssumptionsShape: Record<string, unknown> = {
+        ...sampleEstimate,
+        items: [
+          {
+            ...sampleEstimate.items[0],
+            assumptions: 'Assumed grilled with 1 tsp of oil',
+          },
+        ],
+      };
+      mockFetch(openAiBody(stringAssumptionsShape));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.items[0].assumptions).toEqual([
+          'Assumed grilled with 1 tsp of oil',
+        ]);
+      }
+    });
+
+    it('returns PARSE_ERROR when the payload cannot be repaired', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+      // No items and no totals: there is nothing to sum and nothing to log.
+      mockFetch(googleBody({ meal_summary: 'A plate', items: 'not-an-array' }));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.code).toBe('PARSE_ERROR');
+    });
+
+    it('cleans up verbose narrative meal summaries into concise dish names', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+      const verboseShape: Record<string, unknown> = {
+        ...sampleEstimate,
+        meal_summary:
+          'A creamy chicken and pasta dish, featuring penne pasta mixed with chunks of cooked chicken in a thick, creamy white sauce, garnished with fresh herbs. The dish appears seasoned and rich',
+      };
+      mockFetch(googleBody(verboseShape));
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.meal_summary).toBe('Creamy chicken and pasta');
+      }
+    });
+
+    it('title-cases food names starting with non-ASCII lowercase letters', async () => {
+      mockGetVisionSetting.mockResolvedValue(makeSetting());
+      mockGetBackendSetting.mockResolvedValue(makeServiceDetail());
+      mockFetch(
+        googleBody({
+          ...sampleEstimate,
+          items: [
+            {
+              ...sampleEstimate.items[0],
+              name: 'überbackener käse',
+            },
+          ],
+        })
+      );
+      const result = await estimateFoodPhotoNutrition({
+        base64Image: TEST_BASE64,
+        mimeType: TEST_MIME,
+        userId: TEST_USER_ID,
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.estimate.items[0].name).toBe('Überbackener Käse');
+      }
+    });
+  });
+});

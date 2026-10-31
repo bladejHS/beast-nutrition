@@ -1,0 +1,345 @@
+import React, { useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Pressable, Text, View } from 'react-native';
+import { useCSSVariable } from 'uniwind';
+import { useClockTick } from '../hooks/useClockTick';
+import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
+import { formatElapsed } from '../utils/workoutSession';
+import type { ExerciseProgress } from '../utils/workoutProgress';
+import Icon, { type IconName } from './Icon';
+import LiquidGlassSurface, {
+  createLiquidGlassPillStyle,
+} from './LiquidGlassSurface';
+import ActionSheet, {
+  type ActionSheetItem,
+  type ActionSheetRef,
+} from './ActionSheet';
+
+export { buildExerciseProgress } from '../utils/workoutProgress';
+
+interface ActiveWorkoutHeaderProps {
+  name: string;
+  location?: string | null;
+  startedAt: number | null;
+  progress: ExerciseProgress[];
+  onBack: () => void;
+  onDiscard: () => void;
+  /** Adds an "End workout" action (the finish flow) in its own menu group. */
+  onEndWorkout?: () => void;
+  /** Opens the rename dialog from a "Rename workout" menu action. */
+  onRename?: () => void;
+  /** Opens the location modal from a "Gym / Location" menu action. */
+  onEditLocation?: () => void;
+  /** When provided, adds an "Add exercise" action. */
+  onAddExercise?: () => void;
+  /** When provided, adds a "Reorder exercises" action. */
+  onReorder?: () => void;
+  /** When provided, adds a "Workout settings" action. */
+  onOpenSettings?: () => void;
+  /** When provided (any set logged), adds a "Clear all logged sets" action. */
+  onClearAllSets?: () => void;
+}
+
+/**
+ * Header action button. With Liquid Glass active it floats on its own round
+ * glass surface, matching the native iOS 26 bar buttons every native-header
+ * screen gets; otherwise it stays a flat pressable icon.
+ */
+function HeaderIconButton({
+  icon,
+  color,
+  usesGlass,
+  chromeBorder,
+  onPress,
+  accessibilityLabel,
+}: {
+  icon: IconName;
+  color: string;
+  usesGlass: boolean;
+  chromeBorder: string;
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  const button = (
+    <Pressable
+      onPress={onPress}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      className={
+        usesGlass ? 'h-[38px] w-[38px] items-center justify-center' : 'p-2'
+      }
+    >
+      <Icon name={icon} size={22} color={color} />
+    </Pressable>
+  );
+
+  if (!usesGlass) return button;
+  return (
+    <LiquidGlassSurface
+      style={createLiquidGlassPillStyle(chromeBorder, {
+        marginHorizontal: 0,
+        marginBottom: 0,
+      })}
+      isInteractive
+    >
+      {button}
+    </LiquidGlassSurface>
+  );
+}
+
+/**
+ * The "MM:SS elapsed" line. It ticks on its own once a second, so neither the
+ * rest of the header nor the screen re-renders for the clock.
+ */
+function ElapsedTime({ startedAt }: { startedAt: number | null }) {
+  const { t } = useTranslation();
+  const now = useClockTick();
+  return (
+    <Text
+      className="text-xs text-text-secondary"
+      style={{ fontVariant: ['tabular-nums'] }}
+    >
+      {t('activeWorkout.header.elapsedTime', {
+        defaultValue: '{{time}} elapsed',
+        time: formatElapsed(startedAt, now),
+      })}
+    </Text>
+  );
+}
+
+/**
+ * Custom chrome for the active-workout screen (the route renders with
+ * `headerShown: false`): back, name + elapsed clock, kebab menu, and the
+ * one segmented per-exercise progress bar.
+ */
+function ActiveWorkoutHeader({
+  name,
+  location,
+  startedAt,
+  progress,
+  onBack,
+  onDiscard,
+  onEndWorkout,
+  onRename,
+  onEditLocation,
+  onAddExercise,
+  onReorder,
+  onOpenSettings,
+  onClearAllSets,
+}: ActiveWorkoutHeaderProps) {
+  const { t } = useTranslation();
+  const [
+    textPrimary,
+    textMuted,
+    accentPrimary,
+    successColor,
+    trackColor,
+    chromeBorder,
+  ] = useCSSVariable([
+    '--color-text-primary',
+    '--color-text-muted',
+    '--color-accent-primary',
+    '--color-icon-success',
+    '--color-progress-track',
+    '--color-chrome-border',
+  ]) as [string, string, string, string, string, string];
+  const usesGlass = useNativeIOSTabsActive();
+
+  const menuSheetRef = useRef<ActionSheetRef>(null);
+  const openMenu = () => menuSheetRef.current?.present();
+
+  const doneCount = progress.filter(
+    (p) => p.totalSets > 0 && p.completedSets >= p.totalSets
+  ).length;
+
+  const menuItems: ActionSheetItem[] = [];
+  if (onAddExercise) {
+    menuItems.push({
+      key: 'add-exercise',
+      label: t('activeWorkout.header.addExercise', {
+        defaultValue: 'Add exercise',
+      }),
+      group: 'edit',
+      onPress: onAddExercise,
+    });
+  }
+  if (onReorder) {
+    menuItems.push({
+      key: 'reorder',
+      label: t('activeWorkout.header.reorderExercises', {
+        defaultValue: 'Reorder exercises',
+      }),
+      group: 'edit',
+      onPress: onReorder,
+    });
+  }
+  if (onRename) {
+    menuItems.push({
+      key: 'rename',
+      label: t('activeWorkout.header.renameWorkout', {
+        defaultValue: 'Rename workout',
+      }),
+      group: 'workout',
+      onPress: onRename,
+    });
+  }
+  if (onEditLocation) {
+    menuItems.push({
+      key: 'location',
+      label: location
+        ? t('activeWorkout.header.gymLocationSet', {
+            defaultValue: 'Gym: {{location}}',
+            location,
+          })
+        : t('activeWorkout.header.gymLocation', {
+            defaultValue: 'Gym / Location',
+          }),
+      group: 'workout',
+      onPress: onEditLocation,
+    });
+  }
+  if (onOpenSettings) {
+    menuItems.push({
+      key: 'workout-settings',
+      label: t('activeWorkout.header.settings', {
+        defaultValue: 'Workout settings',
+      }),
+      group: 'workout',
+      onPress: onOpenSettings,
+    });
+  }
+  if (onEndWorkout) {
+    menuItems.push({
+      key: 'end-workout',
+      label: t('activeWorkout.header.endWorkout', {
+        defaultValue: 'End workout',
+      }),
+      group: 'finish',
+      onPress: onEndWorkout,
+    });
+  }
+  if (onClearAllSets) {
+    menuItems.push({
+      key: 'clear-sets',
+      label: t('activeWorkout.header.clearAllSets', {
+        defaultValue: 'Clear all logged sets',
+      }),
+      group: 'danger',
+      destructive: true,
+      onPress: onClearAllSets,
+    });
+  }
+  menuItems.push({
+    key: 'discard',
+    label: t('activeWorkout.header.discardWorkout', {
+      defaultValue: 'Discard workout',
+    }),
+    group: 'danger',
+    destructive: true,
+    onPress: onDiscard,
+  });
+
+  return (
+    <View className="px-3 pb-2 border-b border-border-subtle bg-background">
+      <View className="flex-row items-center">
+        <HeaderIconButton
+          icon="chevron-back"
+          color={textPrimary}
+          usesGlass={usesGlass}
+          chromeBorder={chromeBorder}
+          onPress={onBack}
+          accessibilityLabel={t('activeWorkout.header.back', {
+            defaultValue: 'Back',
+          })}
+        />
+
+        <View className="flex-1 items-center">
+          <Text
+            numberOfLines={1}
+            className="text-base font-semibold text-text-primary"
+          >
+            {name}
+          </Text>
+          <View className="flex-row items-center gap-2">
+            <ElapsedTime startedAt={startedAt} />
+            {location ? (
+              <Pressable
+                onPress={onEditLocation}
+                hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
+                className="flex-row items-center gap-0.5"
+              >
+                <Icon name="location" size={12} color={accentPrimary} />
+                <Text
+                  numberOfLines={1}
+                  className="text-xs font-medium"
+                  style={{ color: accentPrimary, maxWidth: 120 }}
+                >
+                  {location}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+
+        {/* Glass chrome is monochrome (see resolveHeaderActionColors), so the
+            kebab takes the primary tint on that path. */}
+        <HeaderIconButton
+          icon="ellipsis-horizontal"
+          color={usesGlass ? textPrimary : textMuted}
+          usesGlass={usesGlass}
+          chromeBorder={chromeBorder}
+          onPress={openMenu}
+          accessibilityLabel={t('activeWorkout.header.menu', {
+            defaultValue: 'Workout menu',
+          })}
+        />
+      </View>
+
+      <View className="flex-row items-center gap-3 px-2 mt-1">
+        <View className="flex-1 flex-row gap-1">
+          {progress.map((p) => {
+            const isDone = p.totalSets > 0 && p.completedSets >= p.totalSets;
+            const fillPct =
+              p.totalSets > 0 ? Math.min(1, p.completedSets / p.totalSets) : 0;
+            return (
+              <View
+                key={p.entryId}
+                testID={isDone ? 'header-segment-done' : 'header-segment'}
+                className="flex-1 h-[5px] rounded-full overflow-hidden"
+                style={{
+                  backgroundColor: isDone ? successColor : trackColor,
+                }}
+              >
+                {!isDone && fillPct > 0 && (
+                  <View
+                    testID="header-segment-fill"
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${fillPct * 100}%`,
+                      backgroundColor: accentPrimary,
+                    }}
+                  />
+                )}
+              </View>
+            );
+          })}
+        </View>
+        <Text
+          className="text-xs text-text-secondary"
+          style={{ fontVariant: ['tabular-nums'] }}
+        >
+          {t('activeWorkout.header.exerciseProgress', {
+            defaultValue: '{{completed}} / {{count}} exercises',
+            completed: doneCount,
+            count: progress.length,
+          })}
+        </Text>
+      </View>
+
+      <ActionSheet ref={menuSheetRef} title={name} items={menuItems} />
+    </View>
+  );
+}
+
+export default React.memo(ActiveWorkoutHeader);

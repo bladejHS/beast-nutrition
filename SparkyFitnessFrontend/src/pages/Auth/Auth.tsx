@@ -1,0 +1,909 @@
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { toast } from '@/hooks/use-toast';
+import { Zap, Loader2, Fingerprint, AlertCircle, Sparkles } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import { debug, info, error } from '@/utils/logging';
+import {
+  authClient,
+  followOAuthRedirect,
+  followOAuthRedirectOrThrow,
+} from '@/lib/auth-client';
+
+import { useAuth } from '@/hooks/useAuth';
+import useToggle from '@/hooks/use-toggle';
+import PasswordToggle from '../../components/PasswordToggle';
+import MfaChallenge, { MfaChallengeProps } from './MfaChallenge';
+import {
+  mfaFactorsOptions,
+  useAuthSettings,
+  useInitiateOidcLoginMutation,
+  useLoginUserMutation,
+  useDemoLoginMutation,
+  useRegisterUserMutation,
+  useRequestMagicLinkMutation,
+} from '@/hooks/Auth/useAuth';
+import { MagicLinkRequestDialog } from './MagicLinkRequestDialog';
+import { DemoDisclaimerDialog } from './DemoDisclaimerDialog';
+import { useQueryClient } from '@tanstack/react-query';
+import { AuthResponse } from '@/types/auth';
+import { getErrorMessage } from '@/utils/api';
+import { useTranslation } from 'react-i18next';
+
+const Auth = () => {
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  const { loggingLevel } = usePreferences();
+  const { signIn, user: authUser, loading: authLoading } = useAuth();
+  const isOAuthFlow = new URLSearchParams(window.location.search).has('sig');
+  debug(loggingLevel, 'Auth: Component rendered.');
+
+  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const { isToggled: showPassword, toggleHandler: passwordToggleHandler } =
+    useToggle();
+  // State for MFA challenge
+  const [showMfaChallenge, setShowMfaChallenge] = useState(false);
+  const [mfaChallengeProps, setMfaChallengeProps] =
+    useState<MfaChallengeProps>(); // Store MFA data
+  // State for Magic Link Request Dialog
+  const [isMagicLinkRequestDialogOpen, setIsMagicLinkRequestDialogOpen] =
+    useState(false);
+  const [isDemoDisclaimerOpen, setIsDemoDisclaimerOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const oauthContinuationStartedRef = useRef(false);
+
+  const queryClient = useQueryClient();
+  const { data: loginSettings } = useAuthSettings();
+  const passkeyEnabled = loginSettings?.passkey?.enabled !== false;
+  const { mutateAsync: loginUser } = useLoginUserMutation();
+  const { mutateAsync: demoLogin, isPending: isDemoLoginPending } =
+    useDemoLoginMutation();
+  const { mutateAsync: registerUser } = useRegisterUserMutation();
+  const { mutateAsync: requestMagicLink } = useRequestMagicLinkMutation();
+  const { mutateAsync: initiateOidcLogin } = useInitiateOidcLoginMutation();
+
+  useEffect(() => {
+    const fetchAuthSettings = async () => {
+      // PREVENT AUTO-REDIRECT: If we already have a user or are still loading auth status
+      if (authUser || authLoading) {
+        if (authUser && isOAuthFlow && !oauthContinuationStartedRef.current) {
+          oauthContinuationStartedRef.current = true;
+          try {
+            const { data, error: continuationError } =
+              await authClient.oauth2.continue({ postLogin: true });
+            if (continuationError) throw continuationError;
+            followOAuthRedirectOrThrow(
+              data,
+              t('auth.oauth.missingRedirectUrl')
+            );
+          } catch (reason) {
+            setFormError(getErrorMessage(reason));
+            oauthContinuationStartedRef.current = false;
+          }
+        } else if (authUser && !isOAuthFlow) {
+          navigate('/');
+        }
+        return;
+      }
+
+      try {
+        if (
+          loginSettings &&
+          loginSettings.oidc.providers.length === 1 &&
+          loginSettings.oidc.enabled
+        ) {
+          const provider = loginSettings.oidc.providers[0];
+          if (!provider) {
+            throw new Error('Provider undefined');
+          }
+
+          // AUTO-REDIRECT LOGIC: Only when email is disabled, auto_redirect is enabled, demo_mode is false, and exactly 1 OIDC provider is active
+          if (
+            loginSettings.oidc.auto_redirect &&
+            !loginSettings.demo_mode &&
+            !loginSettings.email.enabled &&
+            !authUser &&
+            !authLoading
+          ) {
+            console.log(
+              'Auth Page: Auto-redirecting to OIDC provider:',
+              provider.id
+            );
+            // Safety timeout to catch any late-arriving sessions
+            const timer = setTimeout(() => {
+              if (!authUser && provider.id) {
+                initiateOidcLogin({
+                  providerId: provider.id,
+                  requestSignUp: provider.auto_register,
+                });
+              }
+            }, 800);
+            return () => clearTimeout(timer);
+          }
+        }
+      } catch (err) {
+        error(
+          loggingLevel,
+          'Auth: Failed to fetch login settings or OIDC providers:',
+          err
+        );
+      }
+    };
+    fetchAuthSettings();
+  }, [
+    loggingLevel,
+    authUser,
+    authLoading,
+    navigate,
+    loginSettings,
+    initiateOidcLogin,
+    isOAuthFlow,
+    t,
+  ]);
+
+  // Passkey Conditional UI (Autofill)
+  //
+  // `loggingLevel` is deliberately NOT a dependency. It arrives from
+  // PreferencesContext after mount, and including it re-ran this effect and
+  // started a *second* concurrent conditional `navigator.credentials.get()`,
+  // which aborts the first -- the AbortError swallowed below. Read it through a
+  // ref so a preferences load cannot disturb an in-flight request.
+  const loggingLevelRef = useRef(loggingLevel);
+  loggingLevelRef.current = loggingLevel;
+  const passkeyAutofillStartedRef = useRef(false);
+
+  useEffect(() => {
+    // Only attempt if not already logged in, and only ever once per mount.
+    // Wait for the login settings so autofill never starts when passkeys are off.
+    if (
+      authUser ||
+      authLoading ||
+      !loginSettings ||
+      !passkeyEnabled ||
+      passkeyAutofillStartedRef.current
+    ) {
+      return;
+    }
+
+    const initPasskeyAutofill = async () => {
+      if (
+        !window.PublicKeyCredential ||
+        !PublicKeyCredential.isConditionalMediationAvailable
+      ) {
+        return;
+      }
+      const isAvailable =
+        await PublicKeyCredential.isConditionalMediationAvailable();
+      if (!isAvailable) {
+        return;
+      }
+
+      // Conditional mediation throws if no input advertising `webauthn` as the
+      // last autocomplete token is in the DOM when it is called. The sign-in
+      // form carries one, but it is not mounted on every branch of this page
+      // (the MFA challenge replaces it), so check rather than throw.
+      if (!document.querySelector('input[autocomplete$="webauthn"]')) {
+        debug(
+          loggingLevelRef.current,
+          'Auth: No webauthn autocomplete input mounted; skipping passkey autofill.'
+        );
+        return;
+      }
+
+      debug(
+        loggingLevelRef.current,
+        'Auth: Passkey Conditional UI available. Starting autofill prompt.'
+      );
+      passkeyAutofillStartedRef.current = true;
+      try {
+        await authClient.signIn.passkey({
+          autoFill: true,
+          fetchOptions: {
+            onSuccess(ctx) {
+              if (followOAuthRedirect(ctx.data)) return;
+              info(
+                loggingLevelRef.current,
+                'Auth: Passkey autofill successful.'
+              );
+              navigate('/');
+            },
+            onError(ctx: { error: { message?: string; name?: string } }) {
+              // Silently ignore "Authentication was not completed" or AbortError
+              if (
+                ctx.error.message?.includes(
+                  'Authentication was not completed'
+                ) ||
+                ctx.error.name === 'AbortError'
+              ) {
+                debug(
+                  loggingLevelRef.current,
+                  'Auth: Passkey autofill dismissed or interrupted.'
+                );
+                return;
+              }
+              error(
+                loggingLevelRef.current,
+                'Auth: Passkey autofill error:',
+                ctx.error
+              );
+            },
+          },
+        });
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === 'AbortError') {
+          debug(loggingLevelRef.current, 'Auth: Passkey autofill aborted.');
+        } else {
+          debug(
+            loggingLevelRef.current,
+            'Auth: Passkey autofill silently ignored or failed.'
+          );
+        }
+      }
+    };
+
+    initPasskeyAutofill();
+  }, [authUser, authLoading, loginSettings, passkeyEnabled, navigate]);
+
+  const triggerMfaChallenge = useCallback(
+    async (
+      authResponse: AuthResponse,
+      currentUserEmail: string,
+      handlers: { onMfaSuccess: () => void; onMfaCancel: () => void }
+    ) => {
+      // CRITICAL: If twoFactorRedirect is true, we MUST show the challenge
+      // Even if factor flags are missing, we default to showing the challenge
+      const shouldShowChallenge =
+        authResponse.mfa_totp_enabled ||
+        authResponse.mfa_email_enabled ||
+        authResponse.needs_mfa_setup ||
+        authResponse.twoFactorRedirect;
+
+      if (shouldShowChallenge) {
+        info(loggingLevel, 'Auth: MFA required. Displaying MFA challenge.');
+
+        // Proactively fetch MFA factors if missing
+        let mfaEmail = authResponse.mfa_email_enabled;
+        let mfaTotp = authResponse.mfa_totp_enabled;
+        const userEmail = authResponse.email || currentUserEmail;
+
+        if ((mfaEmail === undefined || mfaTotp === undefined) && userEmail) {
+          try {
+            const factors = await queryClient.fetchQuery(
+              mfaFactorsOptions(userEmail)
+            );
+            mfaEmail = factors.mfa_email_enabled;
+            mfaTotp = factors.mfa_totp_enabled;
+          } catch (e) {
+            error(loggingLevel, 'Auth: Failed to fetch MFA factors:', e);
+            // Default to TOTP if we can't fetch factors but MFA is required
+            mfaTotp = true;
+          }
+        }
+
+        setMfaChallengeProps({
+          userId: authResponse.userId,
+          email: userEmail,
+          mfaTotpEnabled: mfaTotp ?? true,
+          mfaEmailEnabled: mfaEmail ?? false,
+          needsMfaSetup: authResponse.needs_mfa_setup,
+          mfaToken: authResponse.mfaToken,
+          ...handlers,
+        });
+        setShowMfaChallenge(true);
+        return true;
+      }
+
+      info(loggingLevel, 'Auth: MFA not required. Bypassing.');
+      return false;
+    },
+    [loggingLevel, queryClient]
+  );
+
+  const validatePassword = (pwd: string) => {
+    if (pwd.length < 8) {
+      return t('settings.accountSecurity.passwordLengthError');
+    }
+    if (!/[A-Z]/.test(pwd)) {
+      return 'Password must contain at least one uppercase letter.';
+    }
+    if (!/[a-z]/.test(pwd)) {
+      return 'Password must contain at least one lowercase letter.';
+    }
+    if (!/[0-9]/.test(pwd)) {
+      return 'Password must contain at least one number.';
+    }
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(pwd)) {
+      return 'Password must contain at least one special character.';
+    }
+    return null; // No error
+  };
+
+  const handleSignUp = async (e: React.SubmitEvent) => {
+    e.preventDefault();
+    info(loggingLevel, 'Auth: Attempting sign up.');
+
+    const validationError = validatePassword(password);
+    if (validationError) {
+      setPasswordError(validationError);
+      setLoading(false);
+      return;
+    } else {
+      setPasswordError(null);
+    }
+
+    setLoading(true);
+
+    const data: AuthResponse = await registerUser({
+      email,
+      password,
+      fullName,
+    });
+    info(loggingLevel, 'Auth: Sign up successful.');
+    signIn(
+      data.userId,
+      data.userId,
+      email,
+      data.role || 'user',
+      true,
+      fullName
+    );
+
+    setLoading(false);
+    debug(loggingLevel, 'Auth: Sign up loading state set to false.');
+  };
+
+  const handleRequestMagicLink = async (dialogEmail: string) => {
+    info(loggingLevel, 'Auth: Attempting to request magic link.');
+    setLoading(true);
+    await requestMagicLink(dialogEmail);
+    setLoading(false);
+  };
+
+  const handleSignIn = async (e: React.SubmitEvent) => {
+    e.preventDefault();
+    info(loggingLevel, 'Auth: Attempting sign in.');
+    setLoading(true);
+
+    try {
+      setFormError(null);
+      const data: AuthResponse = await loginUser({ email, password });
+
+      if (data.status === 'MFA_REQUIRED' || data.twoFactorRedirect) {
+        const mfaShown = await triggerMfaChallenge(data, email, {
+          onMfaSuccess: () => {
+            setLoading(true);
+            // We don't hide the challenge explicitly to avoid flashing the login form
+            navigate('/');
+          },
+          onMfaCancel: () => {
+            setShowMfaChallenge(false);
+            setLoading(false);
+          },
+        });
+
+        if (mfaShown) {
+          setLoading(false); // CRITICAL: Allow MFA challenge to be visible
+          return;
+        }
+      }
+
+      info(loggingLevel, 'Auth: Sign in successful.');
+      signIn(
+        data.userId,
+        data.userId,
+        email,
+        data.role || 'user',
+        true,
+        data.fullName
+      );
+    } catch (err: unknown) {
+      error(loggingLevel, 'Auth: Sign in failed:', err);
+      setFormError(getErrorMessage(err));
+    }
+
+    setLoading(false);
+    debug(loggingLevel, 'Auth: Sign in loading state set to false.');
+  };
+
+  const handlePasskeySignIn = async () => {
+    info(loggingLevel, 'Auth: Attempting Passkey sign-in.');
+    if (typeof window !== 'undefined' && !window.isSecureContext) {
+      toast({
+        title: t('auth.passkeyErrorTitle', 'Passkey Error'),
+        description: t(
+          'auth.passkeySecureContextError',
+          'Passkey authentication requires a Secure Context (HTTPS or localhost). Please sign in using email/password.'
+        ),
+        variant: 'destructive',
+      });
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data, error } = await authClient.signIn.passkey();
+      if (error) throw error;
+      if (followOAuthRedirect(data)) return;
+
+      info(loggingLevel, 'Auth: Passkey sign-in successful.');
+      toast({
+        title: t('auth.successTitle', 'Success'),
+        description: t('auth.passkeySuccess', 'Logged in with Passkey!'),
+      });
+      navigate('/');
+    } catch (err: unknown) {
+      const message = getErrorMessage(err);
+      error(loggingLevel, 'Auth: Passkey sign-in failed:', err);
+      toast({
+        title: t('auth.passkeyErrorTitle', 'Passkey Error'),
+        description:
+          message && message !== 'An unexpected error occurred.'
+            ? message
+            : t(
+                'auth.passkeyGenericError',
+                'Failed to sign in with Passkey. Ensure your device supports it.'
+              ),
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 py-12 px-4 sm:px-6 lg:px-8">
+        {loading ? (
+          <div className="flex flex-col items-center justify-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 animate-in fade-in zoom-in duration-300">
+            <Loader2 className="h-12 w-12 animate-spin text-primary mb-6" />
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">
+              {t('auth.almostThere', 'Almost there!')}
+            </h2>
+            <p className="text-muted-foreground animate-pulse text-sm">
+              {t(
+                'auth.securingYourFamilyDashboard',
+                'Securing your family dashboard...'
+              )}
+            </p>
+          </div>
+        ) : showMfaChallenge && mfaChallengeProps ? (
+          <MfaChallenge {...mfaChallengeProps} />
+        ) : (
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <div className="flex items-center justify-center mb-4">
+                <img
+                  src="/images/beast-logo.png"
+                  alt={t('auth.sparkyFitnessLogo', 'BEAST NUTRITION Logo')}
+                  className="h-10 w-10 mr-2"
+                />
+                <CardTitle className="text-2xl font-bold text-gray-900 dark:text-gray-300">
+                  BEAST NUTRITION
+                </CardTitle>
+              </div>
+              <CardDescription>
+                {t(
+                  'auth.builtForFamiliesPoweredBy',
+                  'Built for Families. Powered by AI. Track food, fitness, water, and health — together.'
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loginSettings?.warning && (
+                <div className="mb-4 p-3 rounded-md bg-yellow-50 border border-yellow-200 text-sm text-yellow-800">
+                  <p className="font-semibold">
+                    {t('auth.warning', 'Warning')}
+                  </p>
+                  <p>{loginSettings.warning}</p>
+                </div>
+              )}
+              {formError && (
+                <Alert variant="destructive" className="mb-4">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>
+                    {t('auth.authenticationFailed', 'Authentication Failed')}
+                  </AlertTitle>
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              )}
+              {(loginSettings?.email?.enabled ?? true) ? (
+                <Tabs defaultValue="signin" className="w-full">
+                  {!loginSettings?.signup_disabled && (
+                    <TabsList className="h-10 grid w-full grid-cols-2">
+                      <TabsTrigger
+                        value="signin"
+                        onClick={() => {
+                          setFormError(null);
+                          debug(loggingLevel, 'Auth: Switched to Sign In tab.');
+                        }}
+                      >
+                        {t('auth.signIn', 'Sign In')}
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="signup"
+                        onClick={() => {
+                          setFormError(null);
+                          debug(loggingLevel, 'Auth: Switched to Sign Up tab.');
+                        }}
+                      >
+                        {t('auth.signUp', 'Sign Up')}
+                      </TabsTrigger>
+                    </TabsList>
+                  )}
+                  {loginSettings?.signup_disabled && (
+                    <p className="text-center text-xs text-muted-foreground">
+                      {t(
+                        'auth.registrationIsCurrentlyDisabled',
+                        'Registration is currently disabled.'
+                      )}
+                    </p>
+                  )}
+                  <TabsContent value="signin">
+                    <form onSubmit={handleSignIn} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="signin-email">
+                          {t('auth.email', 'Email')}
+                        </Label>
+                        <Input
+                          id="signin-email"
+                          type="email"
+                          placeholder={t(
+                            'auth.enterYourEmail',
+                            'Enter your email'
+                          )}
+                          value={email}
+                          onChange={(e) => {
+                            debug(
+                              loggingLevel,
+                              'Auth: Sign In email input changed.'
+                            );
+                            setEmail(e.target.value);
+                          }}
+                          required
+                          autoComplete="username webauthn"
+                        />
+                      </div>
+                      <div className="space-y-2 relative">
+                        <Label htmlFor="signin-password">
+                          {t('auth.password', 'Password')}
+                        </Label>
+                        <Input
+                          id="signin-password"
+                          type={showPassword ? 'text' : 'password'}
+                          placeholder={t(
+                            'auth.enterYourPassword',
+                            'Enter your password'
+                          )}
+                          value={password}
+                          onChange={(e) => {
+                            debug(
+                              loggingLevel,
+                              'Auth: Sign In password input changed.'
+                            );
+                            setPassword(e.target.value);
+                          }}
+                          required
+                          autoComplete="current-password webauthn"
+                        />
+                        <PasswordToggle
+                          showPassword={showPassword}
+                          passwordToggleHandler={passwordToggleHandler}
+                        />
+                      </div>
+                      <div className="text-right text-sm">
+                        <a
+                          href="/forgot-password"
+                          className="font-medium text-primary hover:underline"
+                        >
+                          {t('auth.forgotPassword', 'Forgot password?')}
+                        </a>
+                      </div>
+                      <Button
+                        type="submit"
+                        className="w-full"
+                        disabled={loading}
+                      >
+                        {loading
+                          ? t('auth.signingIn', 'Signing in...')
+                          : t('auth.signIn', 'Sign In')}
+                      </Button>
+                    </form>
+                    <div className="relative my-6">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-background px-2 text-muted-foreground">
+                          {t('auth.orSignInWith', 'Or sign in with')}
+                        </span>
+                      </div>
+                    </div>
+                    {passkeyEnabled && (
+                      <Button
+                        variant="outline"
+                        className="w-full bg-primary/5 hover:bg-primary/10 border-primary/20 flex items-center justify-center mb-2"
+                        onClick={handlePasskeySignIn}
+                        disabled={loading}
+                      >
+                        <Fingerprint className="h-4 w-4 mr-2 text-primary" />{' '}
+                        {t('auth.signInWithPasskey', 'Sign in with Passkey')}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center mb-2"
+                      onClick={() => setIsMagicLinkRequestDialogOpen(true)}
+                    >
+                      <Zap className="h-4 w-4 mr-2" />{' '}
+                      {t('auth.requestMagicLink', 'Request Magic Link')}
+                    </Button>
+                    {loginSettings?.oidc.enabled && (
+                      <>
+                        {loginSettings.oidc.providers?.map((provider) => (
+                          <Button
+                            key={provider.id}
+                            variant="outline"
+                            className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center"
+                            onClick={() => {
+                              if (provider.id) {
+                                initiateOidcLogin({
+                                  providerId: provider.id,
+                                  requestSignUp: provider.auto_register,
+                                });
+                              }
+                            }}
+                          >
+                            {provider.logo_url && (
+                              <img
+                                src={provider.logo_url}
+                                alt={t('auth.logo', '{{display_name}} logo', {
+                                  display_name: provider.display_name,
+                                })}
+                                className="h-5 w-5 mr-2"
+                              />
+                            )}
+                            {provider.display_name ||
+                              t('auth.signInWithOIDC', 'Sign In with OIDC')}
+                          </Button>
+                        ))}
+                      </>
+                    )}
+                  </TabsContent>
+
+                  {!loginSettings?.signup_disabled && (
+                    <TabsContent value="signup">
+                      <form onSubmit={handleSignUp} className="space-y-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="signup-name">
+                            {t('auth.fullName', 'Full Name')}
+                          </Label>
+                          <Input
+                            id="signup-name"
+                            type="text"
+                            placeholder={t(
+                              'auth.enterYourFullName',
+                              'Enter your full name'
+                            )}
+                            value={fullName}
+                            onChange={(e) => {
+                              debug(
+                                loggingLevel,
+                                'Auth: Sign Up full name input changed.'
+                              );
+                              setFullName(e.target.value);
+                            }}
+                            autoComplete="name"
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="signup-email">
+                            {t('auth.email', 'Email')}
+                          </Label>
+                          <Input
+                            id="signup-email"
+                            type="email"
+                            placeholder={t(
+                              'auth.enterYourEmail',
+                              'Enter your email'
+                            )}
+                            value={email}
+                            onChange={(e) => {
+                              debug(
+                                loggingLevel,
+                                'Auth: Sign Up email input changed.'
+                              );
+                              setEmail(e.target.value);
+                            }}
+                            required
+                            autoComplete="username"
+                          />
+                        </div>
+                        <div className="space-y-2 relative">
+                          <Label htmlFor="signup-password">
+                            {t('auth.password', 'Password')}
+                          </Label>
+                          <Input
+                            id="signup-password"
+                            type={showPassword ? 'text' : 'password'}
+                            placeholder={t(
+                              'auth.createAPassword',
+                              'Create a password'
+                            )}
+                            value={password}
+                            onChange={(e) => {
+                              debug(
+                                loggingLevel,
+                                'Auth: Sign Up password input changed.'
+                              );
+                              setPassword(e.target.value);
+                              setPasswordError(
+                                validatePassword(e.target.value)
+                              );
+                            }}
+                            required
+                            minLength={8}
+                            autoComplete="new-password"
+                          />
+                          <PasswordToggle
+                            showPassword={showPassword}
+                            passwordToggleHandler={passwordToggleHandler}
+                          />
+                          {passwordError && (
+                            <p className="text-red-500 text-sm">
+                              {passwordError}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          type="submit"
+                          className="w-full"
+                          disabled={loading || !!passwordError}
+                        >
+                          {loading
+                            ? t('auth.creatingAccount', 'Creating account...')
+                            : t('auth.signUp', 'Sign Up')}
+                        </Button>
+                      </form>
+                    </TabsContent>
+                  )}
+                </Tabs>
+              ) : (
+                <div className="space-y-4">
+                  {passkeyEnabled && (
+                    <Button
+                      variant="outline"
+                      className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center"
+                      onClick={handlePasskeySignIn}
+                      disabled={loading}
+                    >
+                      <Fingerprint className="h-4 w-4 mr-2 text-primary" />{' '}
+                      {t('auth.signInWithPasskey', 'Sign in with Passkey')}
+                    </Button>
+                  )}
+
+                  {loginSettings?.oidc?.enabled &&
+                    loginSettings.oidc.providers?.length > 0 && (
+                      <>
+                        {passkeyEnabled && (
+                          <div className="flex items-center my-4">
+                            <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
+                            <span className="flex-shrink mx-4 text-gray-400 text-xs uppercase">
+                              {t('auth.orSignInWith', 'Or sign in with')}
+                            </span>
+                            <div className="flex-grow border-t border-gray-300 dark:border-gray-700"></div>
+                          </div>
+                        )}
+                        <div className="space-y-2">
+                          {loginSettings.oidc.providers.map((provider) => (
+                            <Button
+                              key={provider.id}
+                              variant="outline"
+                              className="w-full dark:bg-gray-800 dark:hover:bg-gray-600 flex items-center justify-center"
+                              onClick={() => {
+                                if (provider.id) {
+                                  initiateOidcLogin({
+                                    providerId: provider.id,
+                                  });
+                                }
+                              }}
+                            >
+                              {provider.logo_url && (
+                                <img
+                                  src={provider.logo_url}
+                                  alt={t('auth.logo', '{{display_name}} logo', {
+                                    display_name: provider.display_name,
+                                  })}
+                                  className="h-5 w-5 mr-2"
+                                />
+                              )}
+                              {provider.display_name ||
+                                t('auth.signInWithOIDC', 'Sign In with OIDC')}
+                            </Button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                </div>
+              )}
+              {loginSettings?.demo_mode && (
+                <div className="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Button
+                    type="button"
+                    variant="default"
+                    className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-semibold py-2.5 shadow-md flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
+                    onClick={() => setIsDemoDisclaimerOpen(true)}
+                    disabled={loading || isDemoLoginPending}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {t(
+                      'auth.exploreDemo',
+                      '🚀 Explore Live Demo (1-Click Login)'
+                    )}
+                  </Button>
+                  <p className="text-center text-xs text-muted-foreground mt-1">
+                    {t(
+                      'auth.demoSubtext',
+                      'Interactive sandbox • Resets daily at 00:00 UTC'
+                    )}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+      {isMagicLinkRequestDialogOpen && (
+        <MagicLinkRequestDialog
+          onClose={() => setIsMagicLinkRequestDialogOpen(false)}
+          onRequest={handleRequestMagicLink}
+          loading={loading}
+          initialEmail={email}
+        />
+      )}
+      <DemoDisclaimerDialog
+        isOpen={isDemoDisclaimerOpen}
+        onClose={() => setIsDemoDisclaimerOpen(false)}
+        onConfirm={async () => {
+          try {
+            setLoading(true);
+            const res = await demoLogin();
+            if (res.userId) {
+              signIn(
+                res.userId,
+                res.userId,
+                res.email || 'demo@sparkyfitness.com',
+                res.role || 'user',
+                true,
+                res.fullName || 'Demo User'
+              );
+            }
+          } catch (err) {
+            console.error('Demo Login failed:', err);
+          } finally {
+            setLoading(false);
+            setIsDemoDisclaimerOpen(false);
+          }
+        }}
+        loading={loading || isDemoLoginPending}
+      />
+    </>
+  );
+};
+
+export default Auth;

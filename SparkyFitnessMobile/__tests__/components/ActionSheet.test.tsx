@@ -1,0 +1,388 @@
+import React from 'react';
+import { BackHandler, Platform } from 'react-native';
+import { render, fireEvent, act } from '@testing-library/react-native';
+import Icon from '../../src/components/Icon';
+import ActionSheet, {
+  type ActionSheetItem,
+  type ActionSheetRef,
+} from '../../src/components/ActionSheet';
+
+// Controllable gorhom mock (overrides the inert global one): captures the
+// modal's onAnimate/onDismiss props so tests can fire lifecycle events in
+// production order — present/dismiss do NOT synchronously fire onDismiss
+// (in production onDismiss arrives only after the close animation).
+const mockModal: {
+  present: jest.Mock;
+  dismiss: jest.Mock;
+  props: {
+    onAnimate?: (from: number, to: number) => void;
+    onChange?: (index: number) => void;
+    onDismiss?: () => void;
+  } | null;
+} = { present: jest.fn(), dismiss: jest.fn(), props: null };
+
+jest.mock('@gorhom/bottom-sheet', () => {
+  const React: typeof import('react') = require('react');
+  const {
+    View,
+    ScrollView,
+  }: typeof import('react-native') = require('react-native');
+  type MockModalProps = React.PropsWithChildren<
+    NonNullable<typeof mockModal.props>
+  >;
+  return {
+    BottomSheetModal: React.forwardRef<
+      { present: () => void; dismiss: () => void },
+      MockModalProps
+    >((props, ref) => {
+      React.useEffect(() => {
+        mockModal.props = props;
+      });
+      React.useImperativeHandle(ref, () => ({
+        present: mockModal.present,
+        dismiss: mockModal.dismiss,
+      }));
+      return React.createElement(View, null, props.children);
+    }),
+    BottomSheetScrollView: ({ children }: React.PropsWithChildren) =>
+      React.createElement(ScrollView, null, children),
+    BottomSheetBackdrop: () => null,
+  };
+});
+
+function makeItems() {
+  return {
+    onView: jest.fn(),
+    onPick: jest.fn(),
+    onRemove: jest.fn(),
+  };
+}
+
+function renderSheet(overrides?: {
+  items?: ActionSheetItem[];
+  layout?: 'list' | 'grid';
+  onBack?: () => void;
+  onDismiss?: () => void;
+}) {
+  const handlers = makeItems();
+  const items: ActionSheetItem[] = overrides?.items ?? [
+    { key: 'view', label: 'View exercise', onPress: handlers.onView },
+    {
+      key: 'superset-with',
+      label: 'Superset with…',
+      dismissOnPress: false,
+      onPress: handlers.onPick,
+    },
+    {
+      key: 'remove',
+      label: 'Remove exercise',
+      destructive: true,
+      onPress: handlers.onRemove,
+    },
+  ];
+  const onDismiss = overrides?.onDismiss ?? jest.fn();
+  const ref = React.createRef<ActionSheetRef>();
+  const utils = render(
+    <ActionSheet
+      ref={ref}
+      title="Bench Press"
+      items={items}
+      layout={overrides?.layout}
+      onBack={overrides?.onBack}
+      onDismiss={onDismiss}
+    />
+  );
+  return { ...utils, ref, onDismiss, handlers };
+}
+
+/** Simulate the modal finishing its open animation. */
+function fireOpened() {
+  act(() => mockModal.props?.onAnimate?.(-1, 0));
+}
+
+/** Simulate a swipe/backdrop dismissal starting. */
+function fireDismissStart() {
+  act(() => mockModal.props?.onAnimate?.(0, -1));
+}
+
+/** Simulate the close animation completing (gorhom's terminal onDismiss). */
+function fireDismissed() {
+  act(() => mockModal.props?.onDismiss?.());
+}
+
+describe('ActionSheet', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockModal.props = null;
+    // Synchronous rAF so schedulePresent lands immediately.
+    jest
+      .spyOn(global, 'requestAnimationFrame')
+      .mockImplementation((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+    jest.spyOn(global, 'cancelAnimationFrame').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('renders the title and accessible rows', () => {
+    const { getByText, getByLabelText, getByTestId } = renderSheet();
+    expect(getByText('Bench Press')).toBeTruthy();
+    expect(getByTestId('action-sheet-item-view')).toBeTruthy();
+    expect(getByLabelText('View exercise').props.accessibilityRole).toBe(
+      'button'
+    );
+    expect(getByLabelText('Remove exercise')).toBeTruthy();
+  });
+
+  it('renders accessible icon tiles and a close button in grid mode', () => {
+    const onCamera = jest.fn();
+    const screen = renderSheet({
+      layout: 'grid',
+      items: [
+        { key: 'camera', label: 'Camera', icon: 'camera', onPress: onCamera },
+        {
+          key: 'library',
+          label: 'Photos',
+          icon: 'photo-library',
+          onPress: jest.fn(),
+        },
+      ],
+    });
+    expect(screen.getByRole('header', { name: 'Bench Press' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Camera' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Photos' })).toBeTruthy();
+    expect(
+      screen.UNSAFE_getAllByType(Icon).map((icon) => icon.props.name)
+    ).toEqual(expect.arrayContaining(['camera', 'photo-library', 'close']));
+    fireEvent.press(screen.getByRole('button', { name: 'Close' }));
+    expect(mockModal.dismiss).toHaveBeenCalledTimes(1);
+    expect(onCamera).not.toHaveBeenCalled();
+  });
+
+  it('retains row actions and hardware-back dismissal in grid mode', () => {
+    const osSpy = jest.replaceProperty(Platform, 'OS', 'android');
+    let onHardwareBack: (() => boolean | null | undefined) | undefined;
+    jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation((_event, handler) => {
+        onHardwareBack = handler;
+        return { remove: jest.fn() };
+      });
+    const screen = renderSheet({ layout: 'grid' });
+    act(() => screen.ref.current?.present());
+    act(() => mockModal.props?.onChange?.(0));
+    act(() => {
+      expect(onHardwareBack?.()).toBe(true);
+    });
+    expect(mockModal.dismiss).toHaveBeenCalledTimes(1);
+    fireDismissed();
+    expect(screen.onDismiss).toHaveBeenCalledTimes(1);
+    osSpy.restore();
+  });
+
+  it('renders a destructive row', () => {
+    const { getByText } = renderSheet();
+    expect(getByText('Remove exercise')).toBeTruthy();
+  });
+
+  it('renders no group spacers for a flat item list', () => {
+    const { queryAllByTestId } = renderSheet();
+    expect(queryAllByTestId('action-sheet-group-spacer')).toHaveLength(0);
+  });
+
+  it('renders a spacer between consecutive items with different groups', () => {
+    const { queryAllByTestId } = renderSheet({
+      items: [
+        { key: 'a', label: 'A', group: 'one', onPress: jest.fn() },
+        { key: 'b', label: 'B', group: 'one', onPress: jest.fn() },
+        { key: 'c', label: 'C', group: 'two', onPress: jest.fn() },
+        { key: 'd', label: 'D', onPress: jest.fn() },
+        { key: 'e', label: 'E', onPress: jest.fn() },
+      ],
+    });
+    // one|two and two|ungrouped boundaries; d and e chunk together.
+    expect(queryAllByTestId('action-sheet-group-spacer')).toHaveLength(2);
+  });
+
+  it('presents through the ref via rAF', () => {
+    const { ref } = renderSheet();
+    act(() => ref.current?.present());
+    expect(mockModal.present).toHaveBeenCalledTimes(1);
+  });
+
+  it('dismisses then fires the row action; owner onDismiss waits for the close animation', () => {
+    const { ref, getByTestId, onDismiss, handlers } = renderSheet();
+    act(() => ref.current?.present());
+    fireOpened();
+
+    fireEvent.press(getByTestId('action-sheet-item-view'));
+    expect(mockModal.dismiss).toHaveBeenCalledTimes(1);
+    expect(handlers.onView).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireDismissed();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the sheet presented for dismissOnPress: false items', () => {
+    const { ref, getByTestId, handlers } = renderSheet();
+    act(() => ref.current?.present());
+    fireOpened();
+
+    fireEvent.press(getByTestId('action-sheet-item-superset-with'));
+    expect(handlers.onPick).toHaveBeenCalledTimes(1);
+    expect(mockModal.dismiss).not.toHaveBeenCalled();
+  });
+
+  it('renders and fires the back chevron only when onBack is provided', () => {
+    const onBack = jest.fn();
+    const withBack = renderSheet({ onBack });
+    fireEvent.press(withBack.getByLabelText('Back'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+    withBack.unmount();
+
+    const withoutBack = renderSheet();
+    expect(withoutBack.queryByLabelText('Back')).toBeNull();
+  });
+
+  it('queues a present that lands mid-dismissal and swallows the stale onDismiss', () => {
+    const { ref, onDismiss } = renderSheet();
+    act(() => ref.current?.present());
+    fireOpened();
+    expect(mockModal.present).toHaveBeenCalledTimes(1);
+
+    // Swipe-down starts closing; the user immediately opens another menu.
+    fireDismissStart();
+    act(() => ref.current?.present());
+    expect(mockModal.present).toHaveBeenCalledTimes(1);
+
+    // The interrupted close completes: the queued present runs and the
+    // owner's onDismiss is suppressed so it can't clear the newer state.
+    fireDismissed();
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(mockModal.present).toHaveBeenCalledTimes(2);
+
+    // A later, uninterrupted dismissal still propagates.
+    fireOpened();
+    fireDismissStart();
+    fireDismissed();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores present while already open', () => {
+    const { ref } = renderSheet();
+    act(() => ref.current?.present());
+    fireOpened();
+    act(() => ref.current?.present());
+    expect(mockModal.present).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows Android hardware back while open by dismissing the sheet', () => {
+    const osSpy = jest.replaceProperty(Platform, 'OS', 'android');
+    const listeners: (() => boolean)[] = [];
+    const remove = jest.fn();
+    jest.spyOn(BackHandler, 'addEventListener').mockImplementation(((
+      _event: string,
+      handler: () => boolean
+    ) => {
+      listeners.push(handler);
+      return { remove };
+    }) as typeof BackHandler.addEventListener);
+
+    const { ref } = renderSheet();
+    act(() => ref.current?.present());
+    expect(listeners).toHaveLength(0);
+    fireOpened();
+    expect(listeners).toHaveLength(1);
+
+    expect(listeners[0]()).toBe(true);
+    expect(mockModal.dismiss).toHaveBeenCalledTimes(1);
+
+    // Open state clears on the terminal onDismiss, releasing the listener.
+    fireDismissed();
+    expect(remove).toHaveBeenCalled();
+    osSpy.restore();
+  });
+
+  it('takes Android hardware back when the open reports only onChange', () => {
+    // With Android's "Remove animations" the open finishes before onAnimate
+    // reaches JS and the library drops it; onChange still arrives.
+    const osSpy = jest.replaceProperty(Platform, 'OS', 'android');
+    const listeners: (() => boolean)[] = [];
+    const addEventListenerSpy = jest
+      .spyOn(BackHandler, 'addEventListener')
+      .mockImplementation(((_event: string, handler: () => boolean) => {
+        listeners.push(handler);
+        return { remove: jest.fn() };
+      }) as typeof BackHandler.addEventListener);
+
+    const { ref } = renderSheet();
+    act(() => ref.current?.present());
+    act(() => mockModal.props?.onChange?.(0));
+    expect(listeners).toHaveLength(1);
+
+    expect(listeners[0]()).toBe(true);
+    expect(mockModal.dismiss).toHaveBeenCalledTimes(1);
+
+    addEventListenerSpy.mockRestore();
+    osSpy.restore();
+  });
+});
+
+// A description lets two actions differ by more than a short label can carry —
+// the sync choice needs "keeps the map it has" vs "re-reads the map", which no
+// button title states on its own.
+describe('ActionSheet item descriptions', () => {
+  const renderWithDescriptions = () => {
+    const onQuick = jest.fn();
+    const ref = React.createRef<ActionSheetRef>();
+    const utils = render(
+      <ActionSheet
+        ref={ref}
+        title="Sync 19 Aug – 18 Sep"
+        items={[
+          {
+            key: 'quick',
+            label: 'Quick Sync',
+            description: 'Workouts already synced keep the map they have.',
+            onPress: onQuick,
+          },
+          { key: 'all', label: 'All Sync', onPress: jest.fn() },
+        ]}
+      />
+    );
+    return { ...utils, onQuick };
+  };
+
+  it('renders the description under the label', () => {
+    const { getByText } = renderWithDescriptions();
+    expect(getByText('Quick Sync')).toBeTruthy();
+    expect(
+      getByText('Workouts already synced keep the map they have.')
+    ).toBeTruthy();
+  });
+
+  it('announces label and description together to screen readers', () => {
+    const { getByTestId } = renderWithDescriptions();
+    expect(
+      getByTestId('action-sheet-item-quick').props.accessibilityLabel
+    ).toBe('Quick Sync. Workouts already synced keep the map they have.');
+  });
+
+  it('leaves an item without a description unchanged', () => {
+    const { getByTestId } = renderWithDescriptions();
+    expect(getByTestId('action-sheet-item-all').props.accessibilityLabel).toBe(
+      'All Sync'
+    );
+  });
+
+  it('still fires onPress when a description is present', () => {
+    const { getByTestId, onQuick } = renderWithDescriptions();
+    fireEvent.press(getByTestId('action-sheet-item-quick'));
+    expect(onQuick).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,0 +1,328 @@
+import { useAuth } from '@/hooks/useAuth';
+import { useActiveUser } from '@/contexts/ActiveUserContext';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import SleepEntrySection from './SleepEntrySection';
+import DayNavigator from '@/components/DayNavigator';
+import { CheckInForm } from './CheckInForm';
+import { RecentActivity } from './RecentActivity';
+import { CheckInTopRow } from './CheckInTopRow';
+import { useCheckInLogic } from '@/hooks/CheckIn/useCheckInLogic';
+import { useSearchParams } from 'react-router-dom';
+import { CheckInPhotos } from './CheckInPhotos';
+import SymptomsPanel from '../Symptoms/SymptomsPanel';
+import { useCheckInPhotoDates } from '@/hooks/CheckIn/useCheckInPhotos';
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { EditFastDialog } from '../Fasting/EditFastDialog';
+import { useUpdateFastMutation } from '@/hooks/Fasting/useFasting';
+import { FastingLog } from '@/types/fasting';
+import { CombinedMeasurement } from '@/types/checkin';
+import { Tabs, TabsContent } from '@/components/ui/tabs';
+import {
+  Timer,
+  Activity,
+  Moon,
+  Camera,
+  HeartPulse,
+  Sparkles,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { MindfulnessSection } from './MindfulnessSection';
+
+const CheckIn = () => {
+  const { user } = useAuth();
+  const { activeUserId } = useActiveUser();
+  const { convertWeight, convertMeasurement } = usePreferences();
+
+  const currentUserId = activeUserId || user?.id;
+
+  const {
+    bodyFatPercentage,
+    boneMassKg,
+    bodyWaterPercentage,
+    muscleMassKg,
+    bmr,
+    customCategories,
+    customNotes,
+    customValues,
+    customPlaceholders,
+    handleCalculateBodyFat,
+    handleDeleteMeasurementClick,
+    handleSubmit,
+    height,
+    hips,
+    loading,
+    neck,
+    placeholders,
+    recentMeasurements,
+    selectedDate,
+    setBodyFatPercentage,
+    setBoneMassKg,
+    setBodyWaterPercentage,
+    setMuscleMassKg,
+    setBmr,
+    setCustomNotes,
+    setCustomValues,
+    setHeight,
+    setHips,
+    setNeck,
+    setSelectedDate,
+    setSteps,
+    setUseMostRecentForCalculation,
+    setWaist,
+    setWeight,
+    shouldConvertCustomMeasurement,
+    steps,
+    useMostRecentForCalculation,
+    waist,
+    weight,
+    moodCheckins,
+    isLoadingMoodCheckins,
+    isSavingMoodCheckin,
+    handleCreateMoodCheckin,
+    handleUpdateMoodCheckin,
+    handleDeleteMoodCheckin,
+  } = useCheckInLogic(currentUserId);
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { t } = useTranslation();
+  const photoDates = useCheckInPhotoDates();
+
+  const [editingFast, setEditingFast] = useState<FastingLog | null>(null);
+  const [isEditFastOpen, setIsEditFastOpen] = useState(false);
+  const { mutateAsync: updateFast } = useUpdateFastMutation();
+
+  const handleEditFastClick = (measurement: CombinedMeasurement) => {
+    if (measurement.originalFast) {
+      setEditingFast(measurement.originalFast);
+      setIsEditFastOpen(true);
+    }
+  };
+
+  const activeTab = searchParams.get('tab') || 'measurements';
+
+  const handleTabChange = (value: string) => {
+    setSearchParams((prev) => {
+      prev.set('tab', value);
+      return prev;
+    });
+  };
+
+  return (
+    <div className="space-y-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={handleTabChange}
+        className="w-full"
+      >
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6 pb-2 border-b">
+          {/* Tab Selector on the Left */}
+          <div className="flex flex-wrap items-center justify-center lg:justify-start gap-1">
+            {[
+              {
+                id: 'measurements',
+                label: t('checkIn.tabs.measurements', 'Measurements'),
+                icon: Activity,
+              },
+              {
+                id: 'fasting',
+                label: t('checkIn.tabs.fasting', 'Fasting & Mood'),
+                icon: Timer,
+              },
+              {
+                id: 'mindfulness',
+                label: t('checkIn.tabs.mindfulness', 'Mindfulness'),
+                icon: Sparkles,
+              },
+              {
+                id: 'sleep',
+                label: t('checkIn.tabs.sleep', 'Sleep'),
+                icon: Moon,
+              },
+              {
+                id: 'photos',
+                label: t('checkIn.tabs.photos', 'Photos'),
+                icon: Camera,
+              },
+              {
+                id: 'symptoms',
+                label: t('checkIn.tabs.symptoms', 'Symptoms'),
+                icon: HeartPulse,
+              },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <Button
+                  key={tab.id}
+                  variant={isActive ? 'secondary' : 'ghost'}
+                  size="sm"
+                  onClick={() => handleTabChange(tab.id)}
+                  className={`rounded-full px-4 h-9 gap-2 transition-all ${
+                    isActive
+                      ? 'bg-slate-200/60 dark:bg-muted shadow-sm text-foreground'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  <Icon className="w-4.5 h-4.5" />
+                  <span className="text-xs font-semibold">{tab.label}</span>
+                </Button>
+              );
+            })}
+          </div>
+
+          {/* Date Filter on the Right */}
+          <div className="flex flex-col sm:flex-row items-center gap-2 w-full lg:w-auto lg:justify-end">
+            <DayNavigator
+              selectedDate={selectedDate}
+              onDateChange={(dateString) => {
+                setSelectedDate(dateString);
+                setSearchParams((prev) => {
+                  prev.set('date', dateString);
+                  return prev;
+                });
+              }}
+              markedDates={photoDates}
+              markedDatesLabel={t(
+                'checkIn.photos.calendarLegend',
+                'Progress photos'
+              )}
+              className="grid-cols-none flex mb-0 items-center gap-2"
+            />
+          </div>
+        </div>
+
+        <TabsContent
+          value="fasting"
+          className="focus-visible:outline-none space-y-6"
+        >
+          <CheckInTopRow
+            selectedDate={selectedDate}
+            checkins={moodCheckins}
+            isLoadingCheckins={isLoadingMoodCheckins}
+            isSavingCheckin={isSavingMoodCheckin}
+            onCreateCheckin={handleCreateMoodCheckin}
+            onUpdateCheckin={handleUpdateMoodCheckin}
+            onDeleteCheckin={handleDeleteMoodCheckin}
+          />
+          <RecentActivity
+            convertMeasurement={convertMeasurement}
+            convertWeight={convertWeight}
+            handleDeleteMeasurementClick={handleDeleteMeasurementClick}
+            recentMeasurements={recentMeasurements.filter(
+              (m) => m.type === 'fasting'
+            )}
+            shouldConvertCustomMeasurement={shouldConvertCustomMeasurement}
+            handleEditFastClick={handleEditFastClick}
+            title={t('checkIn.recentFasts', 'Recent Fasts')}
+            description={t(
+              'checkIn.recentFastsDescription',
+              'Your latest fasting logs and status.'
+            )}
+          />
+        </TabsContent>
+
+        <TabsContent
+          value="measurements"
+          className="focus-visible:outline-none space-y-6"
+        >
+          <CheckInForm
+            bodyFatPercentage={bodyFatPercentage}
+            boneMassKg={boneMassKg}
+            bodyWaterPercentage={bodyWaterPercentage}
+            muscleMassKg={muscleMassKg}
+            bmr={bmr}
+            customCategories={customCategories}
+            customNotes={customNotes}
+            customPlaceholders={customPlaceholders}
+            customValues={customValues}
+            handleCalculateBodyFat={handleCalculateBodyFat}
+            handleSubmit={handleSubmit}
+            height={height}
+            hips={hips}
+            loading={loading}
+            neck={neck}
+            placeholders={placeholders}
+            setBodyFatPercentage={setBodyFatPercentage}
+            setBoneMassKg={setBoneMassKg}
+            setBodyWaterPercentage={setBodyWaterPercentage}
+            setMuscleMassKg={setMuscleMassKg}
+            setBmr={setBmr}
+            setCustomNotes={setCustomNotes}
+            setCustomValues={setCustomValues}
+            setHeight={setHeight}
+            setHips={setHips}
+            setNeck={setNeck}
+            setSteps={setSteps}
+            setUseMostRecentForCalculation={setUseMostRecentForCalculation}
+            setWaist={setWaist}
+            setWeight={setWeight}
+            shouldConvertCustomMeasurement={shouldConvertCustomMeasurement}
+            steps={steps}
+            useMostRecentForCalculation={useMostRecentForCalculation}
+            waist={waist}
+            weight={weight}
+          />
+          <RecentActivity
+            convertMeasurement={convertMeasurement}
+            convertWeight={convertWeight}
+            handleDeleteMeasurementClick={handleDeleteMeasurementClick}
+            recentMeasurements={recentMeasurements.filter(
+              (m) => m.type === 'standard' || m.type === 'custom'
+            )}
+            shouldConvertCustomMeasurement={shouldConvertCustomMeasurement}
+            title={t('checkIn.recentMeasurements', 'Recent Measurements')}
+            description={t(
+              'checkIn.recentMeasurementsDescription',
+              'Your latest logged weight, body metrics, and custom categories.'
+            )}
+          />
+        </TabsContent>
+
+        <TabsContent value="mindfulness" className="focus-visible:outline-none">
+          <MindfulnessSection selectedDate={selectedDate} />
+        </TabsContent>
+
+        <TabsContent value="sleep" className="focus-visible:outline-none">
+          <SleepEntrySection key={selectedDate} selectedDate={selectedDate} />
+        </TabsContent>
+
+        <TabsContent value="photos" className="focus-visible:outline-none">
+          <CheckInPhotos
+            selectedDate={selectedDate}
+            onLogWeight={(dateString) => {
+              setSelectedDate(dateString);
+              setSearchParams((prev) => {
+                prev.set('tab', 'measurements');
+                prev.set('date', dateString);
+                return prev;
+              });
+            }}
+          />
+        </TabsContent>
+
+        <TabsContent value="symptoms" className="focus-visible:outline-none">
+          <SymptomsPanel
+            selectedDate={selectedDate}
+            onDateChange={(dateString) => {
+              setSelectedDate(dateString);
+              setSearchParams((prev) => {
+                prev.set('date', dateString);
+                return prev;
+              });
+            }}
+          />
+        </TabsContent>
+      </Tabs>
+
+      <EditFastDialog
+        isOpen={isEditFastOpen}
+        onClose={() => setIsEditFastOpen(false)}
+        fast={editingFast}
+        onSave={updateFast}
+      />
+    </div>
+  );
+};
+
+export default CheckIn;

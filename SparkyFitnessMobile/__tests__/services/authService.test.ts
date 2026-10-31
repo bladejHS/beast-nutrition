@@ -1,0 +1,971 @@
+import {
+  getAuthHeaders,
+  setOnSessionExpired,
+  notifySessionExpired,
+  setOnNoConfigs,
+  notifyNoConfigs,
+  setOnIdentityChanged,
+  notifyIdentityChanged,
+  login,
+  LoginError,
+  fetchMfaFactors,
+  verifyTotp,
+  sendEmailOtp,
+  verifyEmailOtp,
+  _requestPasskeyRegistrationTicket,
+  addPasskey,
+  _clearTrustedOriginCache,
+  _setTrustedOriginCache,
+} from '../../src/services/api/authService';
+import { ServerConfig } from '../../src/services/storage';
+import * as LogService from '../../src/services/LogService';
+import { TimeoutError } from '../../src/utils/concurrency';
+import * as WebBrowser from 'expo-web-browser';
+
+jest.mock('expo-web-browser', () => ({
+  openAuthSessionAsync: jest.fn(),
+  getCustomTabsSupportingBrowsersAsync: jest.fn(),
+}));
+
+const mockOpenAuthSession =
+  WebBrowser.openAuthSessionAsync as jest.MockedFunction<
+    typeof WebBrowser.openAuthSessionAsync
+  >;
+const mockGetCustomTabsBrowsers =
+  WebBrowser.getCustomTabsSupportingBrowsersAsync as jest.MockedFunction<
+    typeof WebBrowser.getCustomTabsSupportingBrowsersAsync
+  >;
+
+describe('authService', () => {
+  const mockFetch = jest.fn();
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    global.fetch = mockFetch;
+    _clearTrustedOriginCache();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Clear stale callbacks between tests
+    setOnSessionExpired(() => {});
+    setOnNoConfigs(() => {});
+    setOnIdentityChanged(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // --- getAuthHeaders ---
+
+  describe('getAuthHeaders', () => {
+    test('returns session token when authType is session and token is present', () => {
+      const config: ServerConfig = {
+        id: '1',
+        url: 'https://example.com',
+        apiKey: 'my-api-key',
+        authType: 'session',
+        sessionToken: 'my-session-token',
+      };
+
+      expect(getAuthHeaders(config)).toEqual({
+        Authorization: 'Bearer my-session-token',
+      });
+    });
+
+    test('returns apiKey when authType is not session', () => {
+      const config: ServerConfig = {
+        id: '1',
+        url: 'https://example.com',
+        apiKey: 'my-api-key',
+      };
+
+      expect(getAuthHeaders(config)).toEqual({
+        Authorization: 'Bearer my-api-key',
+      });
+    });
+
+    test('falls back to apiKey when authType is session but sessionToken is missing', () => {
+      const config: ServerConfig = {
+        id: '1',
+        url: 'https://example.com',
+        apiKey: 'my-api-key',
+        authType: 'session',
+      };
+
+      expect(getAuthHeaders(config)).toEqual({
+        Authorization: 'Bearer my-api-key',
+      });
+    });
+  });
+
+  // --- Callback registration ---
+
+  describe('setOnSessionExpired / notifySessionExpired', () => {
+    test('registered callback fires with configId', () => {
+      const cb = jest.fn();
+      setOnSessionExpired(cb);
+      notifySessionExpired('config-42');
+
+      expect(cb).toHaveBeenCalledWith('config-42');
+    });
+
+    test('no-op when no callback registered', () => {
+      // Reset to truly empty by setting a no-op then overwriting the module-level var
+      // via the exported setter with an explicit cast
+      setOnSessionExpired(undefined as any);
+      expect(() => notifySessionExpired('config-42')).not.toThrow();
+    });
+  });
+
+  describe('setOnNoConfigs / notifyNoConfigs', () => {
+    test('registered callback fires', () => {
+      const cb = jest.fn();
+      setOnNoConfigs(cb);
+      notifyNoConfigs();
+
+      expect(cb).toHaveBeenCalled();
+    });
+
+    test('no-op when no callback registered', () => {
+      setOnNoConfigs(undefined as any);
+      expect(() => notifyNoConfigs()).not.toThrow();
+    });
+  });
+
+  describe('setOnIdentityChanged / notifyIdentityChanged', () => {
+    test('registered callback is awaited', async () => {
+      const order: string[] = [];
+      setOnIdentityChanged(async () => {
+        await Promise.resolve();
+        order.push('handler');
+      });
+
+      await notifyIdentityChanged();
+      order.push('caller');
+
+      // Callers refetch straight after this resolves, so a handler that has
+      // not finished clearing the cookie jar would let the next request out
+      // carrying the previous account's session.
+      expect(order).toEqual(['handler', 'caller']);
+    });
+
+    test('an unregistered handler is reported, not passed over', async () => {
+      const addLogSpy = jest
+        .spyOn(LogService, 'addLog')
+        .mockResolvedValue(undefined);
+      setOnIdentityChanged(undefined as any);
+
+      await expect(notifyIdentityChanged()).resolves.toBeUndefined();
+
+      // The screens that change identity no longer clear anything themselves,
+      // so with nothing registered the previous account's caches survive the
+      // switch and nothing else would say so.
+      expect(addLogSpy).toHaveBeenCalledWith(
+        expect.stringContaining('no handler registered'),
+        'ERROR'
+      );
+    });
+  });
+
+  // --- login ---
+
+  describe('login', () => {
+    const serverUrl = 'https://login-test.example.com';
+
+    beforeEach(() => {
+      _setTrustedOriginCache(
+        'https://login-test.example.com',
+        'https://login-test.example.com'
+      );
+      _setTrustedOriginCache(
+        'https://trailing-slash.example.com',
+        'https://trailing-slash.example.com'
+      );
+      _setTrustedOriginCache('http://localhost:3000', 'http://localhost:3000');
+    });
+
+    test('returns success with session token and user on successful login', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            token: 'session-abc',
+            user: { email: 'user@test.com', role: 'admin' },
+          }),
+      });
+
+      const result = await login(serverUrl, 'user@test.com', 'password123');
+
+      expect(result).toEqual({
+        type: 'success',
+        sessionToken: 'session-abc',
+        user: { email: 'user@test.com', role: 'admin' },
+      });
+    });
+
+    test('returns mfa_required when twoFactorRedirect is true', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ twoFactorRedirect: true }),
+      });
+
+      const result = await login(serverUrl, 'user@test.com', 'password123');
+
+      expect(result).toEqual({ type: 'mfa_required' });
+    });
+
+    // Representative timeout test for the authService fetch sites: they all
+    // go through the same fetchWithTimeout wrapper.
+    test('throws TimeoutError when the server never responds', async () => {
+      jest.useFakeTimers();
+      try {
+        // Signal-aware mock that rejects on abort (like real fetch)
+        mockFetch.mockImplementation((_url: string, options?: RequestInit) => {
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        });
+
+        const promise = login(serverUrl, 'user@test.com', 'password123');
+        // Attach handler BEFORE advancing timers to avoid unhandled rejection
+        const assertion = expect(promise).rejects.toThrow(TimeoutError);
+
+        await jest.advanceTimersByTimeAsync(30_000);
+
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test('throws LoginError on non-OK response with JSON error body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              message: 'Invalid credentials',
+              code: 'AUTH_FAILED',
+            })
+          ),
+      });
+
+      await expect(login(serverUrl, 'user@test.com', 'wrong')).rejects.toThrow(
+        'Sign-in failed: 401 - Invalid credentials (AUTH_FAILED)'
+      );
+    });
+
+    test('throws LoginError on non-OK response with non-JSON body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
+      });
+
+      await expect(login(serverUrl, 'user@test.com', 'pass')).rejects.toThrow(
+        'Sign-in failed: 500 - Internal Server Error'
+      );
+    });
+
+    test('throws LoginError when response has no token', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ user: { email: 'user@test.com' } }),
+      });
+
+      await expect(login(serverUrl, 'user@test.com', 'pass')).rejects.toThrow(
+        'Sign-in response did not include a session token.'
+      );
+    });
+
+    test('sends POST to sign-in endpoint with correct body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ token: 't', user: { email: 'u@t.com' } }),
+      });
+
+      await login(serverUrl, 'u@t.com', 'p');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${serverUrl}/api/auth/sign-in/email`,
+        expect.objectContaining({
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: 'https://login-test.example.com',
+          },
+          body: JSON.stringify({ email: 'u@t.com', password: 'p' }),
+        })
+      );
+    });
+
+    test('normalizes trailing slash in server URL', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ token: 't', user: { email: 'u@t.com' } }),
+      });
+
+      await login('https://trailing-slash.example.com/', 'u@t.com', 'p');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://trailing-slash.example.com/api/auth/sign-in/email',
+        expect.anything()
+      );
+    });
+
+    test('throws LoginError with message-only JSON error body', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: () =>
+          Promise.resolve(JSON.stringify({ message: 'Account locked' })),
+      });
+
+      await expect(login(serverUrl, 'user@test.com', 'pass')).rejects.toThrow(
+        'Sign-in failed: 403 - Account locked'
+      );
+    });
+
+    test('LoginError includes statusCode and correct name', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve('Unauthorized'),
+      });
+
+      try {
+        await login(serverUrl, 'user@test.com', 'wrong');
+        fail('Expected LoginError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(LoginError);
+        expect((error as LoginError).statusCode).toBe(401);
+        expect((error as LoginError).name).toBe('LoginError');
+      }
+    });
+
+    test('propagates network errors', async () => {
+      mockFetch.mockRejectedValueOnce(new Error('Network request failed'));
+
+      await expect(login(serverUrl, 'user@test.com', 'pass')).rejects.toThrow(
+        'Network request failed'
+      );
+    });
+
+    describe('HTTPS enforcement', () => {
+      const originalDev = (global as any).__DEV__;
+
+      afterEach(() => {
+        (global as any).__DEV__ = originalDev;
+      });
+
+      test('throws LoginError for HTTP URL in production', async () => {
+        (global as any).__DEV__ = false;
+
+        await expect(
+          login('http://insecure.example.com', 'u@t.com', 'p')
+        ).rejects.toThrow(
+          'A secure (HTTPS) server URL is required to sign in.'
+        );
+
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      test('allows HTTP URL in dev mode', async () => {
+        (global as any).__DEV__ = true;
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({ token: 't', user: { email: 'u@t.com' } }),
+        });
+
+        const result = await login('http://localhost:3000', 'u@t.com', 'p');
+
+        expect(result.type).toBe('success');
+      });
+    });
+  });
+
+  // --- fetchMfaFactors ---
+
+  describe('fetchMfaFactors', () => {
+    const serverUrl = 'https://mfa-factors.example.com';
+
+    test('returns parsed MFA factors on success', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({ mfa_totp_enabled: true, mfa_email_enabled: true }),
+      });
+
+      const result = await fetchMfaFactors(serverUrl, 'user@test.com');
+
+      expect(result).toEqual({
+        mfaTotpEnabled: true,
+        mfaEmailEnabled: true,
+      });
+    });
+
+    test('defaults to false when fields are missing', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      const result = await fetchMfaFactors(serverUrl, 'user@test.com');
+
+      expect(result).toEqual({
+        mfaTotpEnabled: false,
+        mfaEmailEnabled: false,
+      });
+    });
+
+    test('throws LoginError on non-OK response', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+      });
+
+      await expect(fetchMfaFactors(serverUrl, 'user@test.com')).rejects.toThrow(
+        'Failed to fetch MFA factors.'
+      );
+    });
+
+    test('encodes email in query parameter', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+
+      await fetchMfaFactors(serverUrl, 'user+special@test.com');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        `${serverUrl}/api/auth/mfa-factors?email=user%2Bspecial%40test.com`,
+        expect.objectContaining({ credentials: 'omit' })
+      );
+    });
+  });
+
+  // --- verifyTotp ---
+
+  describe('verifyTotp', () => {
+    const mockAuthSettingsResponse = (trustedOrigin?: string | null) => ({
+      ok: true,
+      json: () => Promise.resolve({ trusted_origin: trustedOrigin }),
+    });
+
+    const mockSuccessVerifyResponse = () => ({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          token: 'totp-session-token',
+          user: { email: 'user@test.com', role: 'user' },
+        }),
+    });
+
+    test('returns session token and user on success', async () => {
+      const serverUrl = 'https://totp-success.example.com';
+      mockFetch
+        .mockResolvedValueOnce(
+          mockAuthSettingsResponse('https://auth.example.com')
+        )
+        .mockResolvedValueOnce(mockSuccessVerifyResponse());
+
+      const result = await verifyTotp(serverUrl, '123456');
+
+      expect(result).toEqual({
+        sessionToken: 'totp-session-token',
+        user: { email: 'user@test.com', role: 'user' },
+      });
+    });
+
+    test('throws LoginError on non-OK response with parsed error', async () => {
+      const serverUrl = 'https://totp-error.example.com';
+      mockFetch
+        .mockResolvedValueOnce(mockAuthSettingsResponse(null))
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: () =>
+            Promise.resolve(JSON.stringify({ message: 'Invalid code' })),
+        });
+
+      await expect(verifyTotp(serverUrl, '000000')).rejects.toThrow(
+        'Invalid code'
+      );
+    });
+
+    test('throws LoginError when response has no token', async () => {
+      const serverUrl = 'https://totp-no-token.example.com';
+      mockFetch
+        .mockResolvedValueOnce(mockAuthSettingsResponse(null))
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ user: { email: 'u@t.com' } }),
+        });
+
+      await expect(verifyTotp(serverUrl, '123456')).rejects.toThrow(
+        'Verification response did not include a session token.'
+      );
+    });
+
+    test('includes Origin header from server-provided trusted_origin', async () => {
+      const serverUrl = 'https://totp-origin.example.com';
+      mockFetch
+        .mockResolvedValueOnce(
+          mockAuthSettingsResponse('https://trusted.example.com')
+        )
+        .mockResolvedValueOnce(mockSuccessVerifyResponse());
+
+      await verifyTotp(serverUrl, '123456');
+
+      const verifyCall = mockFetch.mock.calls[1];
+      expect(verifyCall[1].headers).toEqual(
+        expect.objectContaining({
+          Origin: 'https://trusted.example.com',
+          'Content-Type': 'application/json',
+        })
+      );
+    });
+
+    test('falls back to server-derived origin when auth settings fetch fails', async () => {
+      const serverUrl = 'https://totp-settings-fail.example.com';
+      mockFetch
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce(mockSuccessVerifyResponse());
+
+      await verifyTotp(serverUrl, '123456');
+
+      const verifyCall = mockFetch.mock.calls[1];
+      expect(verifyCall[1].headers).toEqual(
+        expect.objectContaining({
+          Origin: 'https://totp-settings-fail.example.com',
+        })
+      );
+    });
+
+    test('falls back to URL-derived origin when trusted_origin is null', async () => {
+      const serverUrl = 'https://totp-fallback.example.com';
+      mockFetch
+        .mockResolvedValueOnce(mockAuthSettingsResponse(null))
+        .mockResolvedValueOnce(mockSuccessVerifyResponse());
+
+      await verifyTotp(serverUrl, '123456');
+
+      const verifyCall = mockFetch.mock.calls[1];
+      expect(verifyCall[1].headers).toEqual(
+        expect.objectContaining({
+          Origin: 'https://totp-fallback.example.com',
+        })
+      );
+    });
+  });
+
+  // --- sendEmailOtp ---
+
+  describe('sendEmailOtp', () => {
+    test('resolves on success', async () => {
+      const serverUrl = 'https://send-otp-ok.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ trusted_origin: null }),
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      await expect(sendEmailOtp(serverUrl)).resolves.toBeUndefined();
+    });
+
+    test('throws LoginError on non-OK response', async () => {
+      const serverUrl = 'https://send-otp-fail.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ trusted_origin: null }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 429,
+          text: () => Promise.resolve(JSON.stringify({ code: 'RATE_LIMITED' })),
+        });
+
+      await expect(sendEmailOtp(serverUrl)).rejects.toThrow('RATE_LIMITED');
+    });
+
+    test('includes Origin header in request', async () => {
+      const serverUrl = 'https://send-otp-origin.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({ trusted_origin: 'https://my-auth.example.com' }),
+        })
+        .mockResolvedValueOnce({ ok: true });
+
+      await sendEmailOtp(serverUrl);
+
+      const sendCall = mockFetch.mock.calls[1];
+      expect(sendCall[0]).toBe(`${serverUrl}/api/auth/two-factor/send-otp`);
+      expect(sendCall[1].headers).toEqual(
+        expect.objectContaining({
+          Origin: 'https://my-auth.example.com',
+        })
+      );
+    });
+  });
+
+  // --- verifyEmailOtp ---
+
+  describe('verifyEmailOtp', () => {
+    test('returns session token and user on success', async () => {
+      const serverUrl = 'https://email-otp-ok.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ trusted_origin: null }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              token: 'email-otp-token',
+              user: { email: 'user@test.com' },
+            }),
+        });
+
+      const result = await verifyEmailOtp(serverUrl, '654321');
+
+      expect(result).toEqual({
+        sessionToken: 'email-otp-token',
+        user: { email: 'user@test.com', role: undefined },
+      });
+    });
+
+    test('throws LoginError on non-OK response', async () => {
+      const serverUrl = 'https://email-otp-err.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ trusted_origin: null }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          text: () =>
+            Promise.resolve(JSON.stringify({ error: 'Code expired' })),
+        });
+
+      await expect(verifyEmailOtp(serverUrl, '000000')).rejects.toThrow(
+        'Code expired'
+      );
+    });
+
+    test('throws LoginError when response has no token', async () => {
+      const serverUrl = 'https://email-otp-notoken.example.com';
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ trusted_origin: null }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ user: { email: 'u@t.com' } }),
+        });
+
+      await expect(verifyEmailOtp(serverUrl, '123456')).rejects.toThrow(
+        'Verification response did not include a session token.'
+      );
+    });
+  });
+
+  // --- clearAuthCookies ---
+
+  describe('clearAuthCookies', () => {
+    // `networkingModule` is read once at import, so each case installs its own
+    // fake and loads the service fresh against it.
+    // isolateModules rather than resetModules: the latter empties the registry
+    // the rest of this file is still holding references into, which breaks the
+    // mocks of tests that run afterwards.
+    const loadWithNetworking = (
+      networking: unknown
+    ): (() => Promise<boolean>) => {
+      let clear!: () => Promise<boolean>;
+      jest.isolateModules(() => {
+        const rn = require('react-native');
+        rn.NativeModules.Networking = networking;
+        clear = require('../../src/services/api/authService').clearAuthCookies;
+      });
+      return clear;
+    };
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    test('reports failure when NativeModules.Networking is missing', async () => {
+      await expect(loadWithNetworking(undefined)()).resolves.toBe(false);
+    });
+
+    test('treats an already-empty jar as cleared', async () => {
+      // Android's callback reports whether anything was *removed*, so an empty
+      // jar answers false. Being called at all is the success signal; reading
+      // that boolean as failure would cry wolf on every clean switch.
+      const clear = loadWithNetworking({
+        clearCookies: (cb: (result: boolean) => void) => cb(false),
+      });
+      await expect(clear()).resolves.toBe(true);
+    });
+
+    test('reports failure when the native call throws', async () => {
+      const clear = loadWithNetworking({
+        clearCookies: () => {
+          throw new Error('no cookie manager');
+        },
+      });
+      await expect(clear()).resolves.toBe(false);
+    });
+
+    test('gives up instead of hanging when the callback never fires', async () => {
+      // ForwardingCookieHandler is `cookieManager?.removeAllCookies`, and
+      // cookieManager is null when the WebView provider is missing: the call
+      // does nothing and never calls back. Without a deadline this would stall
+      // the identity change awaiting it forever.
+      jest.useFakeTimers();
+      const clear = loadWithNetworking({ clearCookies: () => {} });
+      const pending = clear();
+      jest.advanceTimersByTime(3_000);
+      await expect(pending).resolves.toBe(false);
+    });
+  });
+
+  // --- Trusted origin caching ---
+
+  describe('trusted origin caching', () => {
+    test('second call with same URL skips auth settings fetch', async () => {
+      const serverUrl = 'https://cache-test.example.com';
+
+      // First verifyTotp: fetches auth settings + verify endpoint
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              trusted_origin: 'https://cached-origin.example.com',
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              token: 'token-1',
+              user: { email: 'u@t.com' },
+            }),
+        });
+
+      await verifyTotp(serverUrl, '111111');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Second verifyTotp with same URL: only the verify endpoint fetch
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            token: 'token-2',
+            user: { email: 'u@t.com' },
+          }),
+      });
+
+      await verifyTotp(serverUrl, '222222');
+
+      // Total: 2 from first call + 1 from second call = 3
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('_requestPasskeyRegistrationTicket', () => {
+    it('POSTs to register-ticket with Bearer and returns the ticket', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-abc' }),
+      });
+
+      const ticket = await _requestPasskeyRegistrationTicket(
+        'https://s.com',
+        'sess-tok'
+      );
+
+      expect(ticket).toBe('ticket-abc');
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://s.com/api/auth/web-login/register-ticket');
+      expect(opts.method).toBe('POST');
+      expect(opts.headers.Authorization).toBe('Bearer sess-tok');
+    });
+
+    it('throws LoginError SESSION_NOT_FRESH on 403', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ code: 'SESSION_NOT_FRESH' }),
+      });
+
+      await expect(
+        _requestPasskeyRegistrationTicket('https://s.com', 'tok')
+      ).rejects.toMatchObject({
+        message: 'SESSION_NOT_FRESH',
+        statusCode: 403,
+      });
+    });
+
+    it('throws on non-OK responses', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ message: 'boom' }),
+      });
+      await expect(
+        _requestPasskeyRegistrationTicket('https://s.com', 'tok')
+      ).rejects.toThrow('boom');
+    });
+  });
+
+  describe('addPasskey', () => {
+    it('mints a ticket then opens the register page with the ticket in the fragment (no raw token)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-xyz' }),
+      });
+      mockOpenAuthSession.mockResolvedValueOnce({
+        type: 'success',
+        url: 'sparkyfitnessmobile://oauth-callback?status=success',
+      } as never);
+
+      await addPasskey('https://s.com', 'sess-tok', 'My Phone');
+
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://s.com/api/auth/web-login/register-ticket'
+      );
+      const openedUrl = mockOpenAuthSession.mock.calls[0][0] as string;
+      expect(openedUrl).toContain(
+        '/web-login/register-passkey#ticket=ticket-xyz'
+      );
+      expect(openedUrl).not.toContain('token=sess-tok');
+      expect(openedUrl).not.toContain('?token=');
+    });
+
+    it('propagates SESSION_NOT_FRESH without opening the browser', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ code: 'SESSION_NOT_FRESH' }),
+      });
+
+      await expect(
+        addPasskey('https://s.com', 'tok', 'My Phone')
+      ).rejects.toMatchObject({ message: 'SESSION_NOT_FRESH' });
+      expect(mockOpenAuthSession).not.toHaveBeenCalled();
+    });
+  });
+
+  // Play Services only accepts WebAuthn origin assertions from allowlisted
+  // browsers; Custom Tabs open in the default browser, so a non-allowlisted
+  // default (e.g. F-Droid Firefox) must be overridden via browserPackage.
+  describe('passkey ceremony browser selection', () => {
+    const { Platform } = require('react-native');
+    const originalOS = Platform.OS;
+
+    const mintTicketAndSucceed = () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-xyz' }),
+      });
+      mockOpenAuthSession.mockResolvedValueOnce({
+        type: 'success',
+        url: 'sparkyfitnessmobile://oauth-callback?status=success',
+      } as never);
+    };
+
+    const setPlatform = (os: string) => {
+      Object.defineProperty(Platform, 'OS', {
+        get: () => os,
+        configurable: true,
+      });
+    };
+
+    afterEach(() => {
+      Object.defineProperty(Platform, 'OS', {
+        get: () => originalOS,
+        configurable: true,
+      });
+    });
+
+    it('overrides a non-allowlisted default browser with an installed allowlisted one', async () => {
+      setPlatform('android');
+      // With a default browser set, Android filters the VIEW-intent query
+      // (browserPackages) down to just the default — allowlisted browsers
+      // like Chrome only show up in servicePackages.
+      mockGetCustomTabsBrowsers.mockResolvedValueOnce({
+        defaultBrowserPackage: 'org.mozilla.fennec_fdroid',
+        browserPackages: ['org.mozilla.fennec_fdroid'],
+        servicePackages: ['org.mozilla.fennec_fdroid', 'com.android.chrome'],
+      });
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: 'com.android.chrome',
+      });
+    });
+
+    it('respects an allowlisted default browser', async () => {
+      setPlatform('android');
+      mockGetCustomTabsBrowsers.mockResolvedValueOnce({
+        defaultBrowserPackage: 'com.android.chrome',
+        browserPackages: ['com.android.chrome', 'org.mozilla.fennec_fdroid'],
+        servicePackages: ['com.android.chrome'],
+      });
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
+    });
+
+    it('falls back to the default browser when the lookup fails', async () => {
+      setPlatform('android');
+      mockGetCustomTabsBrowsers.mockRejectedValueOnce(
+        new Error('no custom tabs')
+      );
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
+    });
+
+    it('never inspects browsers on iOS', async () => {
+      setPlatform('ios');
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockGetCustomTabsBrowsers).not.toHaveBeenCalled();
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
+    });
+  });
+});

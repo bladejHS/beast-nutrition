@@ -1,0 +1,995 @@
+import express from 'express';
+// @ts-expect-error multer does not ship TypeScript declarations in this package.
+import multer from 'multer';
+import { pipeUIMessageStreamToResponse } from 'ai';
+import { authenticate } from '../middleware/authMiddleware.js';
+import chatService from '../services/chatService.js';
+import type { FoodOptionsErrorCategory } from '../services/chatService.js';
+import { transcribeVoiceAudio } from '../services/voiceTranscriptionService.js';
+import globalSettingsRepository from '../models/globalSettingsRepository.js';
+import { resolveIsAdmin } from '../utils/adminCheck.js';
+import {
+  assertOutboundUrlShapeAndLiteralAllowed,
+  resolveAiNetworkPolicy,
+  OutboundUrlBlockedError,
+} from '../utils/outboundUrlPolicy.js';
+import {
+  testAiServiceConnectionRequestSchema,
+  normalizeChatToolCategories,
+  aiServiceSettingsMutatorSchema,
+  MAX_VOICE_UPLOAD_BYTES,
+  voiceAudioMimeTypeSchema,
+  voiceTranscriptionRequestSchema,
+} from '@workspace/shared';
+const router = express.Router();
+const voiceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: MAX_VOICE_UPLOAD_BYTES,
+    files: 1,
+    fields: 2,
+    // Busboy emits partsLimit when reaching this count, including the final boundary.
+    parts: 4,
+    fieldSize: 1024,
+  },
+}).single('audio');
+
+const receiveVoiceUpload: express.RequestHandler = (req, res, next) => {
+  voiceUpload(req, res, (error: unknown) => {
+    if (!error) return next();
+    const tooLarge =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge
+        ? 'Audio must be no larger than 10 MB.'
+        : 'Invalid audio upload.',
+    });
+  });
+};
+
+/**
+ * @swagger
+ * /chat/transcribe:
+ *   post:
+ *     summary: Transcribe a short voice recording (maximum 10 MB)
+ *     description: Audio stays in memory and is sent only to the selected voice provider. No chat message or diary entry is created.
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [audio, service_config_id]
+ *             properties:
+ *               audio:
+ *                 type: string
+ *                 format: binary
+ *               service_config_id:
+ *                 type: string
+ *                 format: uuid
+ *               mime_type:
+ *                 type: string
+ *                 enum: [audio/mp4, audio/m4a, audio/aac, audio/mpeg, audio/wav, audio/webm, audio/ogg]
+ *     responses:
+ *       200:
+ *         description: Transcribed text and model name
+ *       400:
+ *         description: Invalid upload or voice configuration
+ *       401:
+ *         description: Authentication required
+ *       403:
+ *         description: Outbound network policy denied the request
+ *       404:
+ *         description: AI configuration is unavailable to the authenticated user
+ *       413:
+ *         description: Audio exceeds 10 MB
+ *       502:
+ *         description: Transcription provider failed or returned invalid output
+ *       504:
+ *         description: Transcription timed out
+ */
+router.post(
+  '/transcribe',
+  authenticate,
+  receiveVoiceUpload,
+  async (req, res, next) => {
+    const uploadedFile = (
+      req as typeof req & { file?: { buffer: Buffer; mimetype: string } }
+    ).file;
+    const parsed = voiceTranscriptionRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'A valid service_config_id and audio MIME type are required.',
+      });
+    }
+    if (!uploadedFile?.buffer.length) {
+      return res.status(400).json({ error: 'An audio file is required.' });
+    }
+    const mimeType = voiceAudioMimeTypeSchema.safeParse(
+      parsed.data.mime_type ?? uploadedFile.mimetype
+    );
+    if (!mimeType.success) {
+      return res.status(400).json({ error: 'Unsupported audio format.' });
+    }
+
+    const controller = new AbortController();
+    const abort = () => {
+      if (!res.writableFinished) controller.abort();
+    };
+    res.once('close', abort);
+    try {
+      const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+      const result = await transcribeVoiceAudio({
+        audio: uploadedFile.buffer,
+        mimeType: mimeType.data,
+        serviceConfigId: parsed.data.service_config_id,
+        // AI credentials belong to the actor, never to a switched family member.
+        userId: req.authenticatedUserId,
+        isAdmin,
+        signal: controller.signal,
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    } finally {
+      res.removeListener('close', abort);
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /chat:
+ *   post:
+ *     summary: Process a chat message or save AI service settings
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               messages:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     role:
+ *                       type: string
+ *                       enum: [user, assistant, system]
+ *                     content:
+ *                       type: string
+ *               service_config_id:
+ *                 type: string
+ *                 format: uuid
+ *               action:
+ *                 type: string
+ *                 enum: [save_ai_service_settings]
+ *               service_data:
+ *                 type: object
+ *     responses:
+ *       200:
+ *         description: Successful response from the AI service or confirmation of settings save.
+ *       400:
+ *         description: Bad request.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.post('/', authenticate, async (req, res, next) => {
+  const { messages, service_config_id, action, service_data } = req.body;
+  // Optional runtime tool-category selection from the client; normalized to
+  // known slugs (unknown/empty -> undefined so the service falls back to the
+  // per-service profile default rather than loading zero tools).
+  const toolCategories = normalizeChatToolCategories(req.body?.toolCategories);
+  try {
+    if (action === 'save_ai_service_settings') {
+      // Check if user AI config is allowed
+      const isAllowed = await globalSettingsRepository.isUserAiConfigAllowed();
+      if (!isAllowed) {
+        return res.status(403).json({
+          error:
+            'Per-user AI service configuration is disabled. Please use the global AI service settings configured by your administrator.',
+        });
+      }
+      // Only allow user-specific settings (not public)
+      if (service_data && service_data.is_public) {
+        return res.status(403).json({
+          error:
+            'Only administrators can create or modify global AI service settings.',
+        });
+      }
+      // Validate required fields before hitting the database
+      if (!service_data) {
+        return res.status(400).json({ error: 'service_data is required.' });
+      }
+      if (
+        !aiServiceSettingsMutatorSchema.shape.reasoning_effort.safeParse(
+          service_data.reasoning_effort
+        ).success
+      ) {
+        return res.status(400).json({ error: 'Invalid reasoning effort.' });
+      }
+      // service_type and service_name are only required when creating a new record (no id)
+      if (!service_data.id) {
+        if (!service_data.service_type) {
+          return res
+            .status(400)
+            .json({ error: 'service_data.service_type is required.' });
+        }
+        if (!service_data.service_name) {
+          return res
+            .status(400)
+            .json({ error: 'service_data.service_name is required.' });
+        }
+      }
+      // SSRF guard: a non-admin must not be able to point the server's outbound
+      // AI request at a private/internal address (localhost, RFC1918, link-local,
+      // cloud metadata). The admin is the trusted operator, so their own
+      // self-hosted URLs (e.g. local Ollama) are allowed; an operator who wants
+      // regular users to reach a shared private AI service opts in explicitly,
+      // either with the admin `allow_private_network_ai` toggle or
+      // ALLOW_PRIVATE_NETWORK_AI=true.
+      if (service_data.custom_url) {
+        const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+        const networkPolicy = await resolveAiNetworkPolicy(
+          { source: 'user' },
+          isAdmin
+        );
+        try {
+          assertOutboundUrlShapeAndLiteralAllowed(
+            service_data.custom_url,
+            networkPolicy
+          );
+        } catch (error) {
+          // Policy denials (private/internal address) are 403; a URL fetch could
+          // never use (malformed, wrong scheme, credentials) is a plain 400.
+          return res
+            .status(error instanceof OutboundUrlBlockedError ? 403 : 400)
+            .json({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : 'Custom AI service URLs must be public http(s) endpoints. Private or internal addresses are not allowed.',
+            });
+        }
+      }
+      const result = await chatService.handleAiServiceSettings(
+        action,
+        service_data,
+
+        req.userId
+      );
+      return res.status(200).json(result);
+    }
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+    const {
+      content,
+      action: actionType,
+      executedTools,
+    } = await chatService.processChatMessage(
+      messages,
+      service_config_id,
+      req.userId,
+      req.authenticatedUserId,
+      isAdmin,
+      toolCategories
+    );
+    return res.status(200).json({ content, action: actionType, executedTools });
+  } catch (error) {
+    if (
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('Invalid messages format') ||
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('No valid content')
+    ) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(400).json({ error: error.message });
+    }
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('AI service configuration ID is missing')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(404).json({ error: error.message });
+    }
+    if (
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('AI service setting not found') ||
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('API key missing')
+    ) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(404).json({ error: error.message });
+    }
+    if (
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('Image analysis is not supported') ||
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('Unsupported service type')
+    ) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(400).json({ error: error.message });
+    }
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('AI service API call error')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      const statusCodeMatch = error.message.match(
+        /AI service API call error: (\d+) -/
+      );
+      const statusCode = statusCodeMatch
+        ? parseInt(statusCodeMatch[1], 10)
+        : 500;
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(statusCode).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+router.post('/stream', authenticate, async (req, res, next) => {
+  const { messages, service_config_id } = req.body;
+  const toolCategories = normalizeChatToolCategories(req.body?.toolCategories);
+  try {
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+    const { stream } = await chatService.processChatMessageStream(
+      messages,
+      service_config_id,
+      req.userId,
+      req.authenticatedUserId,
+      isAdmin,
+      toolCategories
+    );
+
+    pipeUIMessageStreamToResponse({ response: res, stream });
+  } catch (error) {
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/clear-old-history:
+ *   post:
+ *     summary: Clear old chat history for the authenticated user
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Confirmation of successful clearing.
+ *       500:
+ *         description: Server error.
+ */
+router.post('/clear-old-history', authenticate, async (req, res, next) => {
+  try {
+    const result = await chatService.clearOldChatHistory(req.userId);
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/ai-service-settings:
+ *   get:
+ *     summary: Retrieve AI service settings for the authenticated user
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: List of AI service settings.
+ *       403:
+ *         description: Forbidden.
+ *       500:
+ *         description: Server error.
+ */
+router.get('/ai-service-settings', authenticate, async (req, res, next) => {
+  try {
+    const settings = await chatService.getAiServiceSettings(
+      req.userId,
+
+      req.userId
+    );
+    // If user AI config is disabled, only return global settings
+    const isAllowed = await globalSettingsRepository.isUserAiConfigAllowed();
+    if (!isAllowed) {
+      const publicOnly = settings.filter((s) => s.is_public);
+      return res.status(200).json(publicOnly);
+    }
+    res.status(200).json(settings);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/ai-service-settings/active:
+ *   get:
+ *     summary: Retrieve the active AI service setting for the authenticated user
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Active AI service setting.
+ *       403:
+ *         description: Forbidden.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.get(
+  '/ai-service-settings/active',
+  authenticate,
+  async (req, res, next) => {
+    try {
+      const setting = await chatService.getActiveAiServiceSetting(
+        req.userId,
+
+        req.userId
+      );
+      res.status(200).json(setting);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      if (
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        error.message === 'No active AI service setting found for this user.'
+      ) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /chat/ai-service-settings/test:
+ *   post:
+ *     summary: Test an AI service connection with a minimal live completion
+ *     description: >
+ *       Runs a minimal completion against the supplied provider config without
+ *       persisting anything. Returns HTTP 200 for both pass (`ok: true`) and
+ *       provider failure (`ok: false`, with a `category`), so the client can show
+ *       a friendly, category-specific message instead of a generic API error.
+ *       On edit, a blank `api_key` falls back to the stored encrypted key.
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [service_type]
+ *             properties:
+ *               id:
+ *                 type: string
+ *                 format: uuid
+ *               service_type:
+ *                 type: string
+ *               api_key:
+ *                 type: string
+ *               custom_url:
+ *                 type: string
+ *               model_name:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Test result (pass or provider failure).
+ *       400:
+ *         description: Bad request (malformed body or missing required model).
+ *       403:
+ *         description: Forbidden (per-user AI config disabled, or non-admin testing a global service).
+ *       500:
+ *         description: Server error.
+ */
+router.post(
+  '/ai-service-settings/test',
+  authenticate,
+  async (req, res, next) => {
+    const parsed = testAiServiceConnectionRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res
+        .status(400)
+        .json({ error: 'Invalid test connection request.' });
+    }
+    try {
+      // Gate #1 (per-user-AI-config): a test fires an outbound provider call, so
+      // it must respect the same admin policy as the save path — non-admins are
+      // rejected unless per-user AI config is enabled. Admins always pass.
+      const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+      if (
+        !isAdmin &&
+        !(await globalSettingsRepository.isUserAiConfigAllowed())
+      ) {
+        return res.status(403).json({
+          error:
+            'Per-user AI service configuration is disabled. Please use the global AI service settings configured by your administrator.',
+        });
+      }
+      // Gates #2 (global-key) and #3 (provider-mismatch) live in the service.
+      const result = await chatService.testAiServiceConnection(
+        parsed.data,
+        req.userId,
+        isAdmin
+      );
+      return res.status(200).json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /chat/ai-service-settings/{id}:
+ *   delete:
+ *     summary: Delete an AI service setting
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         required: true
+ *     responses:
+ *       200:
+ *         description: Confirmation of successful deletion.
+ *       400:
+ *         description: Bad request.
+ *       403:
+ *         description: Forbidden.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.delete(
+  '/ai-service-settings/:id',
+  authenticate,
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'AI Service ID is required.' });
+    }
+    try {
+      // Check if user AI config is allowed
+      const isAllowed = await globalSettingsRepository.isUserAiConfigAllowed();
+      if (!isAllowed) {
+        return res.status(403).json({
+          error:
+            'Per-user AI service configuration is disabled. Please use the global AI service settings configured by your administrator.',
+        });
+      }
+      // Verify the setting is user-specific (not global) before deletion
+      const settings = await chatService.getAiServiceSettings(
+        req.userId,
+
+        req.userId
+      );
+      const setting = settings.find((s) => s.id === id);
+      if (setting && setting.is_public) {
+        return res.status(403).json({
+          error: 'Only administrators can delete global AI service settings.',
+        });
+      }
+
+      const result = await chatService.deleteAiServiceSetting(req.userId, id);
+      res.status(200).json(result);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message === 'AI service setting not found.') {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /chat/sparky-chat-history:
+ *   get:
+ *     summary: Retrieve Sparky chat history for the authenticated user
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Chat history.
+ *       403:
+ *         description: Forbidden.
+ *       500:
+ *         description: Server error.
+ */
+router.get('/sparky-chat-history', authenticate, async (req, res, next) => {
+  try {
+    const history = await chatService.getSparkyChatHistory(
+      req.userId,
+
+      req.userId
+    );
+    res.status(200).json(history);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/sparky-chat-history/entry/{id}:
+ *   get:
+ *     summary: Retrieve a single Sparky chat history entry
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Chat history entry.
+ *       400:
+ *         description: Bad request.
+ *       403:
+ *         description: Forbidden.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.get(
+  '/sparky-chat-history/entry/:id',
+  authenticate,
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res
+        .status(400)
+        .json({ error: 'Chat History Entry ID is required.' });
+    }
+    try {
+      const entry = await chatService.getSparkyChatHistoryEntry(req.userId, id);
+      res.status(200).json(entry);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message === 'Chat history entry not found.') {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /chat/sparky-chat-history/{id}:
+ *   put:
+ *     summary: Update a Sparky chat history entry
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *     responses:
+ *       200:
+ *         description: Updated chat history entry.
+ *       400:
+ *         description: Bad request.
+ *       403:
+ *         description: Forbidden.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.put('/sparky-chat-history/:id', authenticate, async (req, res, next) => {
+  const { id } = req.params;
+  const updateData = req.body;
+  if (!id) {
+    return res
+      .status(400)
+      .json({ error: 'Chat History Entry ID is required.' });
+  }
+  try {
+    const updatedEntry = await chatService.updateSparkyChatHistoryEntry(
+      req.userId,
+      id,
+      updateData
+    );
+    res.status(200).json(updatedEntry);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    if (
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error.message.startsWith('Chat history entry not found')
+    ) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(404).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/sparky-chat-history/{id}:
+ *   delete:
+ *     summary: Delete a Sparky chat history entry
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Confirmation of successful deletion.
+ *       400:
+ *         description: Bad request.
+ *       403:
+ *         description: Forbidden.
+ *       404:
+ *         description: Not found.
+ *       500:
+ *         description: Server error.
+ */
+router.delete(
+  '/sparky-chat-history/:id',
+  authenticate,
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res
+        .status(400)
+        .json({ error: 'Chat History Entry ID is required.' });
+    }
+    try {
+      const result = await chatService.deleteSparkyChatHistoryEntry(
+        req.userId,
+        id
+      );
+      res.status(200).json(result);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      if (
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        error.message.startsWith('Chat history entry not found')
+      ) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /chat/clear-all-history:
+ *   post:
+ *     summary: Clear all Sparky chat history for the authenticated user
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Confirmation of successful clearing.
+ *       403:
+ *         description: Forbidden.
+ *       500:
+ *         description: Server error.
+ */
+router.post('/clear-all-history', authenticate, async (req, res, next) => {
+  try {
+    const result = await chatService.clearAllSparkyChatHistory(req.userId);
+    res.status(200).json(result);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/save-history:
+ *   post:
+ *     summary: Save a Sparky chat history entry
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               content:
+ *                 type: string
+ *               messageType:
+ *                 type: string
+ *               metadata:
+ *                 type: object
+ *     responses:
+ *       201:
+ *         description: Confirmation of successful saving.
+ *       400:
+ *         description: Bad request.
+ *       403:
+ *         description: Forbidden.
+ *       500:
+ *         description: Server error.
+ */
+router.post('/save-history', authenticate, async (req, res, next) => {
+  const { content, messageType, metadata } = req.body;
+  if (!content || !messageType) {
+    return res
+      .status(400)
+      .json({ error: 'Content and message type are required.' });
+  }
+  try {
+    const result = await chatService.saveSparkyChatHistory(req.userId, {
+      user_id: req.userId,
+      content,
+      messageType,
+      metadata,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /chat/food-options:
+ *   post:
+ *     summary: Generate food options for a given food name and unit
+ *     tags: [AI & Insights]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               foodName:
+ *                 type: string
+ *               unit:
+ *                 type: string
+ *               service_config_id:
+ *                 type: string
+ *                 format: uuid
+ *     responses:
+ *       200:
+ *         description: Raw AI JSON text containing the generated food options, returned as a string in `content`.
+ *       400:
+ *         description: Missing service_config_id.
+ *       404:
+ *         description: No AI service configured, or its API key / custom URL is missing.
+ *       422:
+ *         description: AI response unusable (refused, truncated, empty, invalid JSON, or unsupported provider).
+ *       500:
+ *         description: Server error.
+ *       502:
+ *         description: Upstream AI service error.
+ *       504:
+ *         description: AI service timed out.
+ */
+// Unlike scan-label (422), api_key_missing/custom_url_missing/no_ai_configured
+// map to 404 here to preserve this endpoint's legacy semantics.
+const FOOD_OPTIONS_ERROR_HTTP_STATUS: Record<FoodOptionsErrorCategory, number> =
+  {
+    no_ai_configured: 404,
+    api_key_missing: 404,
+    custom_url_missing: 404,
+    private_network_forbidden: 403,
+    unsupported_provider: 422,
+    unsupported_media: 422, // unreachable (no images sent); required for exhaustiveness
+    image_too_large: 422, // unreachable (no images sent); required for exhaustiveness
+    refused: 422,
+    truncated: 422,
+    no_content: 422,
+    parse_error: 422,
+    upstream_error: 502,
+    timeout: 504,
+  };
+
+router.post('/food-options', authenticate, async (req, res, next) => {
+  const { foodName, unit, service_config_id } = req.body;
+  if (!service_config_id) {
+    return res
+      .status(400)
+      .json({ error: 'AI service configuration ID is required.' });
+  }
+  try {
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+    const result = await chatService.processFoodOptionsRequest(
+      foodName,
+      unit,
+
+      req.userId,
+      service_config_id,
+      isAdmin
+    );
+    if (!result.success) {
+      const status = FOOD_OPTIONS_ERROR_HTTP_STATUS[result.category] ?? 500;
+      return res.status(status).json({ error: result.error });
+    }
+    return res.status(200).json({ content: result.content });
+  } catch (error) {
+    next(error);
+  }
+});
+export default router;

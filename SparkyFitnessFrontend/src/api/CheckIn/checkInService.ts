@@ -1,0 +1,214 @@
+import { apiCall } from '@/api/api';
+import {
+  CheckInMeasurementsResponse,
+  checkInMeasurementsResponseSchema,
+  UpdateCheckInMeasurementsRequest,
+  CustomCategoriesResponse,
+  customCategoriesResponseSchema,
+  customMeasurementsResponseSchema,
+  CustomMeasurementsResponse,
+  UpdateCustomMeasurementsRequest,
+  recentCheckInMeasurementsSchema,
+  RecentCheckInMeasurementsResponse,
+  LatestManualCustomEntry,
+  latestManualCustomEntrySchema,
+} from '@workspace/shared';
+import z from 'zod';
+
+export const loadCustomCategories = async (
+  userId?: string
+): Promise<CustomCategoriesResponse[]> => {
+  const url = userId
+    ? `/measurements/custom-categories?userId=${userId}`
+    : '/measurements/custom-categories';
+  const response = await apiCall(url, {
+    method: 'GET',
+  });
+  return z.array(customCategoriesResponseSchema).parse(response);
+};
+
+export const fetchRecentCustomMeasurements = async (): Promise<
+  CustomMeasurementsResponse[]
+> => {
+  const response = await apiCall('/measurements/custom-entries', {
+    params: { limit: 20, orderBy: 'entry_timestamp.desc' },
+  });
+  return z.array(customMeasurementsResponseSchema).parse(response);
+};
+
+export const fetchRecentStandardMeasurements = async (
+  startDate: string,
+  endDate: string
+): Promise<CheckInMeasurementsResponse[]> => {
+  const response = await apiCall(
+    `/measurements/check-in-measurements-range/${startDate}/${endDate}`,
+    {
+      method: 'GET',
+      suppress404Toast: true,
+    }
+  );
+  return z.array(checkInMeasurementsResponseSchema).parse(response);
+};
+
+export const deleteCustomMeasurement = async (id: string): Promise<void> => {
+  await apiCall(`/measurements/custom-entries/${id}`, { method: 'DELETE' });
+};
+
+export const updateCheckInMeasurementField = async (payload: {
+  id: string;
+  field: string;
+  value: number | null;
+  entry_date: string;
+}): Promise<void> => {
+  await apiCall(`/measurements/check-in/${payload.id}`, {
+    method: 'PUT',
+    body: {
+      entry_date: payload.entry_date,
+      [payload.field]: payload.value,
+    },
+  });
+};
+
+/**
+ * Loads measurements with carry-forward semantics: each field holds the
+ * latest value recorded on or before the date (steps are same-day only).
+ * For only what was actually recorded on the date itself, use
+ * loadCheckInMeasurementsForDate.
+ */
+export const loadLatestCheckInMeasurements = async (
+  selectedDate: string
+): Promise<CheckInMeasurementsResponse | null> => {
+  const response = await apiCall(`/measurements/check-in/${selectedDate}`, {
+    method: 'GET',
+    suppress404Toast: true,
+  });
+  // if there are no entries the backend returns an empty object
+  if (!response || Object.keys(response).length === 0) {
+    return null;
+  }
+  return checkInMeasurementsResponseSchema.parse(response);
+};
+
+/**
+ * Loads only the measurements recorded on the given date — no carry-forward
+ * from earlier days.
+ */
+export const loadCheckInMeasurementsForDate = async (
+  selectedDate: string
+): Promise<CheckInMeasurementsResponse | null> => {
+  const rows = await fetchRecentStandardMeasurements(
+    selectedDate,
+    selectedDate
+  );
+  return rows[0] ?? null;
+};
+
+/**
+ * Latest manual value per custom category on or before the given day.
+ *
+ * One request resolves every category server-side, which is what lets the
+ * check-in show a previous-value hint per custom category without an N+1 query.
+ * The server filters to manual sources, so a health-sync sample is never
+ * returned as something the user could adopt.
+ */
+export const loadLatestManualCustomEntriesOnOrBefore = async (
+  selectedDate: string
+): Promise<LatestManualCustomEntry[]> => {
+  const response = await apiCall(
+    `/measurements/custom-entries/latest-manual-on-or-before-date?date=${encodeURIComponent(selectedDate)}`,
+    { method: 'GET', suppress404Toast: true }
+  );
+  return z.array(latestManualCustomEntrySchema).parse(response ?? []);
+};
+
+export const loadExistingCustomMeasurements = async (
+  selectedDate: string
+): Promise<CustomMeasurementsResponse[]> => {
+  const response = await apiCall(
+    `/measurements/custom-entries/${selectedDate}`,
+    {
+      method: 'GET',
+      suppress404Toast: true,
+    }
+  );
+  return z.array(customMeasurementsResponseSchema).parse(response);
+};
+
+export const saveCheckInMeasurements = async (
+  payload: UpdateCheckInMeasurementsRequest
+): Promise<void> => {
+  await apiCall('/measurements/check-in', {
+    method: 'POST',
+    body: payload,
+  });
+};
+
+export const saveCustomMeasurement = async (
+  payload: UpdateCustomMeasurementsRequest
+): Promise<void> => {
+  await apiCall('/measurements/custom-entries', {
+    method: 'POST',
+    body: payload,
+  });
+};
+
+export const getMostRecentMeasurement = async (
+  measurementType: string,
+  onDate?: string
+): Promise<RecentCheckInMeasurementsResponse | null> => {
+  // `onDate` pins the lookup to a single day instead of the newest value ever
+  // recorded. Used for measured BMR, which only applies on the day it was taken.
+  const response = await apiCall(
+    `/measurements/most-recent/${measurementType}${
+      onDate ? `?date=${encodeURIComponent(onDate)}` : ''
+    }`
+  );
+
+  // if there are no entries the backend returns an empty object
+  if (!response || Object.keys(response).length === 0) {
+    return null;
+  }
+  return recentCheckInMeasurementsSchema.parse(response);
+};
+
+export const fetchCustomEntries = async (
+  categoryId: string,
+  userId?: string
+) => {
+  const params = new URLSearchParams({ category_id: categoryId });
+  if (userId) params.append('userId', userId);
+
+  return apiCall(`/measurements/custom-entries?${params.toString()}`, {
+    method: 'GET',
+  });
+};
+
+export const createCustomCategory = async (body: {
+  name: string;
+  display_name: string;
+  measurement_type: string;
+  data_type: string;
+}): Promise<CustomCategoriesResponse> => {
+  return apiCall('/measurements/custom-categories', {
+    method: 'POST',
+    body,
+  });
+};
+
+// Per-record outcome contract returned by processHealthData. A 200 with a
+// non-empty `errors` array means the remaining rows were still saved.
+export interface HealthDataImportResult {
+  message: string;
+  processed: Array<{ type?: string; status: string; data?: unknown }>;
+  errors: Array<{ error: string; entry?: unknown }>;
+  skipped: Array<{ reason: string; entry?: unknown }>;
+}
+
+export const importHealthDataCsv = async (
+  items: Array<Record<string, unknown>>
+): Promise<HealthDataImportResult> => {
+  return apiCall('/measurements/import-health-data', {
+    method: 'POST',
+    body: { items },
+  });
+};

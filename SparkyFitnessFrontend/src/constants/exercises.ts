@@ -1,0 +1,459 @@
+import { format } from 'date-fns';
+import {
+  Activity,
+  Dumbbell,
+  HeartPulse,
+  Flower2,
+  ArrowBigUp,
+  Zap,
+  Hammer,
+  ChevronsUp,
+  Expand,
+  Pause,
+} from 'lucide-react';
+import type { ExerciseModality } from '@workspace/shared';
+import type { WorkoutPresetSet } from '@/types/workout';
+import i18n from 'i18next';
+export const EXERCISE_CATEGORIES = [
+  {
+    value: 'general',
+    labelKey: 'exercise.addExerciseDialog.categoryGeneral',
+    defaultLabel: 'General',
+  },
+  {
+    value: 'strength',
+    labelKey: 'exercise.addExerciseDialog.categoryStrength',
+    defaultLabel: 'Strength',
+  },
+  {
+    value: 'cardio',
+    labelKey: 'exercise.addExerciseDialog.categoryCardio',
+    defaultLabel: 'Cardio',
+  },
+  {
+    value: 'yoga',
+    labelKey: 'exercise.addExerciseDialog.categoryYoga',
+    defaultLabel: 'Yoga',
+  },
+  {
+    value: 'powerlifting',
+    labelKey: 'exercise.databaseManager.categoryPowerlifting',
+    defaultLabel: 'Powerlifting',
+  },
+  {
+    value: 'olympic weightlifting',
+    labelKey: 'exercise.databaseManager.categoryOlympicWeightlifting',
+    defaultLabel: 'Olympic Weightlifting',
+  },
+  {
+    value: 'strongman',
+    labelKey: 'exercise.databaseManager.categoryStrongman',
+    defaultLabel: 'Strongman',
+  },
+  {
+    value: 'plyometrics',
+    labelKey: 'exercise.databaseManager.categoryPlyometrics',
+    defaultLabel: 'Plyometrics',
+  },
+  {
+    value: 'stretching',
+    labelKey: 'exercise.databaseManager.categoryStretching',
+    defaultLabel: 'Stretching',
+  },
+  {
+    value: 'isometric',
+    labelKey: 'exercise.databaseManager.categoryIsometric',
+    defaultLabel: 'Isometric',
+  },
+] as const;
+
+export type ExerciseCategory = (typeof EXERCISE_CATEGORIES)[number]['value'];
+
+export const EXERCISE_CATEGORY_META: Record<
+  ExerciseCategory,
+  { icon: React.ElementType; color: string; bg: string }
+> = {
+  general: {
+    icon: Activity,
+    color: 'text-slate-500',
+    bg: 'bg-slate-100 dark:bg-slate-800',
+  },
+  strength: {
+    icon: Dumbbell,
+    color: 'text-blue-600',
+    bg: 'bg-blue-100 dark:bg-blue-900/40',
+  },
+  cardio: {
+    icon: HeartPulse,
+    color: 'text-rose-500',
+    bg: 'bg-rose-100 dark:bg-rose-900/40',
+  },
+  yoga: {
+    icon: Flower2,
+    color: 'text-emerald-500',
+    bg: 'bg-emerald-100 dark:bg-emerald-900/40',
+  },
+  powerlifting: {
+    icon: ArrowBigUp,
+    color: 'text-orange-600',
+    bg: 'bg-orange-100 dark:bg-orange-900/40',
+  },
+  'olympic weightlifting': {
+    icon: Zap,
+    color: 'text-yellow-500',
+    bg: 'bg-yellow-100 dark:bg-yellow-900/40',
+  },
+  strongman: {
+    icon: Hammer,
+    color: 'text-red-600',
+    bg: 'bg-red-100 dark:bg-red-900/40',
+  },
+  plyometrics: {
+    icon: ChevronsUp,
+    color: 'text-violet-500',
+    bg: 'bg-violet-100 dark:bg-violet-900/40',
+  },
+  stretching: {
+    icon: Expand,
+    color: 'text-teal-500',
+    bg: 'bg-teal-100 dark:bg-teal-900/40',
+  },
+  isometric: {
+    icon: Pause,
+    color: 'text-indigo-500',
+    bg: 'bg-indigo-100 dark:bg-indigo-900/40',
+  },
+};
+export const EXERCISE_MODALITY_OPTIONS = [
+  {
+    value: 'weight_reps',
+    labelKey: 'exercise.modality.weightReps',
+    defaultLabel: 'Weight & Reps',
+  },
+  {
+    value: 'reps_only',
+    labelKey: 'exercise.modality.repsOnly',
+    defaultLabel: 'Reps',
+  },
+  {
+    value: 'bodyweight_reps',
+    labelKey: 'exercise.modality.bodyweightReps',
+    defaultLabel: 'Bodyweight (+/− weight)',
+  },
+  {
+    value: 'weight_distance',
+    labelKey: 'exercise.modality.weightDistance',
+    defaultLabel: 'Weight & Distance (carries)',
+  },
+  {
+    value: 'weight_duration',
+    labelKey: 'exercise.modality.weightDuration',
+    defaultLabel: 'Weight & Duration (loaded holds)',
+  },
+  {
+    value: 'duration',
+    labelKey: 'exercise.modality.duration',
+    defaultLabel: 'Duration',
+  },
+  {
+    value: 'duration_distance',
+    labelKey: 'exercise.modality.durationDistance',
+    defaultLabel: 'Duration & Distance',
+  },
+] as const satisfies readonly {
+  value: ExerciseModality;
+  labelKey: string;
+  defaultLabel: string;
+}[];
+
+/**
+ * Seed set for a newly added exercise. Timed modalities start blank so a
+ * cardio or hold exercise is not saved with a placeholder rep count.
+ * Callers attach their own `id` / `_dndId`, which differ per host.
+ */
+export const defaultSetForModality = (
+  modality: ExerciseModality
+): WorkoutPresetSet =>
+  modality === 'duration' || modality === 'duration_distance'
+    ? {
+        set_number: 1,
+        set_type: 'Working Set',
+        reps: null,
+        weight: null,
+        duration: null,
+      }
+    : modality === 'weight_duration' || modality === 'weight_distance'
+      ? {
+          set_number: 1,
+          set_type: 'Working Set',
+          reps: null,
+          weight: null,
+          duration: null,
+        }
+      : { set_number: 1, set_type: 'Working Set', reps: 10, weight: null };
+
+export const DAYS_OF_WEEK = [
+  { id: 0, name: 'Sunday' },
+  { id: 1, name: 'Monday' },
+  { id: 2, name: 'Tuesday' },
+  { id: 3, name: 'Wednesday' },
+  { id: 4, name: 'Thursday' },
+  { id: 5, name: 'Friday' },
+  { id: 6, name: 'Saturday' },
+];
+
+export const CSV_DUMMY_DATA = [
+  {
+    entry_date: format(new Date(), 'MM/dd/yyyy'),
+    exercise_name: 'Barbell Bench Press',
+    preset_name: 'Upper Body Strength',
+    entry_notes: 'Feeling strong today',
+    calories_burned: '300',
+    distance: '',
+    avg_heart_rate: '',
+    set_number: '1',
+    set_type: 'Working Set',
+    reps: '10',
+    weight: '60.0',
+    duration_min: '1',
+    rest_time_sec: '90',
+    set_notes: 'Controlled movement',
+    exercise_category: 'strength',
+    calories_per_hour: '400',
+    exercise_description:
+      'A compound exercise for chest, shoulders, and triceps.',
+    exercise_source: 'CSV_Import',
+    exercise_force: 'push',
+    exercise_level: 'intermediate',
+    exercise_mechanic: 'compound',
+    exercise_equipment: 'barbell,bench',
+    primary_muscles: 'chest,triceps',
+    secondary_muscles: 'shoulders',
+    instructions: 'Lie on bench.\nUnrack bar.\nLower to chest.\nPress up.',
+    activity_field_name: 'Mood',
+    activity_value: 'Energized',
+  },
+  {
+    entry_date: format(new Date(), 'MM/dd/yyyy'),
+    exercise_name: 'Barbell Bench Press',
+    preset_name: 'Upper Body Strength',
+    entry_notes: '',
+    calories_burned: '',
+    distance: '',
+    avg_heart_rate: '',
+    set_number: '2',
+    set_type: 'Working Set',
+    reps: '8',
+    weight: '70.0',
+    duration_min: '1',
+    rest_time_sec: '120',
+    set_notes: 'Push harder',
+    exercise_category: '',
+    calories_per_hour: '',
+    exercise_description: '',
+    exercise_source: '',
+    exercise_force: '',
+    exercise_level: '',
+    exercise_mechanic: '',
+    exercise_equipment: '',
+    primary_muscles: '',
+    secondary_muscles: '',
+    instructions: '',
+    activity_field_name: 'RPE',
+    activity_value: '8',
+  },
+  {
+    entry_date: format(new Date(), 'MM/dd/yyyy'),
+    exercise_name: 'Outdoor Run',
+    preset_name: '',
+    entry_notes: 'Enjoyed the fresh air',
+    calories_burned: '250',
+    distance: '5.0',
+    avg_heart_rate: '160',
+    set_number: '',
+    set_type: '',
+    reps: '',
+    weight: '',
+    duration_min: '30',
+    rest_time_sec: '',
+    set_notes: '',
+    exercise_category: 'cardio',
+    calories_per_hour: '350',
+    exercise_description: 'Running outdoors for cardiovascular fitness.',
+    exercise_source: 'CSV_Import',
+    exercise_force: '',
+    exercise_level: 'beginner',
+    exercise_mechanic: '',
+    exercise_equipment: '',
+    primary_muscles: 'quadriceps,hamstrings,calves',
+    secondary_muscles: '',
+    instructions: 'Run at a steady pace.',
+    activity_field_name: 'Route',
+    activity_value: 'Park Loop',
+  },
+];
+
+export const requiredHeaders = [
+  'name',
+  'category',
+  'calories_per_hour',
+  'description',
+  'force',
+  'level',
+  'mechanic',
+  'equipment',
+  'primary_muscles',
+  'secondary_muscles',
+  'instructions',
+  'images',
+  'is_custom',
+  'shared_with_public',
+];
+
+export const textFields = new Set(['name', 'category', 'description']);
+export const booleanFields = new Set(['is_custom', 'shared_with_public']);
+export const arrayFields = new Set([
+  'equipment',
+  'primary_muscles',
+  'secondary_muscles',
+  'instructions',
+  'images',
+]);
+
+// instead of using input for Level, Force & Mechanic, use dropdowns with predefined options for better data consistency
+export const dropdownFields = new Set(['force', 'level', 'mechanic']);
+export const dropdownOptions: Record<string, string[]> = {
+  level: ['beginner', 'intermediate', 'expert'],
+  force: ['pull', 'push', 'static'],
+  mechanic: ['isolation', 'compound'],
+};
+
+export const DROPDOWN_GUIDES = [
+  {
+    key: 'levelLabel',
+    get label() {
+      return i18n.t('exercises.level', 'Level:');
+    },
+    options: dropdownOptions['level'],
+  },
+  {
+    key: 'forceLabel',
+    get label() {
+      return i18n.t('exercises.force', 'Force:');
+    },
+    options: dropdownOptions['force'],
+  },
+  {
+    key: 'mechanicLabel',
+    get label() {
+      return i18n.t('exercises.mechanic', 'Mechanic:');
+    },
+    options: dropdownOptions['mechanic'],
+  },
+];
+
+/**
+ * `duration_distance` exercises use the entry-level cardio editor, so the set
+ * table only ever renders these three layouts.
+ */
+export type SetTableModality = Exclude<ExerciseModality, 'duration_distance'>;
+
+export const SET_TABLE_LAYOUT: Record<
+  SetTableModality,
+  {
+    gridClass: string;
+    /** Same grid with one extra column for RIR (diary entries only). */
+    gridClassWithRir: string;
+    showReps: boolean;
+    showWeight: boolean;
+    /** Carries record a distance (metres/yards) in place of reps. */
+    showDistance: boolean;
+    /**
+     * The weight column is added (+) or assisting (−) weight on top of body
+     * weight, so it takes negatives and is labelled as such.
+     */
+    signedWeight: boolean;
+  }
+> = {
+  weight_reps: {
+    gridClass:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: true,
+    showWeight: true,
+    showDistance: false,
+    signedWeight: false,
+  },
+  bodyweight_reps: {
+    gridClass:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: true,
+    showWeight: true,
+    showDistance: false,
+    signedWeight: true,
+  },
+  reps_only: {
+    gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: true,
+    showWeight: false,
+    showDistance: false,
+    signedWeight: false,
+  },
+  duration: {
+    gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: false,
+    showWeight: false,
+    showDistance: false,
+    signedWeight: false,
+  },
+  // Loaded holds: weight plus the always-present duration column.
+  weight_duration: {
+    gridClass: 'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: false,
+    showWeight: true,
+    showDistance: false,
+    signedWeight: false,
+  },
+  // Carries: weight and distance (in the reps slot) plus optional duration.
+  weight_distance: {
+    gridClass:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    gridClassWithRir:
+      'grid grid-cols-[20px_140px_1fr_1fr_1fr_1fr_1fr_1fr_72px] gap-1.5 grow',
+    showReps: false,
+    showWeight: true,
+    showDistance: true,
+    signedWeight: false,
+  },
+};
+
+export const toSetTableModality = (
+  modality: ExerciseModality
+): SetTableModality =>
+  modality === 'duration_distance' ? 'duration' : modality;
+
+export const SET_TYPE_STYLES: Record<string, string> = {
+  Normal: 'bg-muted text-muted-foreground',
+  'Working Set': 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+  'Warm-up': 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
+  'Drop Set': 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300',
+  Failure: 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
+  AMRAP: 'bg-purple-50 text-purple-700 dark:bg-purple-950 dark:text-purple-300',
+  'Back-off': 'bg-teal-50 text-teal-700 dark:bg-teal-950 dark:text-teal-300',
+  'Rest-Pause':
+    'bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300',
+  Cluster:
+    'bg-yellow-50 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300',
+  Technique: 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300',
+  Isometric:
+    'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300',
+};

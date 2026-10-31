@@ -1,0 +1,553 @@
+import { screen, fireEvent, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
+import MealBuilder from '@/components/MealBuilder';
+import { updateFoodEntryMeal } from '@/api/Diary/foodEntryService';
+import { renderWithClient } from '../test-utils';
+
+// Mock react-i18next
+jest.mock('react-i18next', () =>
+  jest.requireActual('@/tests/mocks/reactI18next')
+);
+
+// Mock contexts
+jest.mock('@/contexts/ActiveUserContext', () => ({
+  useActiveUser: () => ({ activeUserId: 'test-user-id' }),
+}));
+jest.mock('@/contexts/PreferencesContext', () => ({
+  usePreferences: () => ({
+    loggingLevel: 'debug',
+    itemDisplayLimit: 100,
+    nutrientDisplayPreferences: [
+      {
+        view_group: 'quick_info',
+        platform: 'desktop',
+        visible_nutrients: ['calories', 'protein', 'carbs', 'fat'],
+      },
+    ],
+    energyUnit: 'kcal' as const,
+    convertEnergy: (value: number) => value,
+  }),
+}));
+
+// Mock toast
+const mockToast = jest.fn();
+jest.mock('@/hooks/use-toast', () => ({
+  toast: (...args: unknown[]) => mockToast(...args),
+}));
+
+// Mock logging
+jest.mock('@/utils/logging', () => ({
+  debug: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+}));
+
+// Mock services
+const mockCreateMeal = jest.fn();
+const mockUpdateMeal = jest.fn();
+const mockGetMealById = jest.fn();
+jest.mock('@/api/Foods/meals', () => ({
+  createMeal: (...args: unknown[]) => mockCreateMeal(...args),
+  updateMeal: (...args: unknown[]) => mockUpdateMeal(...args),
+  getMealById: (...args: unknown[]) => mockGetMealById(...args),
+}));
+
+jest.mock('@/api/Diary/foodEntryService', () => ({
+  createFoodEntryMeal: jest.fn(),
+  updateFoodEntryMeal: jest.fn(),
+  getFoodEntryMealWithComponents: jest.fn(),
+}));
+
+// Mock complex sub-components as simple stubs
+jest.mock('@/components/FoodUnitSelector', () => {
+  return function MockFoodUnitSelector() {
+    return <div data-testid="food-unit-selector">FoodUnitSelector</div>;
+  };
+});
+
+jest.mock('@/components/FoodSearch/FoodSearchDialog', () => {
+  return function MockFoodSearchDialog() {
+    return <div data-testid="food-search-dialog">FoodSearchDialog</div>;
+  };
+});
+
+const sampleFoods = [
+  {
+    food_id: 'food1',
+    food_name: 'Apple',
+    variant_id: 'v1',
+    quantity: 1,
+    unit: 'piece',
+    calories: 95,
+    protein: 0.5,
+    carbs: 25,
+    fat: 0.3,
+    serving_size: 1,
+    serving_unit: 'piece',
+  },
+];
+
+describe('MealBuilder', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('saves a detached diary snapshot without recreating its library food', async () => {
+    const ingredient = sampleFoods[0];
+    if (!ingredient) throw new Error('Missing meal fixture ingredient');
+    const detached = {
+      ...ingredient,
+      food_id: undefined,
+      variant_id: undefined,
+    };
+    renderWithClient(
+      <MealBuilder
+        initialFoods={[detached]}
+        source="food-diary"
+        foodEntryId="entry-1"
+        foodEntryDate="2026-10-16"
+        foodEntryMealType="dinner"
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'Edited meal' },
+    });
+    fireEvent.click(screen.getByText('Update Entry'));
+    await waitFor(() =>
+      expect(updateFoodEntryMeal).toHaveBeenCalledWith(
+        'entry-1',
+        expect.objectContaining({
+          name: 'Edited meal',
+          foods: [expect.objectContaining(detached)],
+        })
+      )
+    );
+    expect(mockCreateMeal).not.toHaveBeenCalled();
+  });
+
+  it('gives a photo-built diary meal the full serving model', async () => {
+    // A new custom meal in the diary (no mealId, no foodEntryId) is the photo
+    // path: the ingredients are a whole dish, so it gets the same unit +
+    // amount + serving size controls a saved meal has, plus how much was eaten.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByLabelText('Quantity Consumed (serving)')
+    ).toBeInTheDocument();
+    // The unit is a real choice here, unlike the template-backed diary flows.
+    expect(screen.getByRole('combobox')).toBeEnabled();
+  });
+
+  it('calculates the consumed meal quantity and updates nutrition', async () => {
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+    const input = await screen.findByLabelText('Quantity Consumed (serving)');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '1/2' } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue('0.5');
+    expect(
+      screen
+        .getAllByText((_content, element) =>
+          /^Calories:/.test(element?.textContent ?? '')
+        )
+        .at(-1)?.textContent
+    ).toMatch(/48/);
+    fireEvent.change(input, { target: { value: '1/0' } });
+    expect(screen.getByRole('button', { name: 'Update Entry' })).toBeDisabled();
+  });
+
+  it('toggles diary nutrition between the consumed portion and the whole dish', async () => {
+    // The diary dialog shows the portion by default, but the whole-dish totals
+    // have to stay reachable so the ingredient list above (which is always at
+    // dish scale) can be reconciled against a number.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
+    });
+
+    // The label and value are separate text nodes, so read the row's textContent.
+    const caloriesRow = () =>
+      screen
+        .getAllByText((_content, element) =>
+          /^Calories:/.test(element?.textContent ?? '')
+        )
+        .at(-1)?.textContent;
+
+    // Default: one serving of a dish that yields one, so the portion is all of it.
+    expect(screen.getByRole('tab', { name: 'Consumed' })).toBeInTheDocument();
+    expect(caloriesRow()).toMatch(/95/);
+
+    // Yield 4, still one serving consumed: the portion is a quarter (95/4,
+    // shown rounded)...
+    fireEvent.change(screen.getByLabelText('Total Servings'), {
+      target: { value: '4' },
+    });
+    await waitFor(() => {
+      expect(caloriesRow()).toMatch(/24/);
+    });
+
+    // ...while Total keeps showing the whole dish.
+    // Radix tabs activate on mousedown, not click.
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Total' }));
+    await waitFor(() => {
+      expect(caloriesRow()).toMatch(/95/);
+    });
+  });
+
+  it('keeps the unit locked and shows whole dish yield when logging or editing a template-backed meal', async () => {
+    // Risk guard: these two dialogs share this component. In diary mode the unit
+    // is locked to preserve ingredient math, while the whole-dish yield and
+    // consumed quantity are both visible and editable.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryId="entry-1"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Quantity Consumed (serving)')
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByRole('combobox')).toBeDisabled();
+    expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
+  });
+
+  it('rounds derived total_servings for non-serving meals before saving', async () => {
+    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
+
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        initialServingUnit="ml"
+        initialServingSize={333}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+
+    fireEvent.change(screen.getByLabelText('Total Amount (ml)'), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText('Default Serving Size (ml)'), {
+      target: { value: '333' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    await waitFor(() => {
+      expect(mockCreateMeal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serving_unit: 'ml',
+          serving_size: 333,
+          total_servings: 3.003003,
+        }),
+        []
+      );
+    });
+  });
+
+  it('renders in create mode with correct labels', () => {
+    renderWithClient(<MealBuilder />);
+
+    expect(screen.getByText('Meal Name')).toBeInTheDocument();
+    expect(screen.getByText('Description (Optional)')).toBeInTheDocument();
+    expect(screen.getByText('Share with Public')).toBeInTheDocument();
+    expect(screen.getByText('Save Meal')).toBeInTheDocument();
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+    expect(screen.getByText('Add Food')).toBeInTheDocument();
+  });
+
+  it('shows empty state message when no foods added', () => {
+    renderWithClient(<MealBuilder />);
+    expect(
+      screen.getByText('No foods added to this meal yet.')
+    ).toBeInTheDocument();
+  });
+
+  it('shows validation error when saving with no foods', () => {
+    renderWithClient(<MealBuilder />);
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Error',
+      description: 'A meal must contain at least one food item.',
+      variant: 'destructive',
+    });
+  });
+
+  it('shows validation error for empty meal name when foods exist', async () => {
+    renderWithClient(<MealBuilder initialFoods={sampleFoods} />);
+
+    // useEffect sets name to 'Logged Meal' — wait for it, then clear it
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Error',
+      description: 'Meal name cannot be empty.',
+      variant: 'destructive',
+    });
+  });
+
+  it('loads existing meal data in edit mode', async () => {
+    const mockMeal = {
+      id: 'meal1',
+      name: 'Test Meal',
+      description: 'A test description',
+      is_public: true,
+      serving_size: 1,
+      serving_unit: 'serving',
+      foods: sampleFoods,
+    };
+    mockGetMealById.mockResolvedValue(mockMeal);
+
+    renderWithClient(<MealBuilder mealId="meal1" />);
+
+    await waitFor(() => {
+      expect(mockGetMealById).toHaveBeenCalledWith('meal1');
+    });
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Test Meal')).toBeInTheDocument();
+      expect(
+        screen.getByDisplayValue('A test description')
+      ).toBeInTheDocument();
+      expect(screen.getByText('Apple')).toBeInTheDocument();
+    });
+  });
+
+  it('calls createMeal on save with valid data', async () => {
+    const mockResult = { id: 'new-meal', name: 'My Meal', foods: sampleFoods };
+    mockCreateMeal.mockResolvedValue(mockResult);
+    const onSave = jest.fn();
+
+    renderWithClient(
+      <MealBuilder initialFoods={sampleFoods} onSave={onSave} />
+    );
+
+    // Set meal name
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    await waitFor(() => {
+      expect(mockCreateMeal).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'My Meal' }),
+        // No image files staged in this flow.
+        []
+      );
+    });
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith();
+    });
+  });
+
+  it('calls updateMeal when saving in edit mode', async () => {
+    const mockMeal = {
+      id: 'meal1',
+      name: 'Original',
+      description: '',
+      is_public: false,
+      serving_size: 1,
+      serving_unit: 'serving',
+      foods: sampleFoods,
+    };
+    mockGetMealById.mockResolvedValue(mockMeal);
+    const mockUpdated = { ...mockMeal, name: 'Updated' };
+    mockUpdateMeal.mockResolvedValue(mockUpdated);
+    const onSave = jest.fn();
+
+    renderWithClient(<MealBuilder mealId="meal1" onSave={onSave} />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('Original')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'Updated' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    await waitFor(() => {
+      expect(mockUpdateMeal).toHaveBeenCalledWith(
+        'meal1',
+        expect.objectContaining({ name: 'Updated' }),
+        // No image files staged in this flow.
+        []
+      );
+    });
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith();
+    });
+  });
+
+  // Regression: review fix #1.
+  // Without this validation, the save handler used `parseFloat(x) || 1` which
+  // silently coerced 0 / NaN to 1 and sent valid-looking data to the server.
+  it('shows a validation toast (not a silent save) when Total Servings is 0', async () => {
+    renderWithClient(<MealBuilder initialFoods={sampleFoods} />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+
+    // Default unit is 'serving', so the Total Servings input is visible.
+    fireEvent.change(screen.getByLabelText('Total Servings'), {
+      target: { value: '0' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Error',
+      description: 'Total servings must be greater than zero.',
+      variant: 'destructive',
+    });
+    expect(mockCreateMeal).not.toHaveBeenCalled();
+  });
+
+  // Regression: review fix #1 (non-serving branch).
+  it('shows a validation toast when Total Amount is empty for a non-serving meal', async () => {
+    // Start in ml mode directly via prop — avoids interacting with the shadcn Select.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        initialServingUnit="ml"
+        initialServingSize={250}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Amount (ml)')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Total Amount (ml)'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    expect(mockToast).toHaveBeenCalledWith({
+      title: 'Error',
+      description: 'Total amount must be greater than zero.',
+      variant: 'destructive',
+    });
+    expect(mockCreateMeal).not.toHaveBeenCalled();
+  });
+
+  // Regression: P1 Codex finding.
+  // After editing in a quantity-based unit and toggling back to 'serving',
+  // total_servings must be DERIVED from totalAmount / servingSize, not left as
+  // the stale value the field had before the user entered ml mode.
+  it('derives total_servings from totalAmount/servingSize when toggling ml → serving', async () => {
+    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
+
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        initialServingUnit="ml"
+        initialServingSize={250}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Amount (ml)')).toBeInTheDocument();
+    });
+
+    // 2000 ml batch with 250 ml servings = 8 servings.
+    fireEvent.change(screen.getByLabelText('Total Amount (ml)'), {
+      target: { value: '2000' },
+    });
+    fireEvent.change(screen.getByLabelText('Default Serving Size (ml)'), {
+      target: { value: '250' },
+    });
+
+    // Toggle BACK to 'serving' via the shadcn Select. SelectTrigger renders
+    // a button with role="combobox" (Radix). The label htmlFor isn't wired to
+    // an id on the trigger, so query by role instead.
+    const unitTrigger = screen.getByRole('combobox');
+    fireEvent.click(unitTrigger);
+    const servingOption = await screen.findByRole('option', {
+      name: /serving/i,
+    });
+    fireEvent.click(servingOption);
+
+    // After toggle: serving_size resets to 1 (tautological) AND
+    // total_servings is derived from the pre-toggle totalAmount/servingSize.
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Servings')).toHaveValue(8);
+    });
+
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    await waitFor(() => {
+      expect(mockCreateMeal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serving_unit: 'serving',
+          serving_size: 1,
+          total_servings: 8,
+        }),
+        // No image files staged in this flow.
+        []
+      );
+    });
+  });
+});

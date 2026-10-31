@@ -1,0 +1,266 @@
+import { apiCall } from '../api';
+
+import type {
+  Food,
+  FoodDataForBackend,
+  FoodDeletionImpact,
+  FoodDeleteMode,
+} from '@/types/food';
+import { MealFilter } from '@/types/meal';
+import {
+  barcodeLookupResponseSchema,
+  barcodeAlternativesResponseSchema,
+  type BarcodeLookupResponse,
+  type BarcodeAlternativesResponse,
+} from '@workspace/shared';
+
+interface FoodPayload {
+  name: string;
+  brand?: string;
+  notes?: string | null;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  serving_size: number;
+  serving_unit: string;
+  is_custom?: boolean;
+  user_id?: string;
+  shared_with_public?: boolean;
+  provider_external_id?: string;
+  provider_type?: string;
+  provider_verified?: boolean;
+  saturated_fat?: number;
+  polyunsaturated_fat?: number;
+  monounsaturated_fat?: number;
+  trans_fat?: number;
+  cholesterol?: number;
+  sodium?: number;
+  potassium?: number;
+  dietary_fiber?: number;
+  sugars?: number;
+  vitamin_a?: number;
+  vitamin_c?: number;
+  calcium?: number;
+  iron?: number;
+  caffeine_mg?: number;
+  water_ml?: number;
+  alcohol_g?: number;
+  abv_percent?: number;
+  custom_nutrients?: Record<string, string | number>;
+}
+
+interface LoadFoodsResponse {
+  foods: Food[];
+  totalCount: number;
+}
+export const loadFoods = async (
+  searchTerm: string,
+  foodFilter: MealFilter,
+  currentPage: number,
+  itemsPerPage: number,
+  sortBy: string = 'name:asc', // Default sort by name ascending
+  userId?: string,
+  providerType?: string
+): Promise<LoadFoodsResponse> => {
+  const params = new URLSearchParams();
+  if (searchTerm) {
+    // Only add searchTerm if it's not empty
+    params.append('searchTerm', searchTerm);
+  }
+  params.append('foodFilter', foodFilter);
+  params.append('currentPage', currentPage.toString());
+  params.append('itemsPerPage', itemsPerPage.toString());
+  if (userId) params.append('userId', userId);
+  params.append('sortBy', sortBy); // Add sortBy parameter
+  if (providerType && providerType !== 'all') {
+    params.append('providerType', providerType);
+  }
+  const response = await apiCall(
+    `/foods/foods-paginated?${params.toString()}`,
+    {
+      method: 'GET',
+    }
+  );
+  return response;
+};
+
+export const togglePublicSharing = async (
+  foodId: string,
+  currentState: boolean
+): Promise<void> => {
+  return apiCall(`/foods/${foodId}`, {
+    method: 'PUT',
+    body: { shared_with_public: !currentState },
+  });
+};
+
+export const deleteFood = async (
+  foodId: string,
+  mode: FoodDeleteMode = 'delete',
+  userId?: string,
+  currentClientDate?: string
+): Promise<{ message: string; status: string }> => {
+  const params = new URLSearchParams({ mode });
+  if (userId) params.append('userId', userId);
+  if (currentClientDate) params.append('currentClientDate', currentClientDate);
+  return apiCall(`/foods/${foodId}?${params.toString()}`, {
+    method: 'DELETE',
+  });
+};
+
+export const createFood = async (payload: FoodPayload): Promise<Food> => {
+  return apiCall('/foods', {
+    method: 'POST',
+    body: payload,
+  });
+};
+
+export const getFoodDeletionImpact = async (
+  foodId: string
+): Promise<FoodDeletionImpact> => {
+  const response = await apiCall(`/foods/${foodId}/deletion-impact`, {
+    method: 'GET',
+  });
+  return response;
+};
+
+export const getFoodById = async (foodId: string): Promise<Food> => {
+  return apiCall(`/foods/${foodId}`, {
+    method: 'GET',
+  });
+};
+
+/**
+ * `syncImages` true forces the food's current photos onto every matching past
+ * entry, replacing photos the user set on individual diary entries; false
+ * rewrites nutrition only and leaves every entry's photo untouched.
+ */
+export const updateFoodEntriesSnapshot = async (
+  foodId: string,
+  syncImages: boolean = true
+): Promise<void> => {
+  return apiCall(`/foods/update-snapshot`, {
+    method: 'POST',
+    body: { foodId, syncImages },
+  });
+};
+
+/**
+ * Re-fetches a food's details from the external source it was imported from.
+ * Returns the refreshed data without saving anything — the caller applies it
+ * to the open form and persists it on save.
+ */
+export const refreshFoodFromSource = async (
+  foodId: string
+): Promise<{ food: Food }> => {
+  return apiCall(`/foods/${foodId}/refresh-from-source`, {
+    method: 'POST',
+  });
+};
+
+export const getRecentAndTopFoods = async (
+  limit: number,
+  mealType?: string
+) => {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (mealType) params.append('mealType', mealType);
+
+  return apiCall(`/foods?${params.toString()}`);
+};
+
+/**
+ * Name lookup used to match an incoming meal food against an existing food
+ * before creating a duplicate. Not the dialog's user-facing search: that one
+ * paginates through `loadFoods`.
+ */
+export const lookupFoodsByName = async (term: string, limit: number) => {
+  const params = new URLSearchParams({
+    name: term,
+    broadMatch: 'true',
+    limit: limit.toString(),
+  });
+
+  return apiCall(`/foods?${params.toString()}`);
+};
+
+export const importFoodsFromCsv = async (
+  foods: FoodDataForBackend[],
+  overwrite = false
+): Promise<void> => {
+  await apiCall('/foods/import-from-csv', {
+    method: 'POST',
+    body: JSON.stringify({ foods, overwrite }),
+  });
+};
+
+// --- V2 API functions ---
+
+export interface V2SearchResponse {
+  foods: Food[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalCount: number;
+    hasMore: boolean;
+  };
+}
+
+export const searchFoodsV2 = async (
+  providerType: string,
+  query: string,
+  providerId?: string,
+  page?: number,
+  pageSize?: number,
+  autoScale?: boolean
+): Promise<V2SearchResponse> => {
+  const params: Record<string, string> = { query };
+  if (providerId) params['providerId'] = providerId;
+  if (page) params['page'] = String(page);
+  if (pageSize) params['pageSize'] = String(pageSize);
+  if (autoScale !== undefined) params['autoScale'] = String(autoScale);
+
+  return apiCall(`/v2/foods/search/${providerType}`, {
+    method: 'GET',
+    params,
+  });
+};
+
+export const searchBarcodeV2 = async (
+  barcode: string,
+  providerId?: string
+): Promise<BarcodeLookupResponse> => {
+  const params: Record<string, string> = {};
+  if (providerId) params['providerId'] = providerId;
+
+  return barcodeLookupResponseSchema.parse(
+    await apiCall(`/v2/foods/barcode/${barcode}`, {
+      method: 'GET',
+      params,
+    })
+  );
+};
+
+export const getBarcodeAlternatives = async (
+  barcode: string
+): Promise<BarcodeAlternativesResponse> =>
+  barcodeAlternativesResponseSchema.parse(
+    await apiCall(`/v2/foods/barcode/${barcode}/alternatives`, {
+      method: 'GET',
+      suppressErrorToast: true,
+    })
+  );
+
+export const getFoodDetailsV2 = async (
+  providerType: string,
+  externalId: string,
+  providerId?: string
+): Promise<Food> => {
+  const params: Record<string, string> = {};
+  if (providerId) params['providerId'] = providerId;
+
+  return apiCall(`/v2/foods/details/${providerType}/${externalId}`, {
+    method: 'GET',
+    params,
+  });
+};

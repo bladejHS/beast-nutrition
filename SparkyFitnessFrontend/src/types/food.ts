@@ -1,0 +1,276 @@
+import { FormFoodVariant } from '@/utils/foodForm';
+import type { FoodProviderType } from '@workspace/shared';
+
+export type GlycemicIndex =
+  'None' | 'Very Low' | 'Low' | 'Medium' | 'High' | 'Very High';
+
+export interface FoodVariant {
+  id?: string;
+  serving_size: number;
+  serving_unit: string;
+  serving_description?: string;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  saturated_fat?: number;
+  polyunsaturated_fat?: number;
+  monounsaturated_fat?: number;
+  trans_fat?: number;
+  cholesterol?: number;
+  sodium?: number;
+  potassium?: number;
+  dietary_fiber?: number;
+  sugars?: number;
+  vitamin_a?: number;
+  vitamin_c?: number;
+  calcium?: number;
+  iron?: number;
+  caffeine_mg?: number;
+  water_ml?: number;
+  alcohol_g?: number;
+  abv_percent?: number;
+  is_default?: boolean;
+  is_locked?: boolean;
+  glycemic_index?: GlycemicIndex;
+  custom_nutrients?: Record<string, string | number>;
+  // All nutrient fields the provider reported, keyed by the provider's EXACT
+  // label (e.g. "Magnesium, Mg"). Import-only (present on provider search/detail
+  // results, never persisted); used to let users discover and add aliases.
+  provider_nutrients?: Record<string, number>;
+  // Unit per provider field (same label keys as provider_nutrients), when the
+  // provider reports units (USDA, OFF). Import-only; used to prefill/display
+  // a custom nutrient's unit.
+  provider_nutrient_units?: Record<string, string>;
+  source?: 'manual' | 'ai_estimate' | 'imported';
+  ai_confidence?: 'high' | 'medium' | 'low' | null;
+  allergens?: string[] | null;
+  traces?: string[] | null;
+}
+
+export interface Food {
+  id: string;
+  name: string;
+  brand?: string | null;
+  /**
+   * Image paths for this food. Locally uploaded images are server-relative
+   * (`/uploads/foods/<id>/...`); provider images that failed to download stay
+   * as absolute URLs.
+   */
+  images?: string[];
+  /**
+   * Single upstream image on a provider search result that has not been
+   * imported yet. Once imported the downloaded copy lives in `images`.
+   */
+  image_url?: string | null;
+  /**
+   * Full-size counterpart of `image_url`, when a provider serves more than one
+   * size. The UI shows the smaller `image_url` and falls back to this if that
+   * file is missing; imports always archive this one.
+   */
+  image_source_url?: string | null;
+  is_custom: boolean;
+  user_id?: string;
+  shared_with_public?: boolean;
+  barcode?: string | null;
+  provider_external_id?: string;
+  provider_type?: FoodProviderType | 'nutritionix';
+  provider_verified?: boolean;
+  default_variant?: FoodVariant;
+  variants?: FoodVariant[];
+  is_quick_food?: boolean;
+  glycemic_index?: GlycemicIndex;
+  custom_nutrients?: Record<string, string | number>; // New field for custom nutrients
+  /**
+   * Owner-authored markdown reference note (how the user orders or prepares
+   * this food, a recipe). Shown read-only when logging the food; only the
+   * owner can edit it.
+   */
+  notes?: string | null;
+  // ISO timestamp of when the current user starred this food. Present only on
+  // items returned by the favorites endpoint; used to order the Favorites list.
+  favorited_at?: string;
+}
+
+/**
+ * What a delete should do to everything pointing at the food.
+ *
+ * - `hide` stops it appearing in search and changes nothing else.
+ * - `delete` removes it from the library and from meals/meal plans, keeping
+ *   diary history (entries carry their own snapshot).
+ * - `delete_with_history` also removes the caller's own diary entries.
+ *
+ * Another user's diary is never affected; if anyone else still references the
+ * food the server hides it instead and says so in `status`.
+ */
+export type FoodDeleteMode = 'hide' | 'delete' | 'delete_with_history';
+
+export interface FoodDeletionImpact {
+  foodEntries: FoodEntryDeletionImpact[];
+  foodEntriesCount: number;
+  mealFoodsCount: number;
+  mealPlansCount: number;
+  mealPlanTemplateAssignmentsCount: number;
+  totalReferences: number;
+  currentUserReferences: number;
+  otherUserReferences: number;
+  isPubliclyShared: boolean;
+  familySharedUsers: string[];
+}
+
+export type FoodEntryDeletionImpact = Pick<
+  FoodEntry,
+  'id' | 'entry_date' | 'meal_type_id'
+> & { isCurrentUser: boolean };
+
+export interface FoodEntry {
+  id: string;
+  food_id?: string; // Make optional as it might be a meal_id
+  meal_id?: string; // New field for aggregated meals - will be deprecated/null for new meal component entries
+  food_entry_meal_id?: string; // New field to link to food_entry_meals parent
+  meal_type: string;
+  meal_type_id?: string;
+  quantity: number;
+  unit: string;
+  variant_id?: string;
+  foods?: Food; // Still useful for relations
+  food_variants?: FoodVariant;
+  food_name?: string; // Snapshotted food name
+  brand_name?: string; // Snapshotted brand name
+  entry_date: string;
+  entry_time?: string | null;
+  meal_plan_template_id?: string;
+  /**
+   * Per-entry override photos. Apply only to this diary entry and never change
+   * the parent food/meal. Empty means "fall back to `food_images`".
+   */
+  images?: string[] | null;
+  /** The parent food's own images, used as the fallback when no override. */
+  food_images?: string[] | null;
+  /**
+   * Per-occurrence markdown note. Independent of the parent food's `notes`,
+   * which is shown alongside it rather than copied into it.
+   */
+  notes?: string | null;
+  // Snapshotted nutrient data
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  saturated_fat?: number;
+  polyunsaturated_fat?: number;
+  monounsaturated_fat?: number;
+  trans_fat?: number;
+  cholesterol?: number;
+  sodium?: number;
+  potassium?: number;
+  dietary_fiber?: number;
+  sugars?: number;
+  vitamin_a?: number;
+  vitamin_c?: number;
+  calcium?: number;
+  iron?: number;
+  caffeine_mg?: number;
+  // Log-time snapshot of the variant's water content (ml). Falls back to the
+  // entry's logged volume client-side when unset -- see foodVolumeToMl in
+  // utils/nutritionCalculations.ts.
+  water_ml?: number;
+  alcohol_g?: number;
+  glycemic_index?: GlycemicIndex;
+  serving_size?: number;
+  custom_nutrients?: Record<string, string | number>;
+  allergens?: string[] | null;
+  traces?: string[] | null;
+}
+
+export interface CSVData {
+  id: string;
+
+  name: string;
+  brand?: string;
+  is_custom: boolean;
+  shared_with_public?: boolean;
+  is_quick_food?: boolean;
+
+  serving_size: number;
+  serving_unit: string;
+  is_default?: boolean;
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  saturated_fat?: number;
+  polyunsaturated_fat?: number;
+  monounsaturated_fat?: number;
+  trans_fat: number;
+  cholesterol: number;
+  sodium: number;
+  potassium: number;
+  dietary_fiber: number;
+  sugars: number;
+  vitamin_a: number;
+  vitamin_c: number;
+  calcium: number;
+  iron: number;
+  custom_nutrients?: Record<string, string | number>; // New field for custom nutrients
+}
+
+export interface NutritionixItem {
+  id?: string;
+  name: string;
+  food_name?: string;
+  brand?: string | null;
+  brand_name?: string;
+  image?: string;
+  serving_size?: number;
+  serving_unit?: string;
+  calories?: number;
+  protein?: number;
+  carbs?: number;
+  fat?: number;
+  saturated_fat?: number;
+  polyunsaturated_fat?: number;
+  monounsaturated_fat?: number;
+  trans_fat?: number;
+  cholesterol?: number;
+  sodium?: number;
+  potassium?: number;
+  dietary_fiber?: number;
+  sugars?: number;
+  vitamin_a?: number;
+  vitamin_c?: number;
+  calcium?: number;
+  iron?: number;
+  glycemic_index?: GlycemicIndex;
+}
+
+export type FoodDataForBackend = Omit<CSVData, 'id'>;
+
+export type NumericFoodVariantKeys = Exclude<
+  keyof FoodVariant,
+  | 'id'
+  | 'serving_unit'
+  | 'serving_description'
+  | 'is_default'
+  | 'is_locked'
+  | 'glycemic_index'
+  | 'custom_nutrients'
+  | 'provider_nutrients'
+  | 'provider_nutrient_units'
+  // AI-Assisted Unit Conversions provenance — these are strings/enums, not
+  // numerics, so the form-variant `string | ''` mapping must not include them.
+  | 'user_id'
+  | 'source'
+  | 'ai_confidence'
+  | 'allergens'
+  | 'traces'
+>;
+export interface EquivalentUnit {
+  id?: string;
+  serving_size: number;
+  serving_unit: string;
+}
+
+export type FormFoodVariantWithEquivalents = FormFoodVariant & {
+  equivalents?: EquivalentUnit[];
+};

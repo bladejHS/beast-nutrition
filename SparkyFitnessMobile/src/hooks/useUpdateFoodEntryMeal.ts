@@ -1,0 +1,67 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import Toast from 'react-native-toast-message';
+import i18n from '../localization/i18n';
+import { updateFoodEntryMeal } from '../services/api/foodEntryMealsApi';
+import type {
+  FoodEntryMeal,
+  FoodEntryMealUpdateData,
+} from '../types/foodEntryMeals';
+import { normalizeDate } from '../utils/dateUtils';
+import { foodEntryMealDetailQueryKey } from './queryKeys';
+import { invalidateFoodCache } from './invalidateFoodCache';
+import { invalidateMealUsageCaches } from './useMeals';
+
+interface UseUpdateFoodEntryMealOptions {
+  mealId: string;
+  entryDate: string;
+  onSuccess?: (meal: FoodEntryMeal) => void;
+}
+
+export function useUpdateFoodEntryMeal({
+  mealId,
+  entryDate,
+  onSuccess,
+}: UseUpdateFoodEntryMealOptions) {
+  const queryClient = useQueryClient();
+  const normalizedDate = normalizeDate(entryDate);
+
+  const mutation = useMutation({
+    mutationFn: (payload: FoodEntryMealUpdateData) =>
+      updateFoodEntryMeal(mealId, payload),
+    onSuccess: (meal) => {
+      onSuccess?.(meal);
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error && error.message.includes('403')
+          ? i18n.t('editLoggedMeal.errors.permission', {
+              defaultValue: "You don't have permission to edit this meal.",
+            })
+          : i18n.t('common.tryAgain', { defaultValue: 'Please try again.' });
+      Toast.show({
+        type: 'error',
+        text1: i18n.t('editLoggedMeal.errors.saveFailed', {
+          defaultValue: 'Failed to save meal',
+        }),
+        text2: message,
+      });
+    },
+  });
+
+  const invalidateCache = (newDate?: string) => {
+    invalidateFoodCache(queryClient, normalizedDate);
+    if (newDate && newDate !== normalizedDate) {
+      invalidateFoodCache(queryClient, newDate);
+    }
+    queryClient.invalidateQueries({
+      queryKey: foodEntryMealDetailQueryKey(mealId),
+    });
+    invalidateMealUsageCaches(queryClient);
+  };
+
+  return {
+    updateMeal: mutation.mutate,
+    isPending: mutation.isPending,
+    invalidateCache,
+  };
+}

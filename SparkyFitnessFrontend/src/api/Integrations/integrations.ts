@@ -1,0 +1,144 @@
+import { apiCall } from '@/api/api';
+
+interface IntegrationPayload {
+  code: string;
+  state: string | null;
+  redirect_uri?: string;
+}
+export const linkFitbitAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/fitbit/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+export const linkOuraAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/oura/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+export const linkWithingsAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/withings/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+export const linkPolarFlowAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/polar/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+
+export const linkCorosAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/coros/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+
+export const linkStravaAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/strava/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+
+export const linkGoogleHealthAccount = async (
+  data: IntegrationPayload
+): Promise<void> => {
+  return apiCall('/integrations/googlehealth/callback', {
+    method: 'POST',
+    body: data,
+  });
+};
+
+export const syncHevyData = async (
+  fullSync: boolean = false,
+  providerId?: string,
+  startDate?: string,
+  endDate?: string,
+  mock?: { saveMockData?: boolean; dataSource?: string }
+): Promise<void> => {
+  return apiCall(`/integrations/hevy/sync${fullSync ? '?fullSync=true' : ''}`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, startDate, endDate, ...mock }),
+  });
+};
+
+export interface LiftosaurSyncResult {
+  message?: string;
+  workoutsImported?: number;
+  measurementsImported?: number;
+  processedCount?: number;
+}
+
+export const syncLiftosaurData = async (
+  fullSync: boolean = false,
+  providerId?: string,
+  startDate?: string,
+  endDate?: string
+): Promise<LiftosaurSyncResult> => {
+  return apiCall(
+    `/integrations/liftosaur/sync${fullSync ? '?fullSync=true' : ''}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ providerId, startDate, endDate }),
+    }
+  );
+};
+export interface IntervalsSyncResult {
+  activitiesImported: number;
+  activitiesSkipped: number;
+  activitiesFailed: number;
+  wellnessDays: number;
+}
+
+export const syncIntervalsData = async (
+  providerId?: string,
+  startDate?: string,
+  endDate?: string,
+  mock?: { saveMockData?: boolean; dataSource?: string }
+): Promise<IntervalsSyncResult> => {
+  return apiCall('/integrations/intervals/sync', {
+    method: 'POST',
+    body: JSON.stringify({ providerId, startDate, endDate, ...mock }),
+  });
+};
+export interface GarminLoginPayload {
+  email: string;
+  password: string;
+}
+interface GarminProviderData {
+  id: string;
+  provider_type: string;
+}
+
+interface GarminLoginResponse {
+  status: string;
+  provider?: GarminProviderData;
+  client_state?: string;
+  error?: string;
+  id: string;
+}
+
+export const loginGarmin = async (
+  payload: GarminLoginPayload
+): Promise<GarminLoginResponse> => {
+  return apiCall('/integrations/garmin/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+};

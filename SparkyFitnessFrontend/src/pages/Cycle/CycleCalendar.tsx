@@ -1,0 +1,554 @@
+import { useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  addDays,
+  buildMonthGrid,
+  compareDays,
+  todayInZone,
+  isHormonalBc,
+  type FlowLevel,
+} from '@workspace/shared';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import {
+  useCycleSettings,
+  useCycleLogs,
+  useCycleHistory,
+  useBulkUpsertDailyLogMutation,
+} from '@/hooks/useCycle';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogTrigger,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Edit2, Check, X } from 'lucide-react';
+import { toast } from '@/hooks/use-toast';
+import DailyLogPanel from './DailyLogPanel';
+import CycleIcon from './CycleIcon';
+import MonthCalendar, { type DayCellRender } from '@/components/MonthCalendar';
+
+interface CycleCalendarProps {
+  /** When provided, the calendar is controlled and shares this date with the
+   *  parent (e.g. the Today page's day-navigator). */
+  selectedDate?: string;
+  onSelectDate?: (date: string) => void;
+  /** Hide the built-in selected-day detail panel (the parent renders the log). */
+  hideDayDetails?: boolean;
+}
+
+export default function CycleCalendar({
+  selectedDate: controlledDate,
+  onSelectDate,
+  hideDayDetails,
+}: CycleCalendarProps = {}) {
+  const { t } = useTranslation();
+  const { timezone, firstDayOfWeek } = usePreferences();
+  const today = useMemo(() => todayInZone(timezone), [timezone]);
+
+  // Calendar month state
+  const [currentMonth, setCurrentMonth] = useState(() => today.slice(0, 7)); // YYYY-MM
+  const [internalDate, setInternalDate] = useState(today);
+  const selectedDate = controlledDate ?? internalDate;
+  const setSelectedDate = onSelectDate ?? setInternalDate;
+  const [editMode, setEditMode] = useState(false);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+
+  // Follow the selected day into its month (day-nav arrows crossing a boundary).
+  // Month prev/next buttons don't change selectedDate, so browsing is preserved.
+  // Adjusted during render (React's recommended pattern for "state derived from a
+  // prop") rather than in an effect, to avoid an extra commit/cascading render.
+  const [prevSelectedDate, setPrevSelectedDate] = useState(selectedDate);
+  if (selectedDate !== prevSelectedDate) {
+    setPrevSelectedDate(selectedDate);
+    const month = selectedDate.slice(0, 7);
+    if (month !== currentMonth) {
+      setCurrentMonth(month);
+    }
+  }
+
+  // Queries
+  const { data: settings } = useCycleSettings();
+  const { data: cycles = [] } = useCycleHistory();
+
+  const { year, monthVal } = useMemo(() => {
+    const parts = currentMonth.split('-').map(Number);
+    return { year: parts[0] ?? 2026, monthVal: parts[1] ?? 7 };
+  }, [currentMonth]);
+
+  const { gridStart: gridStartDate, days: gridDates } = useMemo(
+    () => buildMonthGrid(year, monthVal, firstDayOfWeek),
+    [year, monthVal, firstDayOfWeek]
+  );
+
+  // Fetch logs for the current grid range
+  const gridEndDate = useMemo(() => {
+    return gridDates[gridDates.length - 1] ?? today;
+  }, [gridDates, today]);
+
+  const { data: logs = [] } = useCycleLogs(gridStartDate, gridEndDate);
+  const bulkUpsert = useBulkUpsertDailyLogMutation();
+
+  // Local painted period days state (only active when editMode is true)
+  const [paintedPeriods, setPaintedPeriods] = useState<Record<string, boolean>>(
+    {}
+  );
+
+  // Initialize paint state with current logged periods
+  const handleStartEdit = () => {
+    const initial: Record<string, boolean> = {};
+    gridDates.forEach((dateStr) => {
+      const log = logs.find((l) => l.entry_date === dateStr);
+      const isPeriod = log
+        ? (log.flow_level && log.flow_level !== 'none') ||
+          Object.keys(log.product_usage ?? {}).length > 0
+        : false;
+      initial[dateStr] = !!isPeriod;
+    });
+    setPaintedPeriods(initial);
+    setEditMode(true);
+  };
+
+  const handleToggleDayPaint = (dateStr: string) => {
+    setPaintedPeriods((prev) => ({
+      ...prev,
+      [dateStr]: !prev[dateStr],
+    }));
+  };
+
+  const handleSavePaint = async () => {
+    const changes: Array<{ date: string; flow_level: FlowLevel | null }> = [];
+    gridDates.forEach((dateStr) => {
+      const log = logs.find((l) => l.entry_date === dateStr);
+      const wasPeriod = log
+        ? (log.flow_level && log.flow_level !== 'none') ||
+          Object.keys(log.product_usage ?? {}).length > 0
+        : false;
+      const isPeriod = !!paintedPeriods[dateStr];
+
+      if (isPeriod !== wasPeriod) {
+        changes.push({
+          date: dateStr,
+          flow_level: isPeriod ? 'medium' : null,
+        });
+      }
+    });
+
+    if (changes.length > 0) {
+      try {
+        await bulkUpsert.mutateAsync(changes);
+        toast({
+          title: t('cycle.calendar.saveSuccess', 'Period updated'),
+          description: t(
+            'cycle.calendar.saveSuccessDesc',
+            'Successfully updated menstrual period logs.'
+          ),
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    setEditMode(false);
+  };
+
+  // Daily details for selectedDate
+  const selectedLog = useMemo(() => {
+    return logs.find((l) => l.entry_date === selectedDate) ?? null;
+  }, [logs, selectedDate]);
+
+  // Compute predictions for selectedDate
+  const stats = useMemo(() => {
+    const completed = cycles.filter(
+      (c) => typeof c.cycle_length === 'number' && c.cycle_length > 0
+    );
+    const recent = completed.slice(-6);
+    const cycleLengths = recent.map((c) => c.cycle_length!);
+    const periodLengths = recent.map((c) => c.period_length!).filter(Boolean);
+    return {
+      avgCycleLength:
+        settings?.avg_cycle_length_override ??
+        (cycleLengths.length
+          ? Math.round(
+              cycleLengths.reduce((a, b) => a + b, 0) / cycleLengths.length
+            )
+          : 28),
+      avgPeriodLength:
+        settings?.avg_period_length_override ??
+        (periodLengths.length
+          ? Math.round(
+              periodLengths.reduce((a, b) => a + b, 0) / periodLengths.length
+            )
+          : 5),
+      sampleSize: cycleLengths.length,
+    };
+  }, [cycles, settings]);
+
+  const predictions = useMemo(() => {
+    const lastCycle = cycles[0]; // descending order
+    if (!lastCycle || !lastCycle.start_date) return null;
+
+    const suppressFertility =
+      settings &&
+      (isHormonalBc(settings.birth_control_method) ||
+        settings.show_fertile_window === false ||
+        settings.mode === 'pregnant' ||
+        settings.mode === 'postpartum' ||
+        settings.mode === 'menopause');
+
+    const count = 4;
+    const predictedCycles = [];
+    let currentStart = lastCycle.start_date;
+    const luteal = settings?.luteal_phase_length ?? 14;
+
+    for (let i = 0; i < count; i++) {
+      const nextStart = addDays(currentStart, stats.avgCycleLength);
+      const nextEnd = addDays(nextStart, stats.avgPeriodLength - 1);
+
+      let ovulation: string | null = null;
+      let fertileStart: string | null = null;
+      let fertileEnd: string | null = null;
+
+      if (!suppressFertility) {
+        ovulation = addDays(nextStart, -luteal);
+        fertileStart = addDays(ovulation, -5);
+        fertileEnd = addDays(ovulation, 1);
+      }
+
+      predictedCycles.push({
+        periodStart: nextStart,
+        periodEnd: nextEnd,
+        ovulation,
+        fertileStart,
+        fertileEnd,
+      });
+
+      currentStart = nextStart;
+    }
+
+    return { cycles: predictedCycles };
+  }, [cycles, stats, settings]);
+
+  // Decoration mapping for grid rendering
+  const decoratedDaysMap = useMemo(() => {
+    const map: Record<
+      string,
+      'period' | 'predicted-period' | 'fertile' | 'ovulation' | 'none'
+    > = {};
+
+    // 1. Predicted days
+    if (predictions && settings?.show_fertile_window !== false) {
+      predictions.cycles.forEach((pc) => {
+        // Predicted period
+        let start = pc.periodStart;
+        while (compareDays(start, pc.periodEnd) <= 0) {
+          map[start] = 'predicted-period';
+          start = addDays(start, 1);
+        }
+        // Predicted fertile window
+        if (pc.fertileStart && pc.fertileEnd) {
+          let fStart = pc.fertileStart;
+          while (compareDays(fStart, pc.fertileEnd) <= 0) {
+            map[fStart] = 'fertile';
+            fStart = addDays(fStart, 1);
+          }
+        }
+        // Ovulation day
+        if (pc.ovulation) {
+          map[pc.ovulation] = 'ovulation';
+        }
+      });
+    }
+
+    // 2. Logged period days override predictions
+    logs.forEach((log) => {
+      const isPeriod =
+        (log.flow_level && log.flow_level !== 'none') ||
+        Object.keys(log.product_usage ?? {}).length > 0;
+      if (isPeriod) {
+        map[log.entry_date] = 'period';
+      }
+    });
+
+    return map;
+  }, [logs, predictions, settings]);
+
+  const weekdayHeaders = useMemo(() => {
+    const days = [
+      t('cycle.calendar.sun', 'Sun'),
+      t('cycle.calendar.mon', 'Mon'),
+      t('cycle.calendar.tue', 'Tue'),
+      t('cycle.calendar.wed', 'Wed'),
+      t('cycle.calendar.thu', 'Thu'),
+      t('cycle.calendar.fri', 'Fri'),
+      t('cycle.calendar.sat', 'Sat'),
+    ];
+    const reordered: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      reordered.push(days[(firstDayOfWeek + i) % 7]!);
+    }
+    return reordered;
+  }, [firstDayOfWeek, t]);
+
+  return (
+    <div className="space-y-4">
+      {editMode && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/10">
+          <CardContent className="py-2.5 px-4 text-xs text-amber-700 dark:text-amber-400">
+            {t(
+              'cycle.calendar.paintModeHint',
+              'Tap dates to toggle period flow. Predictions will recompute when saved.'
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <MonthCalendar
+        month={currentMonth}
+        onMonthChange={setCurrentMonth}
+        weekdayLabels={weekdayHeaders}
+        selectedDate={editMode ? undefined : selectedDate}
+        navDisabled={editMode}
+        onDayClick={(dateStr) => {
+          if (editMode) {
+            handleToggleDayPaint(dateStr);
+          } else {
+            setSelectedDate(dateStr);
+          }
+        }}
+        headerRight={
+          editMode ? (
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-destructive"
+                onClick={() => setEditMode(false)}
+              >
+                <X className="h-4 w-4 mr-1.5" /> {t('common.cancel', 'Cancel')}
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 bg-green-600 hover:bg-green-700 text-white"
+                onClick={handleSavePaint}
+              >
+                <Check className="h-4 w-4 mr-1.5" /> {t('common.save', 'Save')}
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              onClick={handleStartEdit}
+            >
+              <Edit2 className="h-3.5 w-3.5 mr-1.5" />{' '}
+              {t('cycle.calendar.editPeriods', 'Edit Periods')}
+            </Button>
+          )
+        }
+        legend={[
+          { label: t('cycle.legend.period', 'Period'), color: '#C9524E' },
+          {
+            label: t('cycle.legend.predicted', 'Predicted Period'),
+            color: '#C9524E40',
+            dashed: true,
+          },
+          {
+            label: t('cycle.legend.fertile', 'Fertile Window'),
+            color: '#A9D3B5',
+          },
+          { label: t('cycle.legend.ovulation', 'Ovulation'), color: '#33684A' },
+        ]}
+        renderDay={(dateStr): DayCellRender => {
+          const dayType = decoratedDaysMap[dateStr] ?? 'none';
+          const isPainted = editMode ? !!paintedPeriods[dateStr] : false;
+          const hasNote =
+            !editMode && !!logs.find((l) => l.entry_date === dateStr)?.notes;
+
+          const cell: DayCellRender = {};
+
+          if (editMode) {
+            if (isPainted) {
+              cell.fill = '#C9524E';
+              cell.textColor = '#fff';
+            }
+          } else if (dayType === 'period') {
+            cell.fill = '#C9524E';
+            cell.textColor = '#fff';
+          } else if (dayType === 'predicted-period') {
+            cell.fill = '#C9524E40';
+            cell.borderStyle = 'dashed';
+            cell.borderWidth = '2px';
+            cell.borderColor = '#C9524E';
+          } else if (dayType === 'fertile') {
+            cell.fill = '#A9D3B540';
+          } else if (dayType === 'ovulation') {
+            cell.fill = '#33684A';
+            cell.textColor = '#fff';
+          }
+
+          if (hasNote) {
+            cell.content = (
+              <span className="absolute bottom-1 h-1 w-1 rounded-full bg-muted-foreground/60" />
+            );
+          }
+
+          return cell;
+        }}
+        monthLabelLocale={t('i18n.locale', 'en-US')}
+      />
+
+      {/* Selected Day Details Panel — hidden when the parent renders the log */}
+      {!editMode && !hideDayDetails && (
+        <Card>
+          <CardHeader className="py-3.5 px-4 border-b flex flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle className="text-sm font-bold">
+                {new Date(selectedDate).toLocaleDateString(
+                  t('i18n.locale', 'en-US'),
+                  {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                  }
+                )}
+              </CardTitle>
+              <CardDescription className="text-xs">
+                {decoratedDaysMap[selectedDate] === 'period' && (
+                  <span>{t('cycle.legend.period', 'Period Day')}</span>
+                )}
+                {decoratedDaysMap[selectedDate] === 'predicted-period' && (
+                  <span>{t('cycle.legend.predicted', 'Predicted Period')}</span>
+                )}
+                {decoratedDaysMap[selectedDate] === 'fertile' && (
+                  <span>{t('cycle.legend.fertile', 'Fertile Window')}</span>
+                )}
+                {decoratedDaysMap[selectedDate] === 'ovulation' && (
+                  <span>
+                    {t('cycle.legend.ovulation', 'Predicted Ovulation')}
+                  </span>
+                )}
+                {(!decoratedDaysMap[selectedDate] ||
+                  decoratedDaysMap[selectedDate] === 'none') && (
+                  <span>
+                    {t('cycle.calendar.normalDay', 'Non-bleeding day')}
+                  </span>
+                )}
+              </CardDescription>
+            </div>
+
+            {/* Quick edit log dialog */}
+            <Dialog open={isLogOpen} onOpenChange={setIsLogOpen}>
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline" className="h-8">
+                  {selectedLog
+                    ? t('cycle.calendar.editLog', 'Edit Log')
+                    : t('cycle.calendar.addLog', 'Add Log')}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+                <DialogTitle>
+                  {t('cycle.calendar.logDialogTitle', 'Daily Log - {{date}}', {
+                    date: selectedDate,
+                  })}
+                </DialogTitle>
+                <DialogDescription>
+                  {t(
+                    'cycle.calendar.logDialogDesc',
+                    'Log your cycle parameters, symptoms, mood, and temperature.'
+                  )}
+                </DialogDescription>
+                <DailyLogPanel
+                  date={selectedDate}
+                  log={selectedLog}
+                  preferredProducts={
+                    settings?.preferred_products ?? ['pad', 'tampon']
+                  }
+                />
+              </DialogContent>
+            </Dialog>
+          </CardHeader>
+          <CardContent className="p-4 space-y-3">
+            {selectedLog ? (
+              <div className="space-y-2">
+                {/* Flow level */}
+                {selectedLog.flow_level &&
+                  selectedLog.flow_level !== 'none' && (
+                    <div className="flex items-center gap-2 text-sm bg-red-50/50 dark:bg-red-950/10 p-2 rounded-lg border border-red-100 dark:border-red-950/20">
+                      <CycleIcon
+                        id={`flow-${selectedLog.flow_level}`}
+                        size={20}
+                      />
+                      <span className="font-semibold text-xs capitalize">
+                        {t('cycle.calendar.flow', 'Flow: {{flow_level}}', {
+                          flow_level: selectedLog.flow_level,
+                        })}
+                      </span>
+                    </div>
+                  )}
+
+                {/* Product usage */}
+                {Object.keys(selectedLog.product_usage ?? {}).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {Object.entries(selectedLog.product_usage).map(
+                      ([prod, count]) => (
+                        <div
+                          key={prod}
+                          className="flex items-center gap-1.5 bg-muted/40 px-2 py-1 rounded-full text-xs"
+                        >
+                          <CycleIcon id={`product-${prod}`} size={16} />
+                          <span>
+                            {prod}: {count}
+                          </span>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )}
+
+                {/* Cervical mucus */}
+                {selectedLog.cervical_mucus && (
+                  <p className="text-xs text-muted-foreground capitalize">
+                    <span className="font-semibold">
+                      {t('cycle.calendar.mucus', 'Mucus:')}
+                    </span>{' '}
+                    {selectedLog.cervical_mucus}
+                  </p>
+                )}
+
+                {/* Energy */}
+                {!!selectedLog.energy && (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-semibold">
+                      {t('cycle.calendar.energy', 'Energy:')}
+                    </span>{' '}
+                    {selectedLog.energy}/5
+                  </p>
+                )}
+
+                {/* Notes */}
+                {selectedLog.notes && (
+                  <p className="text-xs bg-muted/20 p-2.5 rounded-lg italic border border-muted">
+                    "{selectedLog.notes}"
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground italic text-center py-4">
+                {t('cycle.calendar.noLogs', 'No logs recorded for this day.')}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}

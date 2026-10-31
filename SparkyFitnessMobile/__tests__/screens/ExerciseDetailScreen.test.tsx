@@ -1,0 +1,856 @@
+import React from 'react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import Toast from 'react-native-toast-message';
+import {
+  pressAction,
+  expectActionPresent,
+  findHeaderItem,
+  skipDuplicatePressWindow,
+} from './helpers/nativeHeaderTestUtils';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import ExerciseDetailScreen from '../../src/screens/ExerciseDetailScreen';
+import {
+  useDeleteExerciseLibrary,
+  usePreferences,
+  useProfile,
+  useServerConnection,
+} from '../../src/hooks';
+import { useExerciseStats } from '../../src/hooks/useExerciseStats';
+import { useExerciseHistory } from '../../src/hooks/useExerciseHistory';
+import {
+  fetchExerciseById,
+  getExerciseDeletionImpact,
+} from '../../src/services/api/exerciseApi';
+import { importExercise } from '../../src/services/api/externalExerciseSearchApi';
+import {
+  useExerciseImageSource,
+  useImagePairAspectMatch,
+} from '../../src/hooks/useExerciseImageSource';
+import * as reanimated from 'react-native-reanimated';
+import type { Exercise } from '../../src/types/exercise';
+
+jest.mock('../../src/hooks', () => ({
+  useDeleteExerciseLibrary: jest.fn(),
+  usePreferences: jest.fn(),
+  useProfile: jest.fn(),
+  useServerConnection: jest.fn(),
+  useUpdateExercise: jest.fn(() => ({
+    updateExercise: jest.fn(),
+    isPending: false,
+  })),
+}));
+
+jest.mock('../../src/hooks/useExerciseStats', () => ({
+  useExerciseStats: jest.fn(),
+}));
+
+jest.mock('../../src/hooks/useExerciseHistory', () => ({
+  useExerciseHistory: jest.fn(),
+}));
+
+jest.mock('../../src/services/api/exerciseApi', () => ({
+  fetchExerciseById: jest.fn(),
+  getExerciseDeletionImpact: jest.fn(),
+}));
+
+jest.mock('../../src/services/api/externalExerciseSearchApi', () => ({
+  importExercise: jest.fn(),
+}));
+
+jest.mock('../../src/components/ActiveWorkoutBar', () => ({
+  useActiveWorkoutBarPadding: jest.fn(() => 0),
+}));
+
+jest.mock('../../src/hooks/useExerciseImageSource', () => ({
+  useExerciseImageSource: jest.fn(() => ({
+    getImageSource: jest.fn(() => null),
+  })),
+  useImagePairAspectMatch: jest.fn(() => undefined),
+}));
+
+jest.mock('../../src/hooks/useStartLiveWorkout', () => ({
+  useStartLiveWorkout: jest.fn(() => ({
+    startLiveWorkout: jest.fn(),
+    isStarting: false,
+  })),
+}));
+
+jest.mock('uniwind', () => ({
+  useCSSVariable: (keys: string | string[]) =>
+    Array.isArray(keys) ? keys.map(() => '#111827') : '#111827',
+  // The delete ActionSheet's backdrop reads the theme through useUniwind.
+  useUniwind: () => ({ theme: 'light', hasAdaptiveThemes: false }),
+}));
+
+jest.mock('../../src/components/Icon', () => {
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: (props: any) => <View testID={`icon-${props.name}`} />,
+  };
+});
+
+const mockNavigation = {
+  setOptions: jest.fn(),
+  navigate: jest.fn(),
+  goBack: jest.fn(),
+  setParams: jest.fn(),
+  dispatch: jest.fn(),
+  isFocused: jest.fn(() => true),
+} as any;
+jest.mock('@react-navigation/native', () => ({
+  ...jest.requireActual('@react-navigation/native'),
+  useNavigation: () => mockNavigation,
+}));
+
+const mockUseProfile = useProfile as jest.MockedFunction<typeof useProfile>;
+const mockUsePreferences = usePreferences as jest.MockedFunction<
+  typeof usePreferences
+>;
+const mockUseExerciseStats = useExerciseStats as jest.MockedFunction<
+  typeof useExerciseStats
+>;
+const mockUseExerciseHistory = useExerciseHistory as jest.MockedFunction<
+  typeof useExerciseHistory
+>;
+const mockUseServerConnection = useServerConnection as jest.MockedFunction<
+  typeof useServerConnection
+>;
+const mockUseDeleteExerciseLibrary =
+  useDeleteExerciseLibrary as jest.MockedFunction<
+    typeof useDeleteExerciseLibrary
+  >;
+const mockFetchExerciseById = fetchExerciseById as jest.MockedFunction<
+  typeof fetchExerciseById
+>;
+const mockImportExercise = importExercise as jest.MockedFunction<
+  typeof importExercise
+>;
+const mockUseExerciseImageSource =
+  useExerciseImageSource as jest.MockedFunction<typeof useExerciseImageSource>;
+const mockUseImagePairAspectMatch =
+  useImagePairAspectMatch as jest.MockedFunction<
+    typeof useImagePairAspectMatch
+  >;
+const mockBuildDeleteOptions = jest.fn(() => [
+  {
+    mode: 'hide' as const,
+    label: 'Hide from search',
+    description: 'Keeps everything as it is.',
+    destructive: false,
+    onSelect: jest.fn(),
+  },
+]);
+
+const insets = { top: 0, bottom: 0, left: 0, right: 0 };
+const frame = { x: 0, y: 0, width: 390, height: 844 };
+
+let queryClient: QueryClient;
+
+const Providers: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <QueryClientProvider client={queryClient}>
+    <SafeAreaProvider initialMetrics={{ insets, frame }}>
+      {children}
+    </SafeAreaProvider>
+  </QueryClientProvider>
+);
+
+const baseExercise: Exercise = {
+  id: 'ex-1',
+  name: 'Bench Press',
+  category: 'strength',
+  equipment: ['barbell', 'bench'],
+  primary_muscles: ['chest'],
+  secondary_muscles: ['triceps', 'shoulders'],
+  calories_per_hour: 360,
+  source: 'sparky',
+  images: [],
+  tags: [],
+};
+
+const ownedCustomExercise: Exercise = {
+  ...baseExercise,
+  source: 'custom',
+  userId: 'user-1',
+  isCustom: true,
+};
+
+describe('ExerciseDetailScreen', () => {
+  const navigation = mockNavigation;
+
+  const buildRoute = (overrides: Partial<Exercise> = {}) => ({
+    key: 'ExerciseDetail-key',
+    name: 'ExerciseDetail' as const,
+    params: { item: { ...baseExercise, ...overrides } },
+  });
+
+  const renderScreen = (overrides: Partial<Exercise> = {}) =>
+    render(
+      <Providers>
+        <ExerciseDetailScreen
+          navigation={navigation}
+          route={buildRoute(overrides) as any}
+        />
+      </Providers>
+    );
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    mockUseProfile.mockReturnValue({
+      profile: { id: 'user-1' } as any,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+    });
+    mockUseServerConnection.mockReturnValue({
+      isConnected: true,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+    mockUsePreferences.mockReturnValue({
+      preferences: { default_weight_unit: 'kg' },
+    } as any);
+    mockUseExerciseStats.mockReturnValue({ data: undefined } as any);
+    mockUseExerciseHistory.mockReturnValue({
+      sessions: [],
+      isLoading: false,
+      isLoadingMore: false,
+      isError: false,
+      error: null,
+      refetch: jest.fn(),
+      loadMore: jest.fn(),
+      hasMore: false,
+    });
+    mockUseDeleteExerciseLibrary.mockReturnValue({
+      buildDeleteOptions: mockBuildDeleteOptions,
+      isPending: false,
+    });
+    (
+      getExerciseDeletionImpact as jest.MockedFunction<
+        typeof getExerciseDeletionImpact
+      >
+    ).mockResolvedValue({
+      exerciseEntriesCount: 0,
+      workoutPlansCount: 0,
+      workoutPresetsCount: 0,
+      totalReferences: 0,
+      otherUserReferences: 0,
+    });
+  });
+
+  it('renders the exercise fields from the route param', () => {
+    const screen = renderScreen();
+
+    // The name lives in the (native) header title.
+    // The name is a left-aligned page heading, not a bar title.
+    expect(screen.getByRole('header', { name: 'Bench Press' })).toBeTruthy();
+    expect(screen.getByText('360')).toBeTruthy();
+    expect(screen.getByText('Barbell, Bench')).toBeTruthy();
+    expect(screen.getByText('Chest')).toBeTruthy();
+    expect(screen.getByText('Triceps, Shoulders')).toBeTruthy();
+
+    fireEvent.press(screen.getByText('Exercise details'));
+    expect(screen.getByText('Strength')).toBeTruthy();
+    expect(screen.getByText('sparky')).toBeTruthy();
+  });
+
+  it('navigates to ActivityAdd with the selected exercise when Log Exercise is pressed', () => {
+    const screen = renderScreen();
+
+    fireEvent.press(screen.getByText('Log Exercise'));
+
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      'ActivityAdd',
+      expect.objectContaining({
+        selectedExercise: expect.objectContaining({
+          id: 'ex-1',
+          name: 'Bench Press',
+        }),
+        selectionNonce: expect.any(Number),
+      })
+    );
+  });
+
+  it('shows Start Workout and Log Exercise by default', () => {
+    const screen = renderScreen();
+
+    expect(screen.queryByText('Start Workout')).toBeTruthy();
+    expect(screen.queryByText('Log Exercise')).toBeTruthy();
+  });
+
+  it('hides Start Workout and Log Exercise when hideWorkoutActions is set', () => {
+    const route = {
+      key: 'ExerciseDetail-key',
+      name: 'ExerciseDetail' as const,
+      params: { item: baseExercise, hideWorkoutActions: true },
+    };
+    const screen = render(
+      <Providers>
+        <ExerciseDetailScreen navigation={navigation} route={route as any} />
+      </Providers>
+    );
+
+    expect(screen.queryByText('Start Workout')).toBeNull();
+    expect(screen.queryByText('Log Exercise')).toBeNull();
+  });
+
+  it('hides empty optional sections', () => {
+    const screen = renderScreen({
+      equipment: [],
+      primary_muscles: [],
+      secondary_muscles: [],
+      calories_per_hour: 0,
+    });
+
+    expect(screen.queryByText('Equipment')).toBeNull();
+    expect(screen.queryByText('Primary muscles')).toBeNull();
+    expect(screen.queryByText('Secondary muscles')).toBeNull();
+    expect(screen.queryByText('Calories / hour')).toBeNull();
+  });
+
+  it('shows Edit and Delete for non-custom exercises even when the user matches', () => {
+    const screen = renderScreen({
+      source: 'sparky',
+      userId: 'user-1',
+      isCustom: true,
+    });
+
+    expectActionPresent(screen, navigation, 'Edit');
+    expect(screen.queryByText('Delete Exercise')).toBeTruthy();
+  });
+
+  it('hides Edit and Delete when the user does not own the exercise', () => {
+    const screen = renderScreen({
+      source: 'custom',
+      userId: 'someone-else',
+      isCustom: true,
+    });
+
+    expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.queryByText('Delete Exercise')).toBeNull();
+  });
+
+  it('hides Edit and Delete when offline', () => {
+    mockUseServerConnection.mockReturnValue({
+      isConnected: false,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+
+    const screen = renderScreen(ownedCustomExercise);
+
+    expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.queryByText('Delete Exercise')).toBeNull();
+  });
+
+  it('shows Edit and navigates to ExerciseForm in edit mode for an owned custom exercise', () => {
+    const screen = renderScreen(ownedCustomExercise);
+
+    pressAction(screen, navigation, 'Edit');
+
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      'ExerciseForm',
+      expect.objectContaining({
+        mode: 'edit-exercise',
+        returnKey: 'ExerciseDetail-key',
+        exercise: expect.objectContaining({ id: 'ex-1' }),
+      })
+    );
+  });
+
+  it('opens the delete options sheet instead of deleting outright', () => {
+    const screen = renderScreen(ownedCustomExercise);
+
+    fireEvent.press(screen.getByText('Delete Exercise'));
+
+    // The button presents Hide / Delete / Delete-including-history; it must
+    // never delete on a single tap the way the old confirm dialog did.
+    expect(screen.getByText('Delete exercise')).toBeTruthy();
+  });
+
+  it('reflects updatedItem when route params change', () => {
+    const route = {
+      key: 'ExerciseDetail-key',
+      name: 'ExerciseDetail' as const,
+      params: { item: ownedCustomExercise },
+    };
+    const screen = render(
+      <Providers>
+        <ExerciseDetailScreen navigation={navigation} route={route as any} />
+      </Providers>
+    );
+    // The name is a left-aligned page heading, not a bar title.
+    expect(screen.getByRole('header', { name: 'Bench Press' })).toBeTruthy();
+
+    screen.rerender(
+      <Providers>
+        <ExerciseDetailScreen
+          navigation={navigation}
+          route={
+            {
+              ...route,
+              params: {
+                item: ownedCustomExercise,
+                updatedItem: { ...ownedCustomExercise, name: 'Bench Press 2' },
+              },
+            } as any
+          }
+        />
+      </Providers>
+    );
+
+    // The name is a left-aligned page heading, not a bar title.
+    expect(screen.getByRole('header', { name: 'Bench Press 2' })).toBeTruthy();
+  });
+
+  describe('hydration by id', () => {
+    const uuidId = '11111111-1111-4111-8111-111111111111';
+
+    it('hydrates a sparse item with the full catalog record fetched by id', async () => {
+      mockFetchExerciseById.mockResolvedValue({
+        ...baseExercise,
+        id: uuidId,
+        name: 'Hydrated Bench Press',
+        primary_muscles: ['pectorals'],
+      });
+
+      // Sparse item: only id/name known, no muscles.
+      const screen = renderScreen({
+        id: uuidId,
+        name: 'Sparse Bench',
+        equipment: [],
+        primary_muscles: [],
+        secondary_muscles: [],
+      });
+
+      // The name is a left-aligned page heading, not a bar title.
+      expect(screen.getByRole('header', { name: 'Sparse Bench' })).toBeTruthy();
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole('header', { name: 'Hydrated Bench Press' })
+        ).toBeTruthy()
+      );
+      expect(mockFetchExerciseById).toHaveBeenCalledWith(uuidId);
+      expect(screen.getByText('Pectorals')).toBeTruthy();
+    });
+
+    it('does not fetch for a non-UUID id', () => {
+      renderScreen({ id: 'not-a-uuid' });
+      expect(mockFetchExerciseById).not.toHaveBeenCalled();
+    });
+
+    it('does not fetch while offline', () => {
+      mockUseServerConnection.mockReturnValue({
+        isConnected: false,
+        isLoading: false,
+        isError: false,
+        error: null,
+      } as any);
+      renderScreen({ id: uuidId });
+      expect(mockFetchExerciseById).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('records strip', () => {
+    const uuidId = '22222222-2222-4222-8222-222222222222';
+
+    it('renders Best and Last tiles from stats', () => {
+      mockUseExerciseStats.mockReturnValue({
+        data: {
+          bestSet: {
+            entryDate: '2026-01-06',
+            weight: 100,
+            reps: 5,
+            setNumber: 2,
+          },
+          lastSet: {
+            entryDate: '2026-01-08',
+            weight: 95,
+            reps: 8,
+            setNumber: 3,
+          },
+          recentSessions: [],
+        },
+      } as any);
+
+      const screen = renderScreen({ id: uuidId });
+
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(uuidId);
+      expect(screen.getByText('Best (kg)')).toBeTruthy();
+      expect(screen.getByText('100 × 5')).toBeTruthy();
+      expect(screen.getByText('Tue, Jan 6')).toBeTruthy();
+      expect(screen.getByText('Last (kg)')).toBeTruthy();
+      expect(screen.getByText('95 × 8')).toBeTruthy();
+      expect(screen.getByText('Thu, Jan 8')).toBeTruthy();
+    });
+
+    it('converts tile weights to the preferred unit', () => {
+      mockUsePreferences.mockReturnValue({
+        preferences: { default_weight_unit: 'lbs' },
+      } as any);
+      mockUseExerciseStats.mockReturnValue({
+        data: {
+          bestSet: {
+            entryDate: '2026-01-06',
+            weight: 100,
+            reps: 5,
+            setNumber: 1,
+          },
+          lastSet: null,
+          recentSessions: [],
+        },
+      } as any);
+
+      const screen = renderScreen({ id: uuidId });
+
+      expect(screen.getByText('Best (lbs)')).toBeTruthy();
+      expect(screen.getByText('220.5 × 5')).toBeTruthy();
+    });
+
+    it('folds calories per hour into the strip and hides it when empty', () => {
+      const screen = renderScreen({ id: uuidId });
+
+      expect(screen.getByText('Cal / hour')).toBeTruthy();
+      expect(screen.getByText('360')).toBeTruthy();
+
+      const empty = renderScreen({ id: uuidId, calories_per_hour: 0 });
+      expect(empty.queryByText('Cal / hour')).toBeNull();
+      expect(empty.queryByText('Best (kg)')).toBeNull();
+    });
+
+    it('disables the stats query for a non-UUID id', () => {
+      renderScreen({ id: 'not-a-uuid' });
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(null);
+    });
+
+    it('disables the stats query while offline', () => {
+      mockUseServerConnection.mockReturnValue({
+        isConnected: false,
+        isLoading: false,
+        isError: false,
+        error: null,
+      } as any);
+
+      renderScreen({ id: uuidId });
+
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(null);
+    });
+  });
+
+  describe('summary/history/how-to tabs', () => {
+    const uuidId = '22222222-2222-4222-8222-222222222222';
+
+    it('shows the History tab only for connected UUID exercises', () => {
+      const screen = renderScreen({ id: uuidId });
+      expect(screen.getByText('Summary')).toBeTruthy();
+      expect(screen.getByText('History')).toBeTruthy();
+
+      const nonUuid = renderScreen({ id: 'not-a-uuid' });
+      expect(nonUuid.queryByText('History')).toBeNull();
+    });
+
+    it('hides the How to tab when there is no instructional content', () => {
+      const screen = renderScreen({ id: uuidId });
+      expect(screen.queryByText('How to')).toBeNull();
+    });
+
+    it('hides the segmented control entirely while offline with no how-to content', () => {
+      mockUseServerConnection.mockReturnValue({
+        isConnected: false,
+        isLoading: false,
+        isError: false,
+        error: null,
+      } as any);
+
+      const screen = renderScreen({ id: uuidId });
+      expect(screen.queryByText('History')).toBeNull();
+      expect(screen.queryByText('Summary')).toBeNull();
+    });
+
+    it('shows all instruction steps on the How to tab and hides summary content', () => {
+      const screen = renderScreen({
+        id: uuidId,
+        instructions: ['Lie on the bench.', 'Lower the bar.', 'Press back up.'],
+      });
+
+      // Summary tab content is visible by default; instructions are not.
+      expect(screen.getByText('Equipment')).toBeTruthy();
+      expect(screen.queryByText('Lie on the bench.')).toBeNull();
+
+      fireEvent.press(screen.getByText('How to'));
+
+      expect(screen.getByText('Instructions')).toBeTruthy();
+      expect(screen.getByText('Lie on the bench.')).toBeTruthy();
+      expect(screen.getByText('Lower the bar.')).toBeTruthy();
+      expect(screen.getByText('Press back up.')).toBeTruthy();
+      expect(screen.queryByText('Equipment')).toBeNull();
+      expect(screen.queryByText('Start Workout')).toBeNull();
+
+      fireEvent.press(screen.getByText('Summary'));
+      expect(screen.getByText('Equipment')).toBeTruthy();
+    });
+
+    it('swaps Summary content for the history list when History is selected', () => {
+      mockUseExerciseHistory.mockReturnValue({
+        sessions: [
+          {
+            type: 'individual',
+            id: 'session-1',
+            exercise_id: uuidId,
+            duration_minutes: 30,
+            calories_burned: 200,
+            entry_date: '2026-01-06',
+            notes: null,
+            distance: null,
+            avg_heart_rate: null,
+            source: null,
+            sets: [
+              {
+                id: 1,
+                set_number: 1,
+                set_type: null,
+                reps: 5,
+                weight: 100,
+                duration: null,
+                rest_time: null,
+                notes: null,
+                rpe: null,
+                completed_at: null,
+                is_pr: false,
+              },
+            ],
+            exercise_snapshot: null,
+            activity_details: [],
+          },
+        ],
+        isLoading: false,
+        isLoadingMore: false,
+        isError: false,
+        error: null,
+        refetch: jest.fn(),
+        loadMore: jest.fn(),
+        hasMore: false,
+      } as any);
+
+      const screen = renderScreen({ id: uuidId });
+
+      // Summary tab content is visible by default.
+      expect(screen.getByText('Equipment')).toBeTruthy();
+
+      fireEvent.press(screen.getByText('History'));
+
+      expect(mockUseExerciseHistory).toHaveBeenCalledWith({
+        exerciseId: uuidId,
+      });
+      expect(screen.getByText('Tue, Jan 6')).toBeTruthy();
+      expect(screen.getByText('100 × 5')).toBeTruthy();
+      expect(screen.queryByText('Equipment')).toBeNull();
+      expect(screen.queryByText('Start Workout')).toBeNull();
+
+      fireEvent.press(screen.getByText('Summary'));
+      expect(screen.getByText('Equipment')).toBeTruthy();
+    });
+  });
+
+  describe('pre-add preview (selectionReturnKey)', () => {
+    const returnKey = 'workout-form-key';
+    const uuidId = '33333333-3333-4333-8333-333333333333';
+
+    const renderPreview = (overrides: Partial<Exercise> = {}) =>
+      render(
+        <Providers>
+          <ExerciseDetailScreen
+            navigation={navigation}
+            route={
+              {
+                key: 'ExerciseDetail-key',
+                name: 'ExerciseDetail' as const,
+                params: {
+                  item: { ...baseExercise, ...overrides },
+                  hideWorkoutActions: true,
+                  selectionReturnKey: returnKey,
+                },
+              } as any
+            }
+          />
+        </Providers>
+      );
+
+    it('shows no Add action without selectionReturnKey', () => {
+      const screen = renderScreen();
+
+      expect(findHeaderItem(navigation, 'Add')).toBeUndefined();
+      expect(screen.queryByText('Add')).toBeNull();
+    });
+
+    it('dispatches a local exercise to the form and pops both screens', async () => {
+      const screen = renderPreview({ id: uuidId });
+
+      expectActionPresent(screen, navigation, 'Add');
+      pressAction(screen, navigation, 'Add');
+
+      await waitFor(() =>
+        expect(navigation.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'SET_PARAMS',
+            payload: expect.objectContaining({
+              params: expect.objectContaining({
+                selectedExercise: expect.objectContaining({ id: uuidId }),
+                selectionNonce: expect.any(Number),
+              }),
+            }),
+            source: returnKey,
+          })
+        )
+      );
+      expect(navigation.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'POP',
+          payload: expect.objectContaining({ count: 2 }),
+        })
+      );
+      expect(mockImportExercise).not.toHaveBeenCalled();
+    });
+
+    it('imports an external item first and dispatches the imported exercise', async () => {
+      const imported = { ...baseExercise, id: uuidId, name: 'Imported Bench' };
+      mockImportExercise.mockResolvedValue(imported);
+
+      const screen = renderPreview({ id: '123', source: 'wger' });
+
+      pressAction(screen, navigation, 'Add');
+
+      await waitFor(() =>
+        expect(navigation.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'SET_PARAMS',
+            payload: expect.objectContaining({
+              params: expect.objectContaining({
+                selectedExercise: expect.objectContaining({
+                  id: uuidId,
+                  name: 'Imported Bench',
+                }),
+              }),
+            }),
+            source: returnKey,
+          })
+        )
+      );
+      expect(mockImportExercise).toHaveBeenCalledWith('wger', '123');
+      expect(navigation.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'POP',
+          payload: expect.objectContaining({ count: 2 }),
+        })
+      );
+    });
+
+    it('shows a toast and stays on the screen when the import fails, then allows a retry', async () => {
+      mockImportExercise.mockRejectedValueOnce(new Error('boom'));
+
+      const screen = renderPreview({ id: '123', source: 'wger' });
+
+      pressAction(screen, navigation, 'Add');
+
+      await waitFor(() =>
+        expect(Toast.show).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'error',
+            text1: 'Failed to add exercise',
+          })
+        )
+      );
+      expect(navigation.dispatch).not.toHaveBeenCalled();
+
+      // The in-flight guard must clear on failure, so a retry can succeed.
+      mockImportExercise.mockResolvedValueOnce({ ...baseExercise, id: uuidId });
+      // Reading the error toast and pressing again is seconds of real user
+      // time; the header action guard treats two presses inside its window as
+      // one.
+      skipDuplicatePressWindow();
+      pressAction(screen, navigation, 'Add');
+
+      await waitFor(() =>
+        expect(navigation.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'SET_PARAMS' })
+        )
+      );
+    });
+
+    it('does not dispatch or pop when the screen loses focus during the import', async () => {
+      mockImportExercise.mockResolvedValue({ ...baseExercise, id: uuidId });
+      mockNavigation.isFocused.mockReturnValueOnce(false);
+
+      const screen = renderPreview({ id: '123', source: 'wger' });
+
+      pressAction(screen, navigation, 'Add');
+
+      await waitFor(() => expect(mockImportExercise).toHaveBeenCalled());
+      await act(async () => {});
+      expect(navigation.dispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('image carousel selection', () => {
+    beforeEach(() => {
+      mockUseExerciseImageSource.mockReturnValue({
+        getImageSource: (path: string) => ({
+          uri: `https://server/uploads/${path}`,
+          headers: {},
+        }),
+      });
+    });
+
+    afterEach(() => {
+      mockUseExerciseImageSource.mockReturnValue({
+        getImageSource: jest.fn(() => null),
+      });
+      mockUseImagePairAspectMatch.mockReturnValue(undefined);
+    });
+
+    it('renders the crossfade instead of the pager for exactly two images', () => {
+      const screen = renderScreen({ images: ['a.png', 'b.png'] });
+
+      expect(screen.getByTestId('exercise-image-crossfade')).toBeTruthy();
+      expect(screen.queryByTestId('pager-view')).toBeNull();
+    });
+
+    it('falls back to the pager for two images when reduce motion is on', () => {
+      const spy = jest
+        .spyOn(reanimated, 'useReducedMotion')
+        .mockReturnValue(true);
+      try {
+        const screen = renderScreen({ images: ['a.png', 'b.png'] });
+
+        expect(screen.queryByTestId('exercise-image-crossfade')).toBeNull();
+        expect(screen.getByTestId('pager-view')).toBeTruthy();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('falls back to the pager when the pair aspect ratios mismatch', () => {
+      mockUseImagePairAspectMatch.mockReturnValue(false);
+
+      const screen = renderScreen({ images: ['a.png', 'b.png'] });
+
+      expect(screen.queryByTestId('exercise-image-crossfade')).toBeNull();
+      expect(screen.getByTestId('pager-view')).toBeTruthy();
+    });
+
+    it('keeps the pager for more than two images', () => {
+      const screen = renderScreen({ images: ['a.png', 'b.png', 'c.png'] });
+
+      expect(screen.queryByTestId('exercise-image-crossfade')).toBeNull();
+      expect(screen.getByTestId('pager-view')).toBeTruthy();
+    });
+  });
+});

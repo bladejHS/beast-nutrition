@@ -1,0 +1,303 @@
+import goalService from './goalService.js';
+import reportRepository from '../models/reportRepository.js';
+import exerciseEntryRepository from '../models/exerciseEntry.js';
+import measurementRepository from '../models/measurementRepository.js';
+import userRepository from '../models/userRepository.js';
+import preferenceRepository from '../models/preferenceRepository.js';
+import calorieRuleHistoryRepository from '../models/calorieRuleHistoryRepository.js';
+import { preferencesOnDay } from './calorieRuleHistoryService.js';
+import * as genericHealthRepository from '../models/genericHealthRepository.js';
+import { log } from '../config/logging.js';
+import {
+  computeCalorieBalance,
+  resolveDeviceProjectionSnapshot,
+  type CalorieBalanceMeasurements,
+} from './calorieBalanceService.js';
+import {
+  addDays,
+  compareDays,
+  resolveBackgroundStepCalories,
+} from '@workspace/shared';
+import type { DailyCalorieBalanceRow } from '@workspace/shared';
+
+/**
+ * Per-day calorie balance over a date range.
+ *
+ * Exists so the Reports page can stop deriving this in the browser (issue #2094). It runs
+ * the same `computeCalorieBalance` the Diary uses, day by day, over inputs fetched **once**
+ * for the whole window. Looping `getDailySummary` instead would be ~13 queries per day —
+ * roughly 1,170 for a 90-day report, with a real pool-exhaustion risk — so every input
+ * below is a ranged query and the day loop itself does no I/O.
+ *
+ * Modelled on `AdaptiveTdeeService.calculateAdaptiveTdeeRange`.
+ */
+
+export interface DailySummaryRangeOptions {
+  actorUserId: string;
+  targetUserId: string;
+  startDate: string;
+  endDate: string;
+  /**
+   * Whether the caller may see check-in data. Steps and external BMR both live in
+   * `check_in_measurements`, so this is the same gate `/api/daily-summary` applies —
+   * which is what keeps Reports and the Diary degrading identically for a family viewer.
+   */
+  includeCheckin: boolean;
+}
+
+export interface DailySummaryRangeResult {
+  days: DailyCalorieBalanceRow[];
+}
+
+interface CheckInRow {
+  entry_date: string;
+  steps?: number | string | null;
+  weight?: number | string | null;
+  height?: number | string | null;
+  body_fat_percentage?: number | string | null;
+  bmr?: number | string | null;
+}
+
+/**
+ * Body-composition fields the BMR formula reads. Each is carried forward on its own,
+ * mirroring the per-field subselects in `getLatestCheckInMeasurementsOnOrBeforeDate`.
+ *
+ * `bmr` is deliberately absent: a measured BMR describes the day it was recorded, so
+ * it is resolved per date below rather than carried. Leaving it here reported a
+ * single Sept 1 reading as `measured` for Sept 2 and 3 as well, which put this
+ * endpoint (Reports) and the Diary in disagreement about the same day.
+ */
+const MEASUREMENT_FIELDS = [
+  'weight',
+  'height',
+  'body_fat_percentage',
+] as const satisfies readonly (keyof CalorieBalanceMeasurements)[];
+
+/**
+ * Every calendar day from start to end inclusive, as YYYY-MM-DD.
+ *
+ * Uses the shared day-string helpers rather than parsing into host-local `Date` objects,
+ * so the values never round-trip through an instant that a timezone could shift.
+ */
+function enumerateDays(startDate: string, endDate: string): string[] {
+  const days: string[] = [];
+  let cursor = startDate;
+  while (compareDays(cursor, endDate) <= 0) {
+    days.push(cursor);
+    cursor = addDays(cursor, 1);
+  }
+  return days;
+}
+
+/**
+ * Returns a balance for every day in the inclusive range without per-day queries.
+ * Step estimates can use the earliest later weight or height when no prior value
+ * exists; body-composition inputs for BMR remain prior-only.
+ */
+export async function getDailySummaryRange({
+  actorUserId,
+  targetUserId,
+  startDate,
+  endDate,
+  includeCheckin,
+}: DailySummaryRangeOptions): Promise<DailySummaryRangeResult> {
+  const [
+    nutritionRows,
+    goalsByDate,
+    exerciseSplits,
+    checkInRows,
+    seedMeasurement,
+    latestWeightHeight,
+    userProfile,
+    userPreferences,
+    calorieRuleHistory,
+    deviceTotalRows,
+  ] = await Promise.all([
+    // Only `calories` is needed, so the custom-nutrient catalog is deliberately not
+    // passed — it would inflate the dynamic SQL for columns nothing here reads.
+    reportRepository.getNutritionData(targetUserId, startDate, endDate, []),
+    goalService.getUserGoalsForRange(targetUserId, startDate, endDate, true),
+    exerciseEntryRepository.getDailyExerciseCalorieSplitRange(
+      targetUserId,
+      startDate,
+      endDate
+    ),
+    includeCheckin
+      ? measurementRepository
+          .getCheckInMeasurementsByDateRange(targetUserId, startDate, endDate)
+          .catch((error: unknown) => {
+            log(
+              'warn',
+              `Check-in range fetch failed for user ${targetUserId} (${startDate}..${endDate}):`,
+              error
+            );
+            return [];
+          })
+      : [],
+    // Day one still needs a body composition to compute BMR from, and the most recent
+    // measurement may predate the window entirely.
+    includeCheckin
+      ? measurementRepository
+          .getLatestCheckInMeasurementsOnOrBeforeDate(targetUserId, startDate)
+          .catch(() => null)
+      : null,
+    includeCheckin
+      ? measurementRepository
+          .getLatestWeightHeight(targetUserId, startDate)
+          .catch(() => ({ weightKg: null, heightCm: null }))
+      : { weightKg: null, heightCm: null },
+    userRepository.getUserProfile(targetUserId),
+    preferenceRepository.getUserPreferences(targetUserId),
+    calorieRuleHistoryRepository.getCalorieRuleHistory(
+      targetUserId,
+      startDate,
+      endDate
+    ),
+    includeCheckin
+      ? genericHealthRepository
+          .getDeviceTotalCaloriesByDateRange(
+            targetUserId,
+            actorUserId,
+            startDate,
+            endDate
+          )
+          .catch((error: unknown) => {
+            log(
+              'warn',
+              `Device total-calorie range fetch failed for user ${targetUserId} (${startDate}..${endDate}):`,
+              error
+            );
+            return [];
+          })
+      : [],
+  ]);
+
+  const eatenByDate = new Map<string, number>();
+  for (const row of nutritionRows as Array<{
+    date: string;
+    calories?: unknown;
+  }>) {
+    eatenByDate.set(row.date, Number(row.calories) || 0);
+  }
+
+  const splitByDate = new Map(
+    exerciseSplits.map((split) => [split.entry_date, split])
+  );
+  const deviceTotalByDate = new Map(
+    deviceTotalRows.map((row) => [
+      row.entry_date,
+      {
+        totalCalories: Number(row.total_calories),
+        capturedAt: row.captured_at,
+      },
+    ])
+  );
+
+  // Sorted ascending once, then walked with a cursor in the day loop. Filtering and
+  // re-sorting per day would be O(days x measurements) for no reason.
+  //
+  // Fields are carried forward INDEPENDENTLY rather than by whole row, because that is
+  // what `getLatestCheckInMeasurementsOnOrBeforeDate` (the per-date Diary path) does:
+  // it resolves each column to its own latest non-null, positive value. A check-in row
+  // that records only `steps` would otherwise blank out weight and height for that day
+  // and every day after, silently dropping BMR to the 70kg/175cm defaults.
+  const measurementsAsc = (checkInRows as CheckInRow[])
+    .slice()
+    .sort((a, b) => a.entry_date.localeCompare(b.entry_date));
+
+  const stepsByDate = new Map<string, number>();
+  for (const row of measurementsAsc) {
+    stepsByDate.set(row.entry_date, Number(row.steps) || 0);
+  }
+
+  const tz = userPreferences?.timezone || 'UTC';
+  const now = new Date();
+
+  let measurementCursor = 0;
+  const carried: CalorieBalanceMeasurements = {
+    weight: (seedMeasurement as CalorieBalanceMeasurements | null)?.weight,
+    height: (seedMeasurement as CalorieBalanceMeasurements | null)?.height,
+    body_fat_percentage: (seedMeasurement as CalorieBalanceMeasurements | null)
+      ?.body_fat_percentage,
+  };
+
+  // Exact-date lookup for the one field that is not carried forward.
+  const bmrByDate = new Map<string, string | number | null>();
+  for (const row of measurementsAsc) {
+    if (row.bmr !== null && row.bmr !== undefined && Number(row.bmr) > 0) {
+      bmrByDate.set(
+        String(row.entry_date).slice(0, 10),
+        row.bmr as string | number
+      );
+    }
+  }
+
+  const days: DailyCalorieBalanceRow[] = [];
+
+  for (const date of enumerateDays(startDate, endDate)) {
+    while (
+      measurementCursor < measurementsAsc.length &&
+      measurementsAsc[measurementCursor].entry_date <= date
+    ) {
+      const row = measurementsAsc[measurementCursor];
+      for (const field of MEASUREMENT_FIELDS) {
+        const value = Number(row[field]);
+        if (row[field] !== null && row[field] !== undefined && value > 0) {
+          carried[field] = row[field];
+        }
+      }
+      measurementCursor += 1;
+    }
+
+    const split = splitByDate.get(date);
+    const exercise = {
+      activeCalories: Number(split?.active_calories) || 0,
+      otherCalories: Number(split?.other_calories) || 0,
+      activitySteps: Number(split?.activity_steps) || 0,
+    };
+
+    const totalSteps = includeCheckin ? (stepsByDate.get(date) ?? 0) : 0;
+
+    const stepCalories = includeCheckin
+      ? resolveBackgroundStepCalories({
+          totalSteps,
+          activitySteps: exercise.activitySteps,
+          weightKg: Number(carried.weight ?? latestWeightHeight.weightKg),
+          heightCm: Number(carried.height ?? latestWeightHeight.heightCm),
+        })
+      : 0;
+
+    const dayGoals = (goalsByDate as Record<string, { calories?: unknown }>)[
+      date
+    ];
+    const dayDeviceTotal = deviceTotalByDate.get(date);
+    const deviceProjectionSnapshot = resolveDeviceProjectionSnapshot({
+      date,
+      timezone: tz,
+      deviceTotal: dayDeviceTotal,
+      now,
+    });
+
+    days.push({
+      date,
+      stepCalories,
+      ...computeCalorieBalance({
+        date,
+        eatenCalories: eatenByDate.get(date) ?? 0,
+        exercise,
+        backgroundStepCalories: stepCalories,
+        adjustedGoalCalories: Number(dayGoals?.calories) || 2000,
+        userProfile,
+        userPreferences:
+          userPreferences &&
+          preferencesOnDay(userPreferences, calorieRuleHistory, date),
+        measurements: { ...carried, bmr: bmrByDate.get(date) ?? null },
+        ...deviceProjectionSnapshot,
+      }),
+    });
+  }
+
+  return { days };
+}
+
+export default { getDailySummaryRange };

@@ -1,0 +1,514 @@
+import express from 'express';
+import {
+  createMealType,
+  getAllMealTypes,
+  getMealTypeById,
+  updateMealType,
+  deleteMealType,
+  getMealTypeDeletionImpact,
+  MEAL_TYPE_SYSTEM_MESSAGE,
+  MEAL_TYPE_IN_USE_MESSAGE,
+  MEAL_TYPE_INVALID_TARGET_MESSAGE,
+} from '../models/mealType.js';
+import {
+  MealTypeIdParamSchema,
+  DeleteMealTypeQuerySchema,
+} from '../schemas/mealTypeSchemas.js';
+import { log } from '../config/logging.js';
+import { authenticate } from '../middleware/authMiddleware.js';
+import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import {
+  FamilyMealTypesParamSchema,
+  FamilyMealTypesResponseSchema,
+  isEntryTimeString,
+} from '@workspace/shared';
+import familyAccessRepository from '../models/familyAccessRepository.js';
+const router = express.Router();
+router.use(authenticate);
+/**
+ * @swagger
+ * tags:
+ *   name: Nutrition & Meals
+ *   description: Food database, meal planning, meal types, and nutritional tracking.
+ */
+/**
+ * @swagger
+ * /meal-types:
+ *   get:
+ *     summary: Retrieve all meal types
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves all meal types available to the user, including system defaults and custom meal types.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: A list of meal types.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/MealType'
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       500:
+ *         description: Failed to fetch meal types.
+ */
+router.get('/', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const mealTypes = await getAllMealTypes(userId);
+    res.status(200).json(mealTypes);
+  } catch (error) {
+    log('error', 'Route GET /meal-types error:', error);
+    res.status(500).json({ error: 'Failed to fetch meal types' });
+  }
+});
+/**
+ * @swagger
+ * /meal-types/family/{familyUserId}:
+ *   get:
+ *     summary: Retrieve a copy recipient's available meal types
+ *     tags: [Nutrition & Meals]
+ *     description: Requires the signed-in actor's active diary-management and food-library copy permissions. Does not change the active profile.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: familyUserId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Recipient system defaults and custom meal types with visibility preferences.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/MealType'
+ *       400:
+ *         description: Invalid family user ID.
+ *       401:
+ *         description: Authentication required.
+ *       403:
+ *         description: Missing or expired copy permission.
+ */
+router.get('/family/:familyUserId', async (req, res, next) => {
+  const parsed = FamilyMealTypesParamSchema.safeParse(req.params);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'familyUserId must be a valid UUID' });
+    return;
+  }
+  try {
+    const actorUserId =
+      req.originalUserId || req.authenticatedUserId || req.userId;
+    const { familyUserId } = parsed.data;
+    if (
+      !(await familyAccessRepository.checkCopyPermissions(
+        actorUserId,
+        familyUserId
+      ))
+    ) {
+      res.status(403).json({
+        error:
+          'Forbidden: You do not have permissions to copy to this family member.',
+      });
+      return;
+    }
+    const mealTypes = await getAllMealTypes(familyUserId, actorUserId);
+    const response = FamilyMealTypesResponseSchema.parse(
+      mealTypes.map((mealType: Record<string, unknown>) => ({
+        ...mealType,
+        ...(mealType.created_at instanceof Date
+          ? { created_at: mealType.created_at.toISOString() }
+          : {}),
+      }))
+    );
+    res.status(200).json(response);
+  } catch (error) {
+    next(error);
+  }
+});
+/**
+ * @swagger
+ * /meal-types/{id}:
+ *   get:
+ *     summary: Retrieve a single meal type by ID
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves a single meal type by its ID.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the meal type to retrieve.
+ *     responses:
+ *       200:
+ *         description: The requested meal type.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MealType'
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       404:
+ *         description: Meal type not found.
+ *       500:
+ *         description: Failed to fetch meal type.
+ */
+router.get('/:id', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+    const mealType = await getMealTypeById(id, userId);
+    if (!mealType) {
+      return res.status(404).json({ error: 'Meal type not found' });
+    }
+    res.status(200).json(mealType);
+  } catch (error) {
+    log('error', `Route GET /meal-types/${req.params.id} error:`, error);
+    res.status(500).json({ error: 'Failed to fetch meal type' });
+  }
+});
+/**
+ * @swagger
+ * /meal-types:
+ *   post:
+ *     summary: Create a new custom meal type
+ *     tags: [Nutrition & Meals]
+ *     description: Creates a new custom meal type for the authenticated user.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: The name of the new meal type (e.g., "Pre-Workout").
+ *               sort_order:
+ *                 type: integer
+ *                 description: The sort order for the meal type.
+ *                 nullable: true
+ *               default_time:
+ *                 type: string
+ *                 description: Default time of day (HH:MM, 24h) used to prefill diary entry times for this meal.
+ *                 nullable: true
+ *     responses:
+ *       201:
+ *         description: The new meal type was created successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MealType'
+ *       400:
+ *         description: Invalid request body, name is required.
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       409:
+ *         description: A meal type with the given name already exists.
+ *       500:
+ *         description: Failed to create meal type.
+ */
+router.post('/', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { name, sort_order, default_time } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    if (
+      default_time !== null &&
+      default_time !== undefined &&
+      !isEntryTimeString(default_time)
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'default_time must be in HH:MM (24h) format.' });
+    }
+    const newMealType = await createMealType(
+      { name, sort_order, default_time },
+      userId
+    );
+    res.status(201).json(newMealType);
+  } catch (error) {
+    log('error', 'Route POST /meal-types error:', error);
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.includes('already exists')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to create meal type' });
+  }
+});
+/**
+ * @swagger
+ * /meal-types/{id}:
+ *   put:
+ *     summary: Update a meal type
+ *     tags: [Nutrition & Meals]
+ *     description: Updates an existing custom meal type. System default meal types cannot be updated.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the meal type to update.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: The new name for the meal type.
+ *               sort_order:
+ *                 type: integer
+ *                 description: The new sort order for the meal type.
+ *                 nullable: true
+ *               is_visible:
+ *                 type: boolean
+ *                 description: Whether this meal type is visible in the diary view.
+ *               show_in_quick_log:
+ *                 type: boolean
+ *                 description: Whether this meal type appears in the quick food log menu.
+ *               default_time:
+ *                 type: string
+ *                 description: Per-user default time of day (HH:MM, 24h) used to prefill diary entry times. Null clears it.
+ *                 nullable: true
+ *     responses:
+ *       200:
+ *         description: The meal type was updated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/MealType'
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       403:
+ *         description: Forbidden, system default meal types cannot be updated.
+ *       404:
+ *         description: Meal type not found.
+ *       500:
+ *         description: Failed to update meal type.
+ */
+router.put('/:id', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const { id } = req.params;
+    const { name, sort_order, is_visible, show_in_quick_log } = req.body;
+    // Distinguish "not provided" (undefined, preserve) from explicit null (clear)
+    const hasDefaultTime = 'default_time' in req.body;
+    const default_time = req.body.default_time;
+    if (
+      hasDefaultTime &&
+      default_time !== null &&
+      default_time !== undefined &&
+      !isEntryTimeString(default_time)
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'default_time must be in HH:MM (24h) format.' });
+    }
+    const updatedMealType = await updateMealType(
+      id,
+      {
+        name,
+        sort_order,
+        is_visible,
+        show_in_quick_log,
+        ...(hasDefaultTime ? { default_time: default_time ?? null } : {}),
+      },
+      userId
+    );
+    res.status(200).json(updatedMealType);
+  } catch (error) {
+    log('error', `Route PUT /meal-types/${req.params.id} error:`, error);
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.includes('system default')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.includes('not found')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: 'Failed to update meal type' });
+  }
+});
+/**
+ * @swagger
+ * /meal-types/{id}/deletion-impact:
+ *   get:
+ *     summary: Report what references a meal type
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Returns per-category counts of the records that reference this meal
+ *       type. Used to show the user exactly what a delete would affect before
+ *       they choose to reassign those records or delete them.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the meal type to inspect.
+ *     responses:
+ *       200:
+ *         description: The deletion impact report.
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       404:
+ *         description: Meal type not found.
+ *       500:
+ *         description: Failed to fetch meal type deletion impact.
+ */
+router.get(
+  '/:id/deletion-impact',
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      const params = MealTypeIdParamSchema.safeParse(req.params);
+      if (!params.success) {
+        return res.status(400).json({ error: 'id must be a valid UUID' });
+      }
+      const { id } = params.data;
+      const mealType = await getMealTypeById(id, userId);
+      if (!mealType) {
+        return res.status(404).json({ error: 'Meal type not found' });
+      }
+      const impact = await getMealTypeDeletionImpact(id, userId);
+      res.status(200).json(impact);
+    } catch (error) {
+      log(
+        'error',
+        `Route GET /meal-types/${req.params.id}/deletion-impact error:`,
+        error
+      );
+      res
+        .status(500)
+        .json({ error: 'Failed to fetch meal type deletion impact' });
+    }
+  }
+);
+/**
+ * @swagger
+ * /meal-types/{id}:
+ *   delete:
+ *     summary: Delete a custom meal type
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Deletes a custom meal type. System default meal types cannot be
+ *       deleted. With no query parameters the delete only succeeds when
+ *       nothing references the meal type. Use `mode=reassign` with
+ *       `reassignTo` to move referencing records to another meal type first,
+ *       or `mode=force` to permanently delete them.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the meal type to delete.
+ *       - in: query
+ *         name: mode
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [strict, reassign, force]
+ *         description: >
+ *           `strict` (default) fails if the meal type is in use. `reassign`
+ *           moves referencing records to `reassignTo`. `force` permanently
+ *           deletes referencing food entries, logged meals, and plan items.
+ *       - in: query
+ *         name: reassignTo
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Target meal type ID. Required when `mode=reassign`.
+ *     responses:
+ *       200:
+ *         description: Meal type deleted successfully.
+ *       400:
+ *         description: Invalid mode, or missing/invalid reassignment target.
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       403:
+ *         description: Forbidden, system default meal types cannot be deleted.
+ *       404:
+ *         description: Meal type not found or cannot be deleted.
+ *       409:
+ *         description: Conflict, meal type is still in use and cannot be deleted.
+ *       500:
+ *         description: Failed to delete meal type.
+ */
+router.delete('/:id', checkPermissionMiddleware('diary'), async (req, res) => {
+  try {
+    const userId = req.userId;
+    const params = MealTypeIdParamSchema.safeParse(req.params);
+    if (!params.success) {
+      return res.status(400).json({ error: 'id must be a valid UUID' });
+    }
+    const query = DeleteMealTypeQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return res
+        .status(400)
+        .json({ error: query.error.issues[0]?.message ?? 'Invalid request.' });
+    }
+    const { id } = params.data;
+    const { mode } = query.data;
+    const targetMealTypeId = query.data.reassignTo ?? null;
+    const result = await deleteMealType(id, userId, { mode, targetMealTypeId });
+    if (!result.deleted) {
+      return res
+        .status(404)
+        .json({ error: 'Meal type not found or cannot be deleted' });
+    }
+    res.status(200).json({
+      message: 'Meal type deleted successfully',
+      mode: result.mode,
+      ...(result.reassignedTo ? { reassignedTo: result.reassignedTo } : {}),
+    });
+  } catch (error) {
+    log('error', `Route DELETE /meal-types/${req.params.id} error:`, error);
+    const message = error instanceof Error ? error.message : '';
+    if (message === MEAL_TYPE_SYSTEM_MESSAGE) {
+      return res.status(403).json({ error: message });
+    }
+    if (message === MEAL_TYPE_INVALID_TARGET_MESSAGE) {
+      return res.status(400).json({ error: message });
+    }
+    if (message === MEAL_TYPE_IN_USE_MESSAGE) {
+      return res.status(409).json({ error: message });
+    }
+    res.status(500).json({ error: 'Failed to delete meal type' });
+  }
+});
+export default router;

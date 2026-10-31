@@ -1,0 +1,432 @@
+import nutrientDisplayPreferenceRepository from '../models/nutrientDisplayPreferenceRepository.js';
+import { log } from '../config/logging.js';
+import customNutrientService from './customNutrientService.js';
+import { NON_GOAL_NUTRIENT_KEYS } from '@workspace/shared';
+
+// The shape of a `user_nutrient_display_preferences` row as this service reads it.
+interface NutrientDisplayPreferenceRow {
+  view_group: string;
+  platform: string;
+  visible_nutrients: string[] | null;
+}
+const defaultNutrients = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'dietary_fiber',
+  'sugars',
+  'caffeine_mg',
+  'alcohol_g',
+];
+const predefinedNutrients = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'dietary_fiber',
+  'sugars',
+  'sodium',
+  'cholesterol',
+  'saturated_fat',
+  'monounsaturated_fat',
+  'polyunsaturated_fat',
+  'trans_fat',
+  'potassium',
+  'vitamin_a',
+  'vitamin_c',
+  'iron',
+  'calcium',
+  'glycemic_index',
+  'caffeine_mg',
+  // Deliberately NOT in defaultNutrients: water already has a dedicated
+  // gauge on both web (WaterIntake.tsx) and mobile (HydrationGauge), so
+  // putting it in the compact summary/quick_info/diary surfaces would render
+  // the same number twice with different rounding. It stays here in
+  // predefinedNutrients so it appears in the food form (needed to enter a
+  // water content) and is one click from the summary.
+  'water_ml',
+  'alcohol_g',
+];
+/**
+ * The view groups a nutrient created from the Custom Nutrients settings page is made
+ * visible in. Callers with a narrower intent pass their own set — a supplement's
+ * nutrients, for instance, deliberately omit `food_database`, because adding a
+ * multivitamin says nothing about what the user wants to see on FOOD rows.
+ */
+const DEFAULT_AUTO_ADD_VIEW_GROUPS = [
+  'food_database',
+  'goal',
+  'report_tabular',
+  'report_chart',
+];
+
+/**
+ * Automatically adds a nutrient to specific view groups if it's not already present.
+ */
+async function addNutrientToSpecificViews(
+  userId: string,
+  nutrientName: string,
+  targetGroups: string[] = DEFAULT_AUTO_ADD_VIEW_GROUPS
+) {
+  const platforms = ['desktop', 'mobile'];
+  log(
+    'debug',
+    `addNutrientToSpecificViews: Start for user ${userId}, nutrient: ${nutrientName}`
+  );
+  // Get raw customizations from DB to avoid fallback logic interference
+  const rawUserPrefs =
+    await nutrientDisplayPreferenceRepository.getNutrientDisplayPreferences(
+      userId
+    );
+  // Get all currently known nutrients to build a full list for new records
+  const allKnownNutrients = await getAllNutrients(userId);
+  if (!allKnownNutrients.includes(nutrientName)) {
+    allKnownNutrients.push(nutrientName);
+  }
+  for (const group of targetGroups) {
+    if (
+      group === 'goal' &&
+      (NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(nutrientName)
+    ) {
+      continue;
+    }
+    for (const platform of platforms) {
+      const existing = rawUserPrefs.find(
+        (p: NutrientDisplayPreferenceRow) =>
+          p.view_group === group && p.platform === platform
+      );
+      let visibleNutrients;
+      if (existing) {
+        // User has a custom record, append to it if missing
+        visibleNutrients =
+          typeof existing.visible_nutrients === 'string'
+            ? JSON.parse(existing.visible_nutrients)
+            : existing.visible_nutrients;
+        if (!visibleNutrients.includes(nutrientName)) {
+          visibleNutrients.push(nutrientName);
+          log(
+            'debug',
+            `addNutrientToSpecificViews: Updating existing record for ${group}/${platform}`
+          );
+          await upsertNutrientDisplayPreference(
+            userId,
+            group,
+            platform,
+            visibleNutrients
+          );
+        }
+      } else {
+        // No custom record, create one using the full current list
+        log(
+          'debug',
+          `addNutrientToSpecificViews: Creating new record for ${group}/${platform} with all nutrients`
+        );
+        const groupNutrients =
+          group === 'goal'
+            ? allKnownNutrients.filter(
+                (n) =>
+                  !(NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(n)
+              )
+            : allKnownNutrients;
+        await upsertNutrientDisplayPreference(
+          userId,
+          group,
+          platform,
+          groupNutrients
+        );
+      }
+    }
+  }
+}
+/**
+ * Removes a nutrient from all display preferences for a user.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function removeNutrientFromAllViews(userId: any, nutrientName: any) {
+  log(
+    'info',
+    `removeNutrientFromAllViews: Removing nutrient ${nutrientName} for user ${userId}`
+  );
+  const rawUserPrefs =
+    await nutrientDisplayPreferenceRepository.getNutrientDisplayPreferences(
+      userId
+    );
+  for (const pref of rawUserPrefs) {
+    const visibleNutrients =
+      typeof pref.visible_nutrients === 'string'
+        ? JSON.parse(pref.visible_nutrients)
+        : pref.visible_nutrients;
+    if (visibleNutrients.includes(nutrientName)) {
+      const updatedNutrients = visibleNutrients.filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (n: any) => n !== nutrientName
+      );
+      log(
+        'debug',
+        `removeNutrientFromAllViews: Updating ${pref.view_group}/${pref.platform} for user ${userId}`
+      );
+      await upsertNutrientDisplayPreference(
+        userId,
+        pref.view_group,
+        pref.platform,
+        updatedNutrients
+      );
+    }
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getAllNutrients(userId: any) {
+  const customNutrients =
+    await customNutrientService.getCustomNutrients(userId);
+  const customNutrientNames = customNutrients
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((cn: any) => cn && cn.name)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((cn: any) => cn.name); // Keep original casing for custom nutrients
+  return [...predefinedNutrients, ...customNutrientNames];
+}
+const defaultGoalNutrients = predefinedNutrients.filter(
+  (n) => !(NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(n)
+);
+
+const defaultPreferences = [
+  // Desktop
+  {
+    view_group: 'summary',
+    platform: 'desktop',
+    visible_nutrients: defaultNutrients,
+  },
+  {
+    view_group: 'quick_info',
+    platform: 'desktop',
+    visible_nutrients: defaultNutrients,
+  },
+  {
+    view_group: 'food_database',
+    platform: 'desktop',
+    visible_nutrients: predefinedNutrients,
+  },
+  {
+    view_group: 'goal',
+    platform: 'desktop',
+    visible_nutrients: defaultGoalNutrients,
+  },
+  {
+    view_group: 'report_tabular',
+    platform: 'desktop',
+    visible_nutrients: predefinedNutrients,
+  },
+  {
+    view_group: 'report_chart',
+    platform: 'desktop',
+    visible_nutrients: predefinedNutrients,
+  },
+  // Mobile
+  {
+    view_group: 'summary',
+    platform: 'mobile',
+    visible_nutrients: defaultNutrients,
+  },
+  {
+    view_group: 'quick_info',
+    platform: 'mobile',
+    visible_nutrients: defaultNutrients,
+  },
+  {
+    // Mobile-only view group for the Diary screen's custom nutrient pills.
+    // No desktop counterpart exists; defaults to an empty selection since the
+    // 4 core macros are always shown and custom nutrients are opt-in.
+    view_group: 'diary',
+    platform: 'mobile',
+    visible_nutrients: [],
+  },
+  {
+    view_group: 'food_database',
+    platform: 'mobile',
+    visible_nutrients: predefinedNutrients,
+  },
+  {
+    view_group: 'goal',
+    platform: 'mobile',
+    visible_nutrients: defaultGoalNutrients,
+  },
+  {
+    view_group: 'report_tabular',
+    platform: 'mobile',
+    visible_nutrients: predefinedNutrients,
+  },
+  {
+    view_group: 'report_chart',
+    platform: 'mobile',
+    visible_nutrients: predefinedNutrients,
+  },
+];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getNutrientDisplayPreferences(userId: any) {
+  const userPreferencesRaw =
+    await nutrientDisplayPreferenceRepository.getNutrientDisplayPreferences(
+      userId
+    );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const userPreferences = userPreferencesRaw.map((p: any) => ({
+    ...p,
+
+    visible_nutrients:
+      typeof p.visible_nutrients === 'string'
+        ? JSON.parse(p.visible_nutrients)
+        : p.visible_nutrients,
+  }));
+  const allNutrientsDynamic = await getAllNutrients(userId);
+  // Return a complete list of 12 preferences (6 groups x 2 platforms)
+  const viewGroups = [
+    'summary',
+    'quick_info',
+    'food_database',
+    'goal',
+    'report_tabular',
+    'report_chart',
+  ];
+  const platforms = ['desktop', 'mobile'];
+  const completePreferences = [];
+  for (const group of viewGroups) {
+    for (const platform of platforms) {
+      const userPref = userPreferences.find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (p: any) => p.view_group === group && p.platform === platform
+      );
+      if (userPref) {
+        completePreferences.push(userPref);
+      } else {
+        // Fallback to default
+        const defaultMatch = defaultPreferences.find(
+          (p) => p.view_group === group && p.platform === platform
+        );
+        const prefToPush = JSON.parse(JSON.stringify(defaultMatch));
+        // Ensure defaults for specific groups include all current nutrients
+        if (
+          group === 'food_database' ||
+          group === 'report_tabular' ||
+          group === 'report_chart'
+        ) {
+          prefToPush.visible_nutrients = allNutrientsDynamic;
+        } else if (group === 'goal') {
+          prefToPush.visible_nutrients = allNutrientsDynamic.filter(
+            (n: string) =>
+              !(NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(n)
+          );
+        }
+        completePreferences.push(prefToPush);
+      }
+    }
+  }
+  // 'diary' is mobile-only (no desktop counterpart), so it's handled outside
+  // the viewGroups x platforms cross-product above rather than adding a
+  // spurious diary/desktop row.
+  const diaryPref = userPreferences.find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (p: any) => p.view_group === 'diary' && p.platform === 'mobile'
+  );
+  if (diaryPref) {
+    completePreferences.push(diaryPref);
+  } else {
+    const diaryDefault = defaultPreferences.find(
+      (p) => p.view_group === 'diary' && p.platform === 'mobile'
+    );
+    completePreferences.push(JSON.parse(JSON.stringify(diaryDefault)));
+  }
+  return completePreferences;
+}
+async function upsertNutrientDisplayPreference(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  userId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  viewGroup: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  platform: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  visibleNutrients: any
+) {
+  return await nutrientDisplayPreferenceRepository.upsertNutrientDisplayPreference(
+    userId,
+    viewGroup,
+    platform,
+    visibleNutrients
+  );
+}
+
+async function resetNutrientDisplayPreference(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  userId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  viewGroup: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  platform: any
+) {
+  await nutrientDisplayPreferenceRepository.deleteNutrientDisplayPreference(
+    userId,
+    viewGroup,
+    platform
+  );
+  const allNutrientsDynamic = await getAllNutrients(userId);
+  let defaultVisibleNutrients;
+  if (viewGroup === 'summary' || viewGroup === 'quick_info') {
+    defaultVisibleNutrients = defaultNutrients; // Use the smaller default set for these
+  } else if (viewGroup === 'goal') {
+    defaultVisibleNutrients = allNutrientsDynamic.filter(
+      (n: string) => !(NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(n)
+    );
+  } else {
+    defaultVisibleNutrients = allNutrientsDynamic; // Use all nutrients for other view groups
+  }
+  const newDefaultPreference =
+    await nutrientDisplayPreferenceRepository.upsertNutrientDisplayPreference(
+      userId,
+      viewGroup,
+      platform,
+      defaultVisibleNutrients
+    );
+  return newDefaultPreference;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function createDefaultNutrientPreferencesForUser(userId: any) {
+  const allNutrientsDynamic = await getAllNutrients(userId);
+  const dynamicDefaultPreferences = JSON.parse(
+    JSON.stringify(defaultPreferences)
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dynamicDefaultPreferences.forEach((pref: any) => {
+    if (
+      pref.view_group === 'food_database' ||
+      pref.view_group === 'report_tabular' ||
+      pref.view_group === 'report_chart'
+    ) {
+      pref.visible_nutrients = allNutrientsDynamic;
+    } else if (pref.view_group === 'goal') {
+      pref.visible_nutrients = allNutrientsDynamic.filter(
+        (n: string) =>
+          !(NON_GOAL_NUTRIENT_KEYS as readonly string[]).includes(n)
+      );
+    }
+  });
+  return await nutrientDisplayPreferenceRepository.createDefaultNutrientPreferences(
+    userId,
+    dynamicDefaultPreferences
+  );
+}
+export { getNutrientDisplayPreferences };
+export { upsertNutrientDisplayPreference };
+export { resetNutrientDisplayPreference };
+export { createDefaultNutrientPreferencesForUser };
+export { getAllNutrients };
+export { addNutrientToSpecificViews };
+export { removeNutrientFromAllViews };
+export default {
+  getNutrientDisplayPreferences,
+  upsertNutrientDisplayPreference,
+  resetNutrientDisplayPreference,
+  createDefaultNutrientPreferencesForUser,
+  getAllNutrients,
+  addNutrientToSpecificViews,
+  removeNutrientFromAllViews,
+};

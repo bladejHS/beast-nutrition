@@ -1,0 +1,932 @@
+import axios from 'axios';
+import { getClient, getSystemClient } from '../../db/poolManager.js';
+import { encrypt, decrypt, ENCRYPTION_KEY } from '../../security/encryption.js';
+import { log } from '../../config/logging.js';
+import withingsDataProcessor from './withingsDataProcessor.js';
+import { logRawResponse } from '../../utils/diagnosticLogger.js';
+import { claimOAuthState, persistOAuthState } from '../../utils/oauthState.js';
+import { describeError } from '../../utils/errors.js';
+import { withProviderTokenLock } from '../../models/externalProviderRepository.js';
+import type {
+  WithingsActivity,
+  WithingsHeartSeries,
+  WithingsMeasureGroup,
+  WithingsSleepSeries,
+  WithingsWorkout,
+} from '../../types/withings.js';
+const WITHINGS_API_BASE_URL = 'https://wbsapi.withings.net';
+const WITHINGS_ACCOUNT_BASE_URL = 'https://account.withings.com';
+interface WithingsTokenBody {
+  access_token: string;
+  refresh_token: string;
+  expires_in?: string | number;
+  scope?: string;
+  userid?: string | number;
+}
+
+interface WithingsTokenEnvelope {
+  status?: number | string;
+  error?: string;
+  body?: Partial<WithingsTokenBody>;
+}
+
+// A rejected response can still carry a live access_token (for example when only
+// the refresh_token is missing), so failures are described by status and error
+// alone. The raw payload must never reach the logs.
+function describeWithingsFailure(
+  data: WithingsTokenEnvelope | undefined
+): string {
+  const status = data?.status === undefined ? 'absent' : String(data.status);
+  return `status ${status}${data?.error ? `: ${data.error}` : ''}`;
+}
+
+// Withings wraps every response as { status, body } and only status 0 is success.
+// Their docs do not specify whether an error response omits `body` or sends an
+// empty one, so a truthy-body check alone is not a safe guard: check the status
+// and the token fields before anything is encrypted or persisted. encrypt()
+// returns nulls rather than throwing on a missing token, so an unguarded refresh
+// would overwrite the stored refresh token with NULL and disconnect the user.
+function parseWithingsTokenResponse(
+  data: WithingsTokenEnvelope | undefined,
+  context: string
+): WithingsTokenBody {
+  const failure = describeWithingsFailure(data);
+  if (data?.status !== undefined && Number(data.status) !== 0) {
+    log('error', `Withings ${context} error: ${failure}.`);
+    throw new Error(`Withings ${context} failed with ${failure}.`);
+  }
+  if (!data || !data.body) {
+    log(
+      'error',
+      `Withings ${context} error: invalid response structure (${failure}).`
+    );
+    throw new Error(`Invalid Withings API response structure (${context}).`);
+  }
+  const { access_token, refresh_token } = data.body;
+  if (!access_token || !refresh_token) {
+    log(
+      'error',
+      `Withings ${context} error: response contained no usable tokens (${failure}).`
+    );
+    throw new Error(
+      `Missing access_token or refresh_token in Withings ${context} response.`
+    );
+  }
+  return { ...data.body, access_token, refresh_token };
+}
+
+// Withings expects token requests as form-encoded POST bodies on the v2/oauth2 endpoint.
+async function requestWithingsToken(params: Record<string, string>) {
+  return axios.post(
+    `${WITHINGS_API_BASE_URL}/v2/oauth2`,
+    new URLSearchParams({ action: 'requesttoken', ...params }),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    }
+  );
+}
+// Function to construct the Withings authorization URL
+async function getAuthorizationUrl(userId: string) {
+  const client = await getSystemClient();
+  try {
+    // Issuing the state and reading the client credentials is one statement, so
+    // the client_id in this URL always belongs to the row holding the nonce.
+    const { state, encrypted_app_id, app_id_iv, app_id_tag } =
+      await persistOAuthState(client, {
+        userId,
+        providerType: 'withings',
+      });
+    const clientId = await decrypt(
+      encrypted_app_id,
+      app_id_iv,
+      app_id_tag,
+      ENCRYPTION_KEY
+    );
+    const scope = 'user.info,user.metrics,user.activity,user.sleepevents'; // Define required scopes
+    return `${WITHINGS_ACCOUNT_BASE_URL}/oauth2_user/authorize2?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${process.env.SPARKY_FITNESS_FRONTEND_URL}/withings/callback&state=${state}`;
+  } finally {
+    client.release();
+  }
+}
+// Function to exchange authorization code for access and refresh tokens.
+// `userId` is deliberately absent from this signature: the owner is recovered
+// from the claimed state row, so no caller can name the row that gets written.
+async function exchangeCodeForTokens(
+  state: unknown,
+  code: string,
+  redirectUri: string,
+  actorUserId: string
+) {
+  const client = await getSystemClient();
+  try {
+    const {
+      id: providerRowId,
+      user_id: ownerUserId,
+      encrypted_app_id,
+      app_id_iv,
+      app_id_tag,
+      encrypted_app_key,
+      app_key_iv,
+      app_key_tag,
+    } = await claimOAuthState(client, {
+      state,
+      providerType: 'withings',
+      actorUserId,
+    });
+    const clientId = await decrypt(
+      encrypted_app_id,
+      app_id_iv,
+      app_id_tag,
+      ENCRYPTION_KEY
+    );
+    const clientSecret = await decrypt(
+      encrypted_app_key,
+      app_key_iv,
+      app_key_tag,
+      ENCRYPTION_KEY
+    );
+    if (!clientId || !clientSecret) {
+      throw new Error('Withings client ID or client secret is missing.');
+    }
+
+    const response = await requestWithingsToken({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      client_secret: clientSecret,
+      code: code,
+      redirect_uri: redirectUri,
+    });
+    const { access_token, refresh_token, expires_in, scope, userid } =
+      parseWithingsTokenResponse(response.data, 'requesttoken');
+    // Encrypt tokens
+    const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
+    const encryptedRefreshToken = await encrypt(refresh_token, ENCRYPTION_KEY);
+    // Validate expires_in
+    let validExpiresIn = parseInt(String(expires_in), 10);
+    if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
+      log(
+        'warn',
+        `Invalid or missing expires_in value received from Withings API: ${expires_in}. Defaulting to 0.`
+      );
+      validExpiresIn = 0; // Force immediate expiration to trigger refresh
+    }
+    // Store tokens and related info in external_data_providers table
+    const updatePayload = [
+      encryptedAccessToken.encryptedText,
+      encryptedAccessToken.iv,
+      encryptedAccessToken.tag,
+      encryptedRefreshToken.encryptedText,
+      encryptedRefreshToken.iv,
+      encryptedRefreshToken.tag,
+      scope,
+      new Date(Date.now() + validExpiresIn * 1000),
+      userid,
+      providerRowId,
+    ];
+    try {
+      // Keyed on the claimed row's primary key: `provider_type` carries no
+      // uniqueness constraint, so a user_id predicate could fan out across rows.
+      // `oauth_state = NULL` is redundant after the claim, but states the invariant.
+      const updateQuery = `UPDATE external_data_providers
+                SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
+                    encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
+                    scope = $7, token_expires_at = $8, external_user_id = $9,
+                    oauth_state = NULL, is_active = TRUE, updated_at = NOW()
+                WHERE id = $10`;
+      const dbResult = await client.query(updateQuery, updatePayload);
+      log(
+        'info',
+        `Database update result for user ${ownerUserId}: ${dbResult.rowCount} rows updated.`
+      );
+    } catch (dbError) {
+      log(
+        'error',
+        `FATAL: Database update failed for user ${ownerUserId}:`,
+        dbError
+      );
+      throw dbError; // Re-throw to ensure the outer catch block handles it
+    }
+    return { success: true, userId: userid, ownerUserId };
+  } catch (error) {
+    log(
+      'error',
+      `Error exchanging Withings code for tokens: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Function to refresh an expired access token
+async function refreshAccessToken(userId: string) {
+  const client = await getClient(userId);
+  try {
+    return await withProviderTokenLock(client, async () => {
+      const providerResult = await client.query(
+        `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag,
+                    encrypted_refresh_token, refresh_token_iv, refresh_token_tag
+             FROM external_data_providers
+             WHERE user_id = $1 AND provider_type = 'withings'
+             FOR UPDATE`,
+        [userId]
+      );
+      if (providerResult.rows.length === 0) {
+        throw new Error(
+          'Withings client credentials or refresh token not found for user.'
+        );
+      }
+      const {
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+      } = providerResult.rows[0];
+      const clientId = await decrypt(
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        ENCRYPTION_KEY
+      );
+      const clientSecret = await decrypt(
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        ENCRYPTION_KEY
+      );
+      const refreshToken = await decrypt(
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+        ENCRYPTION_KEY
+      );
+      if (!clientId || !clientSecret || !refreshToken) {
+        throw new Error(
+          'Withings client ID, client secret, or refresh token is missing.'
+        );
+      }
+      const response = await requestWithingsToken({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      });
+      const {
+        access_token,
+        refresh_token: newRefreshToken,
+        expires_in,
+        scope,
+      } = parseWithingsTokenResponse(response.data, 'token refresh');
+      // Validate expires_in
+      let validExpiresIn = parseInt(String(expires_in), 10);
+      if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
+        log(
+          'warn',
+          `Invalid or missing expires_in value received from Withings API during refresh: ${expires_in}. Defaulting to 0.`
+        );
+        validExpiresIn = 0; // Force immediate expiration to trigger refresh
+      }
+      // Encrypt new tokens
+      const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
+      const encryptedNewRefreshToken = await encrypt(
+        newRefreshToken,
+        ENCRYPTION_KEY
+      );
+      // Update tokens in external_data_providers table
+      await client.query(
+        `UPDATE external_data_providers
+             SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
+                 encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
+                 scope = $7, token_expires_at = $8, updated_at = NOW()
+             WHERE user_id = $9 AND provider_type = 'withings'`,
+        [
+          encryptedAccessToken.encryptedText,
+          encryptedAccessToken.iv,
+          encryptedAccessToken.tag,
+          encryptedNewRefreshToken.encryptedText,
+          encryptedNewRefreshToken.iv,
+          encryptedNewRefreshToken.tag,
+          scope,
+          new Date(Date.now() + validExpiresIn * 1000),
+          userId,
+        ]
+      );
+      return access_token;
+    });
+  } catch (error) {
+    log(
+      'error',
+      `Error refreshing Withings access token for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Helper function to get a valid access token (refreshes if expired)
+async function getValidAccessToken(userId: string) {
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      `SELECT encrypted_access_token, access_token_iv, access_token_tag, token_expires_at
+             FROM external_data_providers
+             WHERE user_id = $1 AND provider_type = 'withings'`,
+      [userId]
+    );
+    if (providerResult.rows.length === 0) {
+      throw new Error('Withings provider not configured for user.');
+    }
+    const {
+      encrypted_access_token,
+      access_token_iv,
+      access_token_tag,
+      token_expires_at,
+    } = providerResult.rows[0];
+    let accessToken = await decrypt(
+      encrypted_access_token,
+      access_token_iv,
+      access_token_tag,
+      ENCRYPTION_KEY
+    );
+    if (new Date() >= new Date(token_expires_at)) {
+      log(
+        'info',
+        `Withings access token expired for user ${userId}. Refreshing...`
+      );
+      accessToken = await refreshAccessToken(userId);
+    }
+    return accessToken;
+  } finally {
+    client.release();
+  }
+}
+// Function to fetch measures data (weight, blood pressure, etc.)
+async function fetchMeasuresData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsMeasureGroup[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allGroups: WithingsMeasureGroup[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/measure`,
+        null,
+        {
+          params: {
+            action: 'getmeas',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdate: startDate, // Unix timestamp
+            enddate: endDate, // Unix timestamp
+            offset: offset,
+          },
+        }
+      );
+      if (response.data && response.data.body) {
+        if (response.data.body.measuregrps) {
+          allGroups = allGroups.concat(response.data.body.measuregrps);
+        }
+        hasMore =
+          response.data.body.more === true || response.data.body.more === 1;
+        offset = response.data.body.offset || 0;
+      } else {
+        hasMore = false;
+      }
+    }
+    logRawResponse('withings', 'raw_measures', {
+      status: 0,
+      body: { measuregrps: allGroups },
+    });
+    return allGroups;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings measures data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function fetchAndProcessMeasuresData(
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
+) {
+  const measuregrps = await fetchMeasuresData(userId, startDate, endDate);
+  if (measuregrps && measuregrps.length > 0) {
+    await withingsDataProcessor.processWithingsMeasures(
+      userId,
+      createdByUserId,
+      measuregrps
+    );
+  }
+  return measuregrps;
+}
+// Function to fetch heart data
+async function fetchHeartData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsHeartSeries[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allSeries: WithingsHeartSeries[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/v2/heart`,
+        null,
+        {
+          params: {
+            action: 'list',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdate: startDate, // Unix timestamp
+            enddate: endDate, // Unix timestamp
+            offset: offset,
+          },
+        }
+      );
+      if (response.data && response.data.body) {
+        if (response.data.body.series) {
+          const series = response.data.body.series;
+          allSeries = allSeries.concat(
+            Array.isArray(series) ? series : [series]
+          );
+        }
+        hasMore =
+          response.data.body.more === true || response.data.body.more === 1;
+        offset = response.data.body.offset || 0;
+      } else {
+        hasMore = false;
+      }
+    }
+    logRawResponse('withings', 'raw_heart', {
+      status: 0,
+      body: { series: allSeries },
+    });
+    return allSeries;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings heart data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function fetchAndProcessHeartData(
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
+) {
+  const heartSeries = await fetchHeartData(userId, startDate, endDate);
+  if (heartSeries && heartSeries.length > 0) {
+    await withingsDataProcessor.processWithingsHeartData(
+      userId,
+      createdByUserId,
+      heartSeries
+    );
+  }
+  return heartSeries;
+}
+// Function to fetch sleep data (high-frequency stages)
+async function fetchSleepData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsSleepSeries[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allSeries: WithingsSleepSeries[] = [];
+    let currentStart = startDate;
+    const SECONDS_IN_DAY = 24 * 60 * 60;
+    // Withings limit: only 24h of high-frequency data per call
+    while (currentStart < endDate) {
+      const currentEnd = Math.min(currentStart + SECONDS_IN_DAY, endDate);
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/v2/sleep`,
+        null,
+        {
+          params: {
+            action: 'get',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdate: currentStart,
+            enddate: currentEnd,
+          },
+        }
+      );
+      if (response.data && response.data.body && response.data.body.series) {
+        const series = response.data.body.series;
+        if (Array.isArray(series)) {
+          allSeries = allSeries.concat(series);
+        } else {
+          allSeries.push(series);
+        }
+      }
+      currentStart = currentEnd;
+    }
+    logRawResponse('withings', 'raw_sleep', {
+      status: 0,
+      body: { series: allSeries },
+    });
+    return allSeries;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings sleep data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function fetchAndProcessSleepData(
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
+) {
+  const sleepSeries = await fetchSleepData(userId, startDate, endDate);
+  if (sleepSeries && sleepSeries.length > 0) {
+    await withingsDataProcessor.processWithingsSleepData(
+      userId,
+      createdByUserId,
+      sleepSeries
+    );
+  }
+  return sleepSeries;
+}
+// Function to fetch sleep summary data (action=getsummary)
+
+async function fetchSleepSummaryData(
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsSleepSeries[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allSeries: WithingsSleepSeries[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/v2/sleep`,
+        null,
+        {
+          params: {
+            action: 'getsummary',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdateymd: startDateYMD,
+            enddateymd: endDateYMD,
+            data_fields:
+              'total_timeinbed,total_sleep_time,asleepduration,lightsleepduration,remsleepduration,deepsleepduration,sleep_efficiency,sleep_latency,wakeup_latency,wakeupduration,wakeupcount,waso,nb_rem_episodes,sleep_score,breathing_disturbances_intensity,snoring,snoringepisodecount,hr_average,hr_min,hr_max,rr_average,rr_min,rr_max',
+            offset: offset,
+          },
+        }
+      );
+      if (response.data && response.data.body) {
+        if (response.data.body.series) {
+          const series = response.data.body.series;
+          allSeries = allSeries.concat(
+            Array.isArray(series) ? series : [series]
+          );
+        }
+        hasMore =
+          response.data.body.more === true || response.data.body.more === 1;
+        offset = response.data.body.offset || 0;
+      } else {
+        hasMore = false;
+      }
+    }
+    logRawResponse('withings', 'raw_sleep_summary', {
+      status: 0,
+      body: { series: allSeries },
+    });
+    return allSeries;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings sleep summary data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Function to fetch daily activity data (steps, total calories, etc.)
+
+async function fetchActivityData(
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsActivity[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allActivities: WithingsActivity[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/v2/measure`,
+        null,
+        {
+          params: {
+            action: 'getactivity',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdateymd: startDateYMD,
+            enddateymd: endDateYMD,
+            data_fields:
+              'steps,distance,elevation,soft,moderate,intense,active,calories,totalcalories,hr_average,hr_min,hr_max,hr_zone_0,hr_zone_1,hr_zone_2,hr_zone_3',
+            offset: offset,
+          },
+        }
+      );
+      if (response.data && response.data.body) {
+        if (response.data.body.activities) {
+          allActivities = allActivities.concat(response.data.body.activities);
+        }
+        hasMore =
+          response.data.body.more === true || response.data.body.more === 1;
+        offset = response.data.body.offset || 0;
+      } else {
+        hasMore = false;
+      }
+    }
+    logRawResponse('withings', 'raw_activity', {
+      status: 0,
+      body: { activities: allActivities },
+    });
+    return allActivities;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings activity data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+// Function to fetch workout data
+
+async function fetchWorkoutsData(
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsWorkout[]> {
+  const accessToken = await getValidAccessToken(userId);
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      "SELECT external_user_id FROM external_data_providers WHERE user_id = $1 AND provider_type = 'withings'",
+      [userId]
+    );
+    const withingsUserId = providerResult.rows[0].external_user_id;
+    let allSeries: WithingsWorkout[] = [];
+    let offset = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const response = await axios.post(
+        `${WITHINGS_API_BASE_URL}/v2/measure`,
+        null,
+        {
+          params: {
+            action: 'getworkouts',
+            access_token: accessToken,
+            userid: withingsUserId,
+            startdateymd: startDateYMD,
+            enddateymd: endDateYMD,
+            data_fields:
+              'calories,intensity,manual_intensity,manual_distance,manual_calories,hr_average,hr_min,hr_max,hr_zone_0,hr_zone_1,hr_zone_2,hr_zone_3,pause_duration,spo2_average,steps,distance,elevation',
+            offset: offset,
+          },
+        }
+      );
+      if (response.data && response.data.body) {
+        if (response.data.body.series) {
+          const series = response.data.body.series;
+          allSeries = allSeries.concat(
+            Array.isArray(series) ? series : [series]
+          );
+        }
+        hasMore =
+          response.data.body.more === true || response.data.body.more === 1;
+        offset = response.data.body.offset || 0;
+      } else {
+        hasMore = false;
+      }
+    }
+    logRawResponse('withings', 'raw_workouts', {
+      status: 0,
+      body: { series: allSeries },
+    });
+    return allSeries;
+  } catch (error) {
+    log(
+      'error',
+      `Error fetching Withings workout data for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function fetchAndProcessWorkoutsData(
+  userId: string,
+  createdByUserId: string,
+  startDateYMD: string,
+  endDateYMD: string
+) {
+  const workouts = await fetchWorkoutsData(userId, startDateYMD, endDateYMD);
+  if (workouts && workouts.length > 0) {
+    await withingsDataProcessor.processWithingsWorkouts(
+      userId,
+      createdByUserId,
+      workouts
+    );
+  }
+  return workouts;
+}
+// Function to disconnect Withings account
+async function disconnectWithings(userId: string) {
+  const client = await getClient(userId);
+  try {
+    const providerResult = await client.query(
+      `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag, external_user_id
+             FROM external_data_providers
+             WHERE user_id = $1 AND provider_type = 'withings'`,
+      [userId]
+    );
+    if (providerResult.rows.length === 0) {
+      log(
+        'warn',
+        `Attempted to disconnect Withings for user ${userId}, but no provider found.`
+      );
+      return { success: true }; // Already disconnected or never connected
+    }
+    const {
+      encrypted_app_id,
+      app_id_iv,
+      app_id_tag,
+      encrypted_app_key,
+      app_key_iv,
+      app_key_tag,
+      external_user_id,
+    } = providerResult.rows[0];
+    const clientId = await decrypt(
+      encrypted_app_id,
+      app_id_iv,
+      app_id_tag,
+      ENCRYPTION_KEY
+    );
+    const clientSecret = await decrypt(
+      encrypted_app_key,
+      app_key_iv,
+      app_key_tag,
+      ENCRYPTION_KEY
+    );
+    // Revoke token with Withings
+    await axios.post(`${WITHINGS_API_BASE_URL}/v2/oauth2`, null, {
+      params: {
+        action: 'revoke',
+        client_id: clientId,
+        client_secret: clientSecret,
+        userid: external_user_id,
+      },
+    });
+    // Clear tokens and deactivate provider in our database
+    await client.query(
+      `UPDATE external_data_providers
+             SET encrypted_access_token = NULL, access_token_iv = NULL, access_token_tag = NULL,
+                 encrypted_refresh_token = NULL, refresh_token_iv = NULL, refresh_token_tag = NULL,
+                 scope = NULL, token_expires_at = NULL, external_user_id = NULL, is_active = FALSE, updated_at = NOW()
+             WHERE user_id = $1 AND provider_type = 'withings'`,
+      [userId]
+    );
+    log('info', `Withings account disconnected for user ${userId}`);
+    return { success: true };
+  } catch (error) {
+    log(
+      'error',
+      `Error disconnecting Withings account for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+async function getStatus(userId: string) {
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `SELECT last_sync_at, token_expires_at
+             FROM external_data_providers
+             WHERE user_id = $1 AND provider_type = 'withings'`,
+      [userId]
+    );
+    if (result.rows.length === 0) {
+      return {
+        connected: false,
+        lastSyncAt: null,
+        tokenExpiresAt: null,
+      };
+    }
+    const { last_sync_at, token_expires_at } = result.rows[0];
+    return {
+      connected: true,
+      lastSyncAt: last_sync_at,
+      tokenExpiresAt: token_expires_at,
+    };
+  } catch (error) {
+    log(
+      'error',
+      `Error getting Withings status for user ${userId}: ${describeError(error)}`
+    );
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+export { getAuthorizationUrl };
+export { exchangeCodeForTokens };
+export { refreshAccessToken };
+export { getValidAccessToken };
+export { fetchMeasuresData };
+export { fetchHeartData };
+export { fetchSleepData };
+export { fetchSleepSummaryData };
+export { fetchWorkoutsData };
+export { fetchActivityData };
+export { fetchAndProcessMeasuresData };
+export { fetchAndProcessHeartData };
+export { fetchAndProcessSleepData };
+export { fetchAndProcessWorkoutsData };
+export { disconnectWithings };
+export { getStatus };
+export default {
+  getAuthorizationUrl,
+  exchangeCodeForTokens,
+  refreshAccessToken,
+  getValidAccessToken,
+  fetchMeasuresData,
+  fetchHeartData,
+  fetchSleepData,
+  fetchSleepSummaryData,
+  fetchWorkoutsData,
+  fetchActivityData,
+  fetchAndProcessMeasuresData,
+  fetchAndProcessHeartData,
+  fetchAndProcessSleepData,
+  fetchAndProcessWorkoutsData,
+  disconnectWithings,
+  getStatus,
+};

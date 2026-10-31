@@ -1,0 +1,655 @@
+import { vi, beforeEach, describe, expect, test } from 'vitest';
+import {
+  calculateAdaptiveTdee,
+  calculateAdaptiveTdeeRange,
+  computeAdaptiveTdeeFromData,
+} from '../services/AdaptiveTdeeService.js';
+import userRepository from '../models/userRepository.js';
+import preferenceRepository from '../models/preferenceRepository.js';
+import measurementRepository from '../models/measurementRepository.js';
+import reportRepository from '../models/reportRepository.js';
+import bmrService from '../services/bmrService.js';
+import { subDays, format, startOfDay } from 'date-fns';
+
+vi.mock('../models/calorieRuleHistoryRepository.js', () => ({
+  default: { getCalorieRuleHistory: async () => [] },
+}));
+vi.mock('../models/userRepository');
+vi.mock('../models/preferenceRepository');
+vi.mock('../models/measurementRepository');
+vi.mock('../models/reportRepository');
+vi.mock('../services/bmrService');
+vi.mock('../config/logging');
+
+describe('AdaptiveTdeeService', () => {
+  const userId = 'test-user-123';
+  const calculationDate = startOfDay(new Date());
+  const calculationDateStr = format(calculationDate, 'yyyy-MM-dd');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('should calculate TDEE correctly without ReferenceError', async () => {
+    // Mock data
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    userRepository.getUserProfile.mockResolvedValue({
+      date_of_birth: '1990-01-01',
+      gender: 'male',
+    });
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    preferenceRepository.getUserPreferences.mockResolvedValue({
+      bmr_algorithm: 'Mifflin-St Jeor',
+      activity_level: 'moderate',
+      use_external_bmr: true,
+    });
+    // Mock weight entries spanning 90 days
+    const weightEntries = [];
+    for (let i = 0; i < 90; i += 7) {
+      weightEntries.push({
+        entry_date: format(subDays(calculationDate, 90 - i), 'yyyy-MM-dd'),
+        weight: 80 - i / 7, // Slight weight loss
+      });
+    }
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    measurementRepository.getCheckInMeasurementsByDateRange.mockResolvedValue(
+      weightEntries
+    );
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    measurementRepository.getLatestMeasurement.mockResolvedValue({
+      weight: 80,
+      height: 180,
+    });
+    // Mock nutrition data for last 90 days
+    const nutritionData = [];
+    for (let i = 0; i < 90; i++) {
+      nutritionData.push({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      });
+    }
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    reportRepository.getNutritionData.mockResolvedValue(nutritionData);
+    // @ts-expect-error TS(2339): Property 'mockReturnValue' does not exist on type ... Remove this comment to see the full error message
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    const result = await calculateAdaptiveTdee(userId, calculationDateStr);
+    expect(result).toBeDefined();
+    expect(result.tdee).toBeGreaterThan(0);
+    expect(result.isFallback).toBe(false);
+    expect(result.daysOfData).toBeGreaterThanOrEqual(28);
+  });
+
+  test('should return fallback if insufficient weight data', async () => {
+    const fallbackUserId = 'test-user-fallback';
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    userRepository.getUserProfile.mockResolvedValue({});
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    preferenceRepository.getUserPreferences.mockResolvedValue({});
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    measurementRepository.getCheckInMeasurementsByDateRange.mockResolvedValue([
+      { entry_date: calculationDateStr, weight: 80 },
+    ]);
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    measurementRepository.getLatestMeasurement.mockResolvedValue({
+      weight: 80,
+    });
+    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    reportRepository.getNutritionData.mockResolvedValue([]);
+    // @ts-expect-error TS(2339): Property 'mockReturnValue' does not exist on type ... Remove this comment to see the full error message
+    bmrService.calculateBmr.mockReturnValue(1800);
+
+    const result = await calculateAdaptiveTdee(
+      fallbackUserId,
+      calculationDateStr
+    );
+    expect(result.isFallback).toBe(true);
+    expect(result.fallbackReason).toContain('Insufficient weight entries');
+  });
+
+  test('should compute TDEE from data synchronously using computeAdaptiveTdeeFromData', () => {
+    const data = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements: [
+        {
+          entry_date: format(subDays(calculationDate, 20), 'yyyy-MM-dd'),
+          weight: 80,
+        },
+        {
+          entry_date: format(subDays(calculationDate, 1), 'yyyy-MM-dd'),
+          weight: 79,
+        },
+      ],
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      })),
+    };
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    const result = computeAdaptiveTdeeFromData(data, calculationDateStr);
+    expect(result).toBeDefined();
+    expect(result.tdee).toBeGreaterThan(0);
+    expect(result.isFallback).toBe(false);
+  });
+
+  test('should calculate TDEE range correctly with calculateAdaptiveTdeeRange', async () => {
+    // @ts-expect-error
+    userRepository.getUserProfile.mockResolvedValue({
+      date_of_birth: '1990-01-01',
+      gender: 'male',
+    });
+    // @ts-expect-error
+    preferenceRepository.getUserPreferences.mockResolvedValue({
+      bmr_algorithm: 'Mifflin-St Jeor',
+      activity_level: 'moderate',
+      use_external_bmr: true,
+    });
+    // Mock weight entries spanning 90 days
+    const weightEntries = [];
+    for (let i = 0; i < 90; i += 7) {
+      weightEntries.push({
+        entry_date: format(subDays(calculationDate, 90 - i), 'yyyy-MM-dd'),
+        weight: 80 - i / 7,
+      });
+    }
+    // @ts-expect-error
+    measurementRepository.getCheckInMeasurementsByDateRange.mockResolvedValue(
+      weightEntries
+    );
+    // @ts-expect-error
+    measurementRepository.getLatestMeasurement.mockResolvedValue({
+      weight: 80,
+      height: 180,
+    });
+    // Mock nutrition data for last 90 days
+    const nutritionData = [];
+    for (let i = 0; i < 90; i++) {
+      nutritionData.push({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      });
+    }
+    // @ts-expect-error
+    reportRepository.getNutritionData.mockResolvedValue(nutritionData);
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    const startDateStr = format(subDays(calculationDate, 2), 'yyyy-MM-dd');
+    const endDateStr = calculationDateStr;
+
+    const results = await calculateAdaptiveTdeeRange(
+      userId,
+      startDateStr,
+      endDateStr
+    );
+    expect(results).toBeDefined();
+    expect(results[startDateStr]).toBeDefined();
+    expect(results[endDateStr]).toBeDefined();
+    expect(results[endDateStr].tdee).toBeGreaterThan(0);
+    expect(results[endDateStr].isFallback).toBe(false);
+  });
+
+  test('should respect the +/- 500 kcal safety cap', () => {
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    // BMR fallback: 1800 * 1.55 = 2790 kcal.
+    // Set daily intake high so raw TDEE = 4000 kcal
+    const highIntakeData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements: [
+        {
+          entry_date: format(subDays(calculationDate, 20), 'yyyy-MM-dd'),
+          weight: 80,
+        },
+        {
+          entry_date: format(subDays(calculationDate, 1), 'yyyy-MM-dd'),
+          weight: 80,
+        },
+      ],
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 4000,
+      })),
+    };
+
+    const resultHigh = computeAdaptiveTdeeFromData(
+      highIntakeData,
+      calculationDateStr
+    );
+    // fallbackTdee = 2790. maxTdee = 2790 + 500 = 3290.
+    expect(resultHigh.tdee).toBe(3290);
+
+    // Set daily intake low so raw TDEE = 1000 kcal
+    const lowIntakeData = {
+      ...highIntakeData,
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 1000,
+      })),
+    };
+
+    const resultLow = computeAdaptiveTdeeFromData(
+      lowIntakeData,
+      calculationDateStr
+    );
+    // fallbackTdee = 2790. minTdee = 2790 - 500 = 2290.
+    expect(resultLow.tdee).toBe(2290);
+  });
+
+  test('does not impose a clinical calorie floor on the TDEE estimate itself', () => {
+    // The safety-floor preference belongs at the final calorie-goal boundary.
+    // Keeping 1200 here prevents custom/disabled goals from ever seeing a lower
+    // measured estimate, even when the plausibility window allows it.
+    // @ts-expect-error mocked service
+    bmrService.calculateBmr.mockReturnValue(900);
+    bmrService.ActivityMultiplier = { not_much: 1.2 };
+
+    const testData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'female' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'not_much',
+      },
+      latestMeasurement: { weight: 45, height: 145 },
+      checkInMeasurements: Array.from({ length: 70 }, (_, i) => ({
+        entry_date: format(subDays(calculationDate, 70 - i), 'yyyy-MM-dd'),
+        weight: 45,
+      })),
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 500,
+      })),
+    };
+
+    const result = computeAdaptiveTdeeFromData(testData, calculationDateStr);
+
+    // fallback = 900 * 1.2 = 1080; plausibility lower bound = 1080 - 500.
+    expect(result.tdee).toBe(580);
+  });
+
+  test('should downgrade confidence for recent trackers (< 6 weeks)', () => {
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    // User has logged daily for 4 weeks (28 days).
+    // This satisfies calorieDays >= 21, weightEntriesCount >= 8, daySpan >= 21.
+    // So base confidence would be HIGH.
+    // But tracking age is 4 weeks (< 6 weeks), so it should be downgraded to MEDIUM.
+    const recentTrackerData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements: Array.from({ length: 28 }, (_, i) => ({
+        entry_date: format(subDays(calculationDate, 28 - i), 'yyyy-MM-dd'),
+        weight: 80,
+      })),
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      })),
+    };
+
+    const result = computeAdaptiveTdeeFromData(
+      recentTrackerData,
+      calculationDateStr
+    );
+    expect(result.confidence).toBe('MEDIUM');
+  });
+
+  test('should downgrade confidence for consecutive weight gaps (>= 3 days) in the calculation window', () => {
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    // User has tracked for 10 weeks (70 days) - no tracking age downgrade.
+    // But has a 4-day weight log gap in the last 28 days.
+    // Basic criteria met: calorieDays = 24 >= 21, weightEntriesCount = 20 >= 8, daySpan = 70 >= 21.
+    // Base confidence is HIGH.
+    // Due to the gap, confidence should be downgraded to MEDIUM.
+    const checkInMeasurements = [
+      {
+        entry_date: format(subDays(calculationDate, 70), 'yyyy-MM-dd'),
+        weight: 80,
+      },
+    ];
+    for (let i = 0; i < 28; i++) {
+      // Create a 4-day gap in the last 28 days (days 10, 11, 12, 13 of the 28-day window are skipped)
+      if (i >= 10 && i <= 13) continue;
+      checkInMeasurements.push({
+        entry_date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        weight: 80,
+      });
+    }
+
+    const gapTrackerData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements,
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      })),
+    };
+
+    const result = computeAdaptiveTdeeFromData(
+      gapTrackerData,
+      calculationDateStr
+    );
+    expect(result.confidence).toBe('MEDIUM');
+  });
+
+  test('should return HIGH confidence for seasoned user with consistent tracking', () => {
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1800);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    // User tracked for 10 weeks (70 days).
+    // Daily weights logged (gap = 0).
+    // Daily calories logged.
+    const seasonedTrackerData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements: Array.from({ length: 70 }, (_, i) => ({
+        entry_date: format(subDays(calculationDate, 70 - i), 'yyyy-MM-dd'),
+        weight: 80,
+      })),
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2500,
+      })),
+    };
+
+    const result = computeAdaptiveTdeeFromData(
+      seasonedTrackerData,
+      calculationDateStr
+    );
+    expect(result.confidence).toBe('HIGH');
+  });
+
+  test('should calculate adaptive TDEE using ~6000 kcal/kg energy density constant', () => {
+    // BMR fallback = 1400 * 1.55 = 2170
+    // minTdee = 2170 - 500 = 1670, maxTdee = 2170 + 500 = 2670
+    // The window is the 28 days before the calculation date. User eats 2000
+    // kcal/day over it and loses 1.0 kg (from 81.0 kg down to 80.0 kg), spread
+    // over the 27 gaps between its first and last day.
+    // TDEE = 2000 - (-1.0 / 27) * 6000 = 2000 + 222.2 = 2222 kcal (before smoothing)
+    // @ts-expect-error
+    bmrService.calculateBmr.mockReturnValue(1400);
+    bmrService.ActivityMultiplier = { moderate: 1.55 };
+
+    const checkInMeasurements = [];
+    // 70 days of history so tracking age >= 6 weeks and confidence is HIGH
+    for (let i = 1; i <= 70; i++) {
+      let weight: number;
+      if (i > 28) {
+        weight = 81.0;
+      } else {
+        // Linear weight loss from 81.0 down to 80.0 over the 28-day window
+        weight = 80.0 + ((i - 1) / 27) * 1.0;
+      }
+      checkInMeasurements.push({
+        entry_date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        weight,
+      });
+    }
+
+    const testData = {
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement: { weight: 80, height: 180 },
+      checkInMeasurements,
+      nutritionData: Array.from({ length: 91 }, (_, i) => ({
+        date: format(subDays(calculationDate, i), 'yyyy-MM-dd'),
+        calories: 2000,
+      })),
+    };
+
+    const result = computeAdaptiveTdeeFromData(testData, calculationDateStr);
+    // 2000 kcal intake + (~0.89 kg smoothed weight loss * 6000) / 27 = ~2198 kcal
+    expect(result.tdee).toBe(2198);
+  });
+
+  describe('window and checklist counts (#3142)', () => {
+    const profile = { date_of_birth: '1990-01-01', gender: 'male' };
+    const preferences = {
+      bmr_algorithm: 'Mifflin-St Jeor',
+      activity_level: 'moderate',
+      use_external_bmr: true,
+    };
+    const day = (ago: number) =>
+      format(subDays(calculationDate, ago), 'yyyy-MM-dd');
+    const calories = (from: number, to: number, kcal = 2000) =>
+      Array.from({ length: to - from + 1 }, (_, i) => ({
+        date: day(from + i),
+        calories: kcal,
+      }));
+    const run = (
+      checkInMeasurements: { entry_date: string; weight: number }[],
+      nutritionData: { date: string; calories: number }[]
+    ) =>
+      computeAdaptiveTdeeFromData(
+        {
+          profile,
+          preferences,
+          latestMeasurement: { weight: 80, height: 180 },
+          checkInMeasurements,
+          nutritionData,
+        },
+        calculationDateStr
+      );
+
+    beforeEach(() => {
+      // @ts-expect-error
+      bmrService.calculateBmr.mockReturnValue(1800);
+      bmrService.ActivityMultiplier = { moderate: 1.55 };
+    });
+
+    test('reports calorie days when weight entries are missing', () => {
+      const result = run([{ entry_date: day(3), weight: 80 }], calories(1, 7));
+      expect(result.isFallback).toBe(true);
+      expect(result.fallbackReason).toMatch(/weight/i);
+      expect(result.daysOfData).toBe(7);
+    });
+
+    test('reports calorie days when weights span less than 7 days', () => {
+      const result = run(
+        [
+          { entry_date: day(7), weight: 80 },
+          { entry_date: day(1), weight: 80 },
+        ],
+        [...calories(1, 7), { date: day(8), calories: 150 }]
+      );
+      expect(result.isFallback).toBe(true);
+      expect(result.fallbackReason).toMatch(/less than 7 days/i);
+      // The sub-200 kcal day is not counted.
+      expect(result.daysOfData).toBe(7);
+    });
+
+    test('does not count the calculation day itself', () => {
+      const weights = [
+        { entry_date: day(20), weight: 80 },
+        { entry_date: day(1), weight: 80 },
+      ];
+      const closed = run(weights, calories(1, 28));
+      const withToday = run(weights, [
+        { date: day(0), calories: 6000 },
+        ...calories(1, 28),
+      ]);
+      expect(withToday.tdee).toBe(closed.tdee);
+      expect(withToday.daysOfData).toBe(28);
+      expect(closed.windowEndDate).toBe(day(1));
+    });
+
+    test('a weight logged on the calculation day does not satisfy the weight rule', () => {
+      const result = run(
+        [
+          { entry_date: day(10), weight: 80 },
+          { entry_date: day(0), weight: 80 },
+        ],
+        calories(1, 28)
+      );
+      expect(result.isFallback).toBe(true);
+      expect(result.fallbackReason).toMatch(/at least 2/i);
+    });
+
+    test('weights older than the 28-day window do not satisfy the weight rule', () => {
+      const result = run(
+        [
+          { entry_date: day(80), weight: 80 },
+          { entry_date: day(2), weight: 80 },
+        ],
+        calories(1, 28)
+      );
+      expect(result.isFallback).toBe(true);
+      expect(result.fallbackReason).toMatch(/at least 2/i);
+    });
+
+    test('divides the weight change by the 27 gaps in a 28-day window', () => {
+      const result = run(
+        [
+          { entry_date: day(28), weight: 90 },
+          { entry_date: day(1), weight: 80 },
+        ],
+        calories(1, 28)
+      );
+      expect(result.daysInWindow).toBe(28);
+      // About -8.9 kg: dividing by 28 instead would land 0.012 away.
+      expect(result.weightChangeKg).toBeLessThan(-5);
+      expect(result.dailyWeightChangeKg).toBeCloseTo(
+        (result.weightChangeKg ?? 0) / 27,
+        3
+      );
+    });
+  });
+
+  describe('measured BMR is scoped to its own day', () => {
+    // Regression cover for issue #2395. `latestMeasurement` is fetched once and
+    // reused across a whole date range, so reading BMR from it let a value recorded
+    // today set the fallback TDEE — and therefore the +/-500 plausibility clamp —
+    // for dates weeks earlier. BMR must come from the row for the date being computed.
+    const buildData = (
+      checkInMeasurements: Array<{
+        entry_date: string;
+        weight: number;
+        bmr?: number;
+      }>,
+      latestMeasurement: { weight: number; height: number } = {
+        weight: 80,
+        height: 180,
+      }
+    ) => ({
+      profile: { date_of_birth: '1990-01-01', gender: 'male' },
+      preferences: {
+        bmr_algorithm: 'Mifflin-St Jeor',
+        activity_level: 'moderate',
+        use_external_bmr: true,
+      },
+      latestMeasurement,
+      checkInMeasurements,
+      // Only two weight entries and no calorie history, so the result is the
+      // BMR-derived fallback and the effect of BMR is directly observable.
+      nutritionData: [],
+    });
+
+    const weights = [
+      {
+        entry_date: format(subDays(calculationDate, 47), 'yyyy-MM-dd'),
+        weight: 80,
+      },
+      { entry_date: format(calculationDate, 'yyyy-MM-dd'), weight: 79 },
+    ];
+
+    beforeEach(() => {
+      // @ts-expect-error mocked module
+      bmrService.calculateBmr.mockReturnValue(1800);
+      bmrService.ActivityMultiplier = { moderate: 1.55 };
+    });
+
+    test('uses a measured BMR recorded on the calculation date', () => {
+      const data = buildData(
+        weights.map((w) =>
+          w.entry_date === calculationDateStr ? { ...w, bmr: 2200 } : w
+        )
+      );
+
+      const result = computeAdaptiveTdeeFromData(data, calculationDateStr);
+
+      expect(result.tdee).toBe(Math.round(2200 * 1.55));
+    });
+
+    test('ignores a measured BMR recorded on a different day', () => {
+      const data = buildData(
+        weights.map((w) =>
+          w.entry_date === calculationDateStr ? w : { ...w, bmr: 2200 }
+        )
+      );
+
+      const result = computeAdaptiveTdeeFromData(data, calculationDateStr);
+
+      expect(result.tdee).toBe(Math.round(1800 * 1.55));
+    });
+
+    test('ignores a measured BMR carried on latestMeasurement', () => {
+      // `LatestMeasurement` no longer declares `bmr` at all, so this asserts the
+      // snapshot cannot smuggle one in even when the row carries the column.
+      const data = {
+        ...buildData(weights),
+        latestMeasurement: { weight: 80, height: 180, bmr: 2200 },
+      };
+
+      const result = computeAdaptiveTdeeFromData(data, calculationDateStr);
+
+      expect(result.tdee).toBe(Math.round(1800 * 1.55));
+    });
+
+    test('ignores an out-of-bounds measured BMR on the calculation date', () => {
+      const data = buildData(
+        weights.map((w) =>
+          w.entry_date === calculationDateStr ? { ...w, bmr: 350 } : w
+        )
+      );
+
+      const result = computeAdaptiveTdeeFromData(data, calculationDateStr);
+
+      expect(result.tdee).toBe(Math.round(1800 * 1.55));
+    });
+  });
+});

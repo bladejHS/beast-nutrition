@@ -1,0 +1,320 @@
+import { tool } from 'ai';
+import { z } from 'zod';
+import { todayInZone } from '@workspace/shared';
+import { log } from '../../config/logging.js';
+import goalService from '../../services/goalService.js';
+import goalRepository from '../../models/goalRepository.js';
+import nutrientGoalPreferenceService from '../../services/nutrientGoalPreferenceService.js';
+import { ERRORS, formatZodError } from './errors.js';
+import {
+  dayString,
+  formatConfirmation,
+  formatJsonResult,
+  formatList,
+} from './formatting.js';
+import {
+  manageGoalsSchema,
+  manageGoalsInput,
+  type ManageGoalsInput,
+} from './schemas/goals.js';
+import { optionalDateSchema } from './schemas/common.js';
+import { normalizeActionArgs, normalizeDayKeywords } from './dates.js';
+
+const VALID_ACTIONS = ['get_goals', 'set_goals', 'list_goal_timeline'];
+
+// The column set MCP's goal queries exposed; richer server goal objects are
+// projected down to it so the chat-visible JSON stays identical.
+const GOAL_SNAPSHOT_FIELDS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'water_goal_ml',
+  'saturated_fat',
+  'polyunsaturated_fat',
+  'monounsaturated_fat',
+  'trans_fat',
+  'cholesterol',
+  'sodium',
+  'potassium',
+  'dietary_fiber',
+  'sugars',
+  'vitamin_a',
+  'vitamin_c',
+  'calcium',
+  'iron',
+  'caffeine_mg',
+  'alcohol_g',
+] as const;
+
+// Adjusted goals come from the goal-mode calculation and can carry float noise
+// (e.g. 88.30000000000001). Round to 1 decimal for chat display — integers stay
+// integers, so raw stored goals render exactly as before.
+function roundGoalValue(value: unknown): unknown {
+  const num = Number(value);
+  return Number.isFinite(num) ? Math.round(num * 10) / 10 : value;
+}
+
+const goalSnapshotSchema = z.object({
+  target_date: optionalDateSchema,
+});
+
+export function buildGoalTools(userId: string, tz: string) {
+  return {
+    sparky_manage_goals: tool({
+      description: `Target management: set and view calorie, macro, water, and weight goals.
+
+This tool takes a FLAT object with an "action" field. Do NOT nest fields under the action name.
+
+Actions:
+- action: 'get_goals' (fields: target_date?) — returns the goals active on a specific date
+- action: 'set_goals' (fields: start_date, calories?, protein?, carbs?, fat?, water_goal_ml?, weight?, caffeine_mg?, alcohol_g?, ...) — sets new goals from a start date
+- action: 'list_goal_timeline' — lists all goal changes over time`,
+      inputSchema: manageGoalsInput,
+      execute: async (rawArgs) => {
+        const normalized = normalizeActionArgs(
+          rawArgs,
+          tz,
+          VALID_ACTIONS,
+          (args) => {
+            if (
+              args.calories !== undefined ||
+              args.protein !== undefined ||
+              args.carbs !== undefined ||
+              args.fat !== undefined ||
+              args.water_goal_ml !== undefined ||
+              args.weight !== undefined ||
+              args.start_date !== undefined ||
+              args.caffeine_mg !== undefined ||
+              args.alcohol_g !== undefined
+            ) {
+              return 'set_goals';
+            }
+            if (args.target_date !== undefined) {
+              return 'get_goals';
+            }
+            return undefined;
+          }
+        );
+        const parsed = manageGoalsSchema.safeParse(normalized);
+        if (!parsed.success) {
+          return formatZodError(parsed.error);
+        }
+        const args: ManageGoalsInput = parsed.data;
+        try {
+          switch (args.action) {
+            case 'get_goals': {
+              // adjust=true applies the same goal-mode calculation (adaptive
+              // TDEE, exercise-water addition, etc.) the Diary tab uses, so the
+              // chatbot reports the goal the user actually sees there rather
+              // than the raw stored goal row. set_goals below intentionally
+              // stays on raw goals since it persists them.
+              const goals = (await goalService.getUserGoals(
+                userId,
+                args.target_date || todayInZone(tz),
+                undefined,
+                true
+              )) as Record<string, unknown>;
+              let text = `### Goals for ${args.target_date || 'today'}\n\n`;
+              const DISPLAY_FIELDS = [
+                'calories',
+                'protein',
+                'carbs',
+                'fat',
+                'water_goal_ml',
+                'caffeine_mg',
+                'alcohol_g',
+              ] as const;
+              for (const field of DISPLAY_FIELDS) {
+                if (goals[field] !== null && goals[field] !== undefined) {
+                  let label: string;
+                  let unit: string;
+                  switch (field) {
+                    case 'calories':
+                      label = 'Calories';
+                      unit = ' kcal';
+                      break;
+                    case 'water_goal_ml':
+                      label = 'Water';
+                      unit = 'ml';
+                      break;
+                    case 'protein':
+                      label = 'Protein';
+                      unit = 'g';
+                      break;
+                    case 'carbs':
+                      label = 'Carbs';
+                      unit = 'g';
+                      break;
+                    case 'fat':
+                      label = 'Fat';
+                      unit = 'g';
+                      break;
+                    case 'caffeine_mg':
+                      label = 'Caffeine';
+                      unit = ' mg';
+                      break;
+                    case 'alcohol_g':
+                      label = 'Alcohol';
+                      unit = ' g';
+                      break;
+                    default:
+                      label = field;
+                      unit = '';
+                  }
+                  text += `- **${label}:** ${roundGoalValue(goals[field])}${unit}\n`;
+                }
+              }
+              if (
+                (goals as any).custom_nutrients &&
+                typeof (goals as any).custom_nutrients === 'object'
+              ) {
+                const custom = (goals as any).custom_nutrients as Record<
+                  string,
+                  number
+                >;
+                for (const [name, amount] of Object.entries(custom)) {
+                  text += `- **${name}:** ${amount}\n`;
+                }
+              }
+              return text;
+            }
+
+            case 'set_goals': {
+              const startDate = args.start_date || todayInZone(tz);
+              // Fetch existing goals for the start date to preserve unchanged nutrients
+              const existingGoals: any = await goalService.getUserGoals(
+                userId,
+                startDate
+              );
+              // Stored macro percentages make manageGoalTimeline recompute the gram
+              // values, so only carry them over when no gram value was given.
+              const macroGramsGiven =
+                args.protein !== undefined ||
+                args.carbs !== undefined ||
+                args.fat !== undefined;
+              // Build base payload with required fields, using existing goals as defaults
+              const payload: any = {
+                p_start_date: startDate,
+                p_cascade: true,
+                p_calories: args.calories ?? existingGoals.calories,
+                p_protein: args.protein ?? existingGoals.protein,
+                p_carbs: args.carbs ?? existingGoals.carbs,
+                p_fat: args.fat ?? existingGoals.fat,
+                p_water_goal_ml:
+                  args.water_goal_ml ?? existingGoals.water_goal_ml,
+                p_saturated_fat:
+                  args.saturated_fat ?? existingGoals.saturated_fat,
+                p_polyunsaturated_fat:
+                  args.polyunsaturated_fat ?? existingGoals.polyunsaturated_fat,
+                p_monounsaturated_fat:
+                  args.monounsaturated_fat ?? existingGoals.monounsaturated_fat,
+                p_trans_fat: args.trans_fat ?? existingGoals.trans_fat,
+                p_cholesterol: args.cholesterol ?? existingGoals.cholesterol,
+                p_sodium: args.sodium ?? existingGoals.sodium,
+                p_potassium: args.potassium ?? existingGoals.potassium,
+                p_dietary_fiber:
+                  args.dietary_fiber ?? existingGoals.dietary_fiber,
+                p_sugars: args.sugars ?? existingGoals.sugars,
+                p_vitamin_a: args.vitamin_a ?? existingGoals.vitamin_a,
+                p_vitamin_c: args.vitamin_c ?? existingGoals.vitamin_c,
+                p_calcium: args.calcium ?? existingGoals.calcium,
+                p_iron: args.iron ?? existingGoals.iron,
+                p_caffeine_mg: args.caffeine_mg ?? existingGoals.caffeine_mg,
+                p_alcohol_g: args.alcohol_g ?? existingGoals.alcohol_g,
+                // Preserve custom nutrients if not provided
+                custom_nutrients:
+                  args.custom_nutrients ?? existingGoals.custom_nutrients,
+                // No tool parameters exist for these; manageGoalTimeline would
+                // otherwise zero the exercise targets and clear the meal/macro
+                // distribution (cleanNumber), unlike the web UI which always sends them.
+                p_target_exercise_calories_burned:
+                  existingGoals.target_exercise_calories_burned,
+                p_target_exercise_duration_minutes:
+                  existingGoals.target_exercise_duration_minutes,
+                p_breakfast_percentage: existingGoals.breakfast_percentage,
+                p_lunch_percentage: existingGoals.lunch_percentage,
+                p_dinner_percentage: existingGoals.dinner_percentage,
+                p_snacks_percentage: existingGoals.snacks_percentage,
+                custom_meal_percentages: existingGoals.custom_meal_percentages,
+                ...(macroGramsGiven
+                  ? {}
+                  : {
+                      p_protein_percentage: existingGoals.protein_percentage,
+                      p_carbs_percentage: existingGoals.carbs_percentage,
+                      p_fat_percentage: existingGoals.fat_percentage,
+                    }),
+              };
+              await goalService.manageGoalTimeline(userId, payload);
+              return formatConfirmation(
+                `Goals set successfully starting from ${startDate}.`
+              );
+            }
+
+            case 'list_goal_timeline': {
+              const timeline = await goalRepository.getGoalTimeline(userId);
+              return formatList(
+                timeline,
+                'Goal Timeline',
+                (g: any) =>
+                  `**${dayString(g.goal_date)}**: ${g.calories} kcal | P: ${g.protein}g | C: ${g.carbs}g | F: ${g.fat}g | W: ${g.water_goal_ml}ml`
+              );
+            }
+
+            default:
+              return ERRORS.INVALID_ACTION(
+                String((args as any).action),
+                VALID_ACTIONS
+              );
+          }
+        } catch (error) {
+          log('error', '[Goal Tool] Error:', error);
+          return ERRORS.DB_ERROR(error);
+        }
+      },
+    }),
+
+    sparky_get_goal_snapshot: tool({
+      description: 'Returns the goals active on a specific date.',
+      inputSchema: goalSnapshotSchema,
+      execute: async (rawArgs) => {
+        const parsed = goalSnapshotSchema.safeParse(
+          normalizeDayKeywords(rawArgs, tz)
+        );
+        if (!parsed.success) {
+          return formatZodError(parsed.error);
+        }
+        try {
+          // adjust=true so the snapshot matches the goal-mode-calculated goal
+          // shown on the Diary tab, consistent with the get_goals action above.
+          const [goals, effectiveGoalTypes] = await Promise.all([
+            goalService.getUserGoals(
+              userId,
+              parsed.data.target_date || todayInZone(tz),
+              undefined,
+              true
+            ) as Promise<Record<string, unknown>>,
+            nutrientGoalPreferenceService.getEffectiveGoalTypes(userId),
+          ]);
+          const data: Record<string, unknown> = {};
+          for (const field of GOAL_SNAPSHOT_FIELDS) {
+            if (field in goals) {
+              data[field] = roundGoalValue(goals[field]);
+            }
+          }
+          data['goal_directions'] = effectiveGoalTypes;
+          return formatJsonResult(data);
+        } catch (error) {
+          log('error', '[Goal Tool] sparky_get_goal_snapshot error:', error);
+          if (error instanceof Error && error.message.includes('not found')) {
+            return ERRORS.NOT_FOUND(
+              'Goal',
+              parsed.data.target_date || 'unknown'
+            );
+          }
+          return ERRORS.DB_ERROR(error);
+        }
+      },
+    }),
+  };
+}

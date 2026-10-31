@@ -1,0 +1,631 @@
+import { render, screen } from '@testing-library/react';
+import '@testing-library/jest-dom';
+import { CalorieTargetBreakdown } from '@/components/CalorieTargetBreakdown';
+
+const mockUsePreferences = jest.fn();
+const mockT = jest.fn(
+  (
+    key: string,
+    defaultValueOrOptions?: string | Record<string, unknown>,
+    values?: Record<string, unknown>
+  ) => {
+    const localizedLabels: Record<string, string> = {
+      'calculationSettings.bmrAlgorithmOptions.mifflinStJeor':
+        'Localized Mifflin',
+      'calculationSettings.bodyFatAlgorithmOptions.usNavy': 'Localized Navy',
+      'settings.goalMode.modeNames.leanBulk': 'Localized Lean Bulk',
+      'settings.goalMode.modeNames.manual': 'Localized Manual',
+      'settings.goalMode.modeNames.cut': 'Localized Cut',
+    };
+    if (key in localizedLabels) return localizedLabels[key];
+
+    const defaultValue =
+      typeof defaultValueOrOptions === 'string'
+        ? defaultValueOrOptions
+        : defaultValueOrOptions?.['defaultValue'];
+    const interpolationValues =
+      typeof defaultValueOrOptions === 'string'
+        ? values
+        : defaultValueOrOptions;
+
+    if (typeof defaultValue !== 'string') return key;
+    return defaultValue.replace(/\{\{(\w+)\}\}/g, (_match, name: string) =>
+      String(interpolationValues?.[name] ?? `{{${name}}}`)
+    );
+  }
+);
+
+jest.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (...args: Parameters<typeof mockT>) => mockT(...args),
+    i18n: { language: 'en', resolvedLanguage: 'en' },
+  }),
+  initReactI18next: {
+    type: '3rdParty',
+    init: jest.fn(),
+  },
+}));
+
+jest.mock('@/contexts/PreferencesContext', () => ({
+  usePreferences: () => mockUsePreferences(),
+}));
+
+const defaultProps = {
+  previewResult: {
+    target: 2194,
+    baselineTdee: 2194,
+    appliedDeficit: 0,
+    rmr: 1800,
+    isBelowRmr: false,
+    isBelowAbsoluteFloor: false,
+    absoluteFloorValue: 1500,
+    finalTarget: 2194,
+    insufficientHistory: false,
+    projectedWeeklyChangeKg: 0,
+    projectedWeeklyChangePercent: 0,
+    isGainGoal: false,
+    safetyZone: 'green' as const,
+    wasClampedToFloor: false,
+    clampedFloorSource: null,
+    maxFeasibleDeficitPercent: null,
+    recommendedSafetyFloor: 1800,
+    effectiveSafetyFloor: 1800,
+  },
+  adaptiveTdeeData: {
+    tdee: 2194,
+    isFallback: false,
+    daysOfData: 35,
+    avgIntake: 2300,
+    weightTrend: -0.2,
+    confidence: 'HIGH' as const,
+  },
+  bmrAlgorithm: 'Mifflin-St Jeor',
+  bodyFatAlgorithm: 'U.S. Navy',
+  displayWeight: 84.5,
+  displayHeight: 180,
+  displayAge: 35,
+  displayGender: 'male' as const,
+  goalMode: 'maintain',
+  goalModeCalculationMethod: 'adaptive',
+  goalModeCustomPercentage: 0,
+  calorieGoalAdjustmentMode: 'dynamic',
+  rawManualGoal: 2000,
+  adjustedManualGoal: 2000,
+  activityMultiplier: 1.2,
+};
+
+beforeEach(() => {
+  mockT.mockClear();
+  mockUsePreferences.mockReturnValue({
+    energyUnit: 'kcal',
+    convertEnergy: (value: number) => value,
+    weightUnit: 'kg',
+  });
+});
+
+describe('CalorieTargetBreakdown weekly weight goal', () => {
+  it.each([
+    { weightUnit: 'lbs', kg: -0.5, rate: '-1.102 lbs / week' },
+    { weightUnit: 'st_lbs', kg: -0.5, rate: '-0 st 1.102 lbs / week' },
+    { weightUnit: 'lbs', kg: 0.5, rate: '+1.102 lbs / week' },
+    { weightUnit: 'st_lbs', kg: 0.5, rate: '+0 st 1.102 lbs / week' },
+    { weightUnit: 'st_lbs', kg: 0, rate: '0 st 0 lbs / week' },
+    { weightUnit: 'kg', kg: -0.25, rate: '-0.25 kg / week' },
+  ])(
+    'shows a $weightUnit weekly target of $kg kg using the preferred weight unit',
+    ({ weightUnit, kg, rate }) => {
+      mockUsePreferences.mockReturnValue({
+        energyUnit: 'kcal',
+        convertEnergy: (value: number) => value,
+        weightUnit,
+      });
+      render(
+        <CalorieTargetBreakdown
+          {...defaultProps}
+          goalMode="weekly"
+          goalModeWeeklyChangeKg={kg}
+        />
+      );
+
+      expect(screen.getByText(/Weekly weight change/)).toHaveTextContent(rate);
+    }
+  );
+
+  it('explains safety-floor clamping for weekly goals using the manual baseline', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        goalMode="weekly"
+        goalModeCalculationMethod="manual"
+        goalModeWeeklyChangeKg={-2}
+        previewResult={{
+          ...defaultProps.previewResult,
+          target: 480,
+          finalTarget: 1800,
+          appliedDeficit: 1714,
+          wasClampedToFloor: true,
+          clampedFloorSource: 'rmr',
+        }}
+      />
+    );
+    expect(
+      screen.getByText(
+        '⚠️ Daily budget was automatically raised to the safety-floor limit.'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('explains the weekly loss target as weight rather than a percentage', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        {...{ goalModeWeeklyChangeKg: -0.5 }}
+        goalMode="weekly"
+        previewResult={{
+          ...defaultProps.previewResult,
+          target: 1765,
+          finalTarget: 1800,
+          appliedDeficit: 429,
+          projectedWeeklyChangeKg: -0.46,
+          wasClampedToFloor: true,
+          clampedFloorSource: 'rmr',
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Weekly weight change Deficit/)).toHaveTextContent(
+      '-0.5 kg / week'
+    );
+    expect(
+      screen.queryByText(/Weekly weight change Deficit \(-0%\)/)
+    ).toBeNull();
+  });
+});
+
+describe('CalorieTargetBreakdown baseline label', () => {
+  it('explains removal of historical activity before clamping the separate baseline', () => {
+    const separateProps = {
+      ...defaultProps,
+      adaptiveActivitySeparate: true,
+      adaptiveTdeeData: {
+        ...defaultProps.adaptiveTdeeData,
+        rawTdee: 2800,
+        tdee: 2660,
+        rawActivityAdjustedTdee: 2300,
+        activityAdjustedTdee: 2300,
+        averageActivityCalories: 500,
+        activityDaysOfData: 28,
+        wasClamped: true,
+        clampMin: 1660,
+        clampMax: 2660,
+      },
+      previewResult: {
+        ...defaultProps.previewResult,
+        baselineTdee: 2300,
+        finalTarget: 2300,
+      },
+    };
+    render(<CalorieTargetBreakdown {...separateProps} />);
+
+    expect(screen.getByText(/2800 − 500 = 2300 kcal/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Today's steps and workouts are credited separately/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/28 days of activity history/)).toBeInTheDocument();
+  });
+
+  it('uses translation keys for algorithm labels', () => {
+    render(<CalorieTargetBreakdown {...defaultProps} />);
+
+    expect(screen.getByText('Localized Mifflin')).toBeInTheDocument();
+    expect(screen.getByText('Localized Navy')).toBeInTheDocument();
+  });
+
+  it('labels the baseline as the adaptive TDEE under the adaptive method with sufficient data', () => {
+    render(<CalorieTargetBreakdown {...defaultProps} />);
+    expect(
+      screen.getByText('Adaptive TDEE (Expenditure):')
+    ).toBeInTheDocument();
+  });
+
+  it('labels the baseline as an estimate under the adaptive method with insufficient history', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        previewResult={{
+          ...defaultProps.previewResult,
+          baselineTdee: 2160,
+          finalTarget: 2160,
+          insufficientHistory: true,
+        }}
+        adaptiveTdeeData={{
+          tdee: 0,
+          isFallback: true,
+          fallbackReason: 'Insufficient weight entries (need at least 2)',
+          daysOfData: 3,
+        }}
+      />
+    );
+    expect(screen.getByText('Estimated TDEE:')).toBeInTheDocument();
+  });
+
+  it('labels the baseline as the adaptive goal under the manual method with the adaptive adjustment mode', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        goalModeCalculationMethod="manual"
+        calorieGoalAdjustmentMode="adaptive"
+        adjustedManualGoal={2194}
+      />
+    );
+    expect(screen.getByText('Baseline (Adaptive Goal):')).toBeInTheDocument();
+  });
+
+  it('labels the baseline as the manual goal under the manual method', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        goalModeCalculationMethod="manual"
+        calorieGoalAdjustmentMode="dynamic"
+      />
+    );
+    expect(screen.getByText('Baseline (Manual Goal):')).toBeInTheDocument();
+  });
+});
+
+describe('CalorieTargetBreakdown goal adjustment line', () => {
+  // appliedDeficit and the adjustment percentage are both signed, so rendering
+  // them raw double-printed the sign for gain modes ("Deficit (--10%) = --200").
+  const gainProps = {
+    ...defaultProps,
+    goalMode: 'lean_bulk',
+    previewResult: {
+      ...defaultProps.previewResult,
+      appliedDeficit: -219,
+      finalTarget: 2413,
+      isGainGoal: true,
+    },
+  };
+
+  it('labels a gain mode as a surplus with a single + sign', () => {
+    render(<CalorieTargetBreakdown {...gainProps} />);
+    expect(screen.getByText('Goal Surplus:')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Localized Lean Bulk Surplus \(\+10%\) = \+219 kcal/)
+    ).toBeInTheDocument();
+  });
+
+  it('never double-prints a sign for a gain mode', () => {
+    const { container } = render(<CalorieTargetBreakdown {...gainProps} />);
+    expect(container.textContent).not.toMatch(/--|\+-|-\+/);
+  });
+
+  it('labels a manual surplus as a surplus', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...gainProps}
+        goalMode="manual"
+        goalModeCustomPercentage={15}
+      />
+    );
+    expect(screen.getByText('Goal Surplus:')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Localized Manual Surplus \(\+15%\)/)
+    ).toBeInTheDocument();
+  });
+
+  it('still labels a deficit mode as a deficit', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        goalMode="cut"
+        previewResult={{
+          ...defaultProps.previewResult,
+          appliedDeficit: 329,
+          finalTarget: 1865,
+        }}
+      />
+    );
+    expect(screen.getByText('Goal Deficit:')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Localized Cut Deficit \(-15%\) = -329 kcal/)
+    ).toBeInTheDocument();
+  });
+});
+
+describe('CalorieTargetBreakdown adaptive-TDEE confidence', () => {
+  /**
+   * The server already computes LOW/MEDIUM/HIGH and downgrades it for sparse logs or
+   * weight gaps, but the panel never rendered it — so a target derived from 17 days of
+   * under-logged intake was presented with a green tick and no caveat.
+   */
+  it('surfaces a LOW confidence and warns about under-logging', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        adaptiveTdeeData={{
+          tdee: 2283,
+          isFallback: false,
+          daysOfData: 17,
+          avgIntake: 753,
+          weightTrend: -0.2,
+          confidence: 'LOW' as const,
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Confidence: LOW/i)).toBeInTheDocument();
+    expect(screen.getByText(/17 day\(s\) of calorie/i)).toBeInTheDocument();
+    expect(screen.getByText(/Under-logging intake/i)).toBeInTheDocument();
+  });
+
+  it('does not nag when confidence is HIGH', () => {
+    render(<CalorieTargetBreakdown {...defaultProps} />);
+
+    expect(screen.getByText(/Confidence: HIGH/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Under-logging intake/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('CalorieTargetBreakdown shown working', () => {
+  /**
+   * The US Navy constants are imperial. The panel computed in inches but printed the
+   * raw centimetre values, so plugging in the numbers it displayed gave 22.8% against
+   * a stated 16.3%.
+   */
+  it('prints the body-fat formula inputs in the inches it evaluates with', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        displayWaist={82}
+        displayNeck={38}
+        displayHeight={165.1}
+      />
+    );
+
+    const working = screen.getByText(/86\.01 × log10/);
+    expect(working.textContent).toMatch(/in\b/);
+    expect(working.textContent).not.toMatch(/82cm/);
+  });
+
+  /**
+   * Mifflin-St Jeor takes no body-fat input, so section 2 must not read like one.
+   */
+  it('says body fat is reference-only when the BMR formula ignores it', () => {
+    render(<CalorieTargetBreakdown {...defaultProps} />);
+    expect(
+      screen.getByText(/does not take body fat as an input/i)
+    ).toBeInTheDocument();
+  });
+
+  it('says body fat is used when the BMR formula consumes it', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        bmrAlgorithm="Katch-McArdle"
+        displayBodyFat={19.6}
+      />
+    );
+    expect(
+      screen.getByText(/is used by this BMR formula/i)
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A lean-mass formula with no logged measurement silently treats body fat as 0%,
+   * which reads as an implausibly high BMR. Saying the value "is used" there would be
+   * wrong twice: there is nothing to use, and the resulting target is not trustworthy.
+   */
+  it('flags a missing measurement when the BMR formula needs body fat', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        bmrAlgorithm="Katch-McArdle"
+        displayBodyFat={0}
+      />
+    );
+    expect(screen.getByText(/no measurement is logged/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/is used by this BMR formula/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not warn when confidence is absent', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        adaptiveTdeeData={{
+          tdee: 2194,
+          isFallback: false,
+          daysOfData: 35,
+          avgIntake: 2300,
+          weightTrend: -0.2,
+        }}
+      />
+    );
+    expect(screen.queryByText(/Under-logging intake/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 day\(s\)/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * A stored 73.45 kg printed as "73.5" made the panel unable to reproduce its own
+   * BMR: the shown working recomputed to 1597 against a stated 1596.
+   */
+  it('prints weight at the precision the formula evaluates with', () => {
+    render(<CalorieTargetBreakdown {...defaultProps} displayWeight={73.45} />);
+    expect(screen.getByText(/73\.45/)).toBeInTheDocument();
+  });
+});
+
+describe('CalorieTargetBreakdown configured safety floor', () => {
+  it('shows a custom floor as the effective limit', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        previewResult={{
+          ...defaultProps.previewResult,
+          effectiveSafetyFloor: 1200,
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Effective Safety Floor:/)).toHaveTextContent(
+      '1200 kcal'
+    );
+  });
+
+  it('shows that automatic clamping is disabled without hiding recommendations', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        previewResult={{
+          ...defaultProps.previewResult,
+          effectiveSafetyFloor: null,
+        }}
+      />
+    );
+
+    expect(screen.getByText(/Effective Safety Floor:/)).toHaveTextContent(
+      'Disabled'
+    );
+    expect(screen.getByText(/Clinical Absolute Floor:/)).toBeInTheDocument();
+  });
+
+  it('warns when a custom adaptive target remains below the recommendation', () => {
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        previewResult={{
+          ...defaultProps.previewResult,
+          finalTarget: 1300,
+          isBelowRmr: true,
+          effectiveSafetyFloor: 1200,
+          recommendedSafetyFloor: 1800,
+        }}
+      />
+    );
+
+    expect(
+      screen.getByText(/below the recommended safety floor/i)
+    ).toBeInTheDocument();
+  });
+});
+
+describe('CalorieTargetBreakdown weight-trend units', () => {
+  const trendProps = {
+    ...defaultProps,
+    adaptiveTdeeData: {
+      tdee: 2585,
+      isFallback: false,
+      daysOfData: 28,
+      avgIntake: 1971,
+      weightTrend: 110.9,
+      confidence: 'HIGH' as const,
+      startWeightTrend: 114.6,
+      endWeightTrend: 110.9,
+      weightChangeKg: -3.72,
+      daysInWindow: 28,
+      dailyWeightChangeKg: -0.1328,
+      weightChangeCalories: 797,
+      rawTdee: 2768,
+    },
+  };
+
+  it('prints the adaptive weight trend in kg by default', () => {
+    const { container } = render(<CalorieTargetBreakdown {...trendProps} />);
+
+    expect(
+      screen.getByText(/114\.6 kg → 110\.9 kg \(-3\.72 kg over the 27 days/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/= -0\.1328 kg\/day/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Daily Weight Change in kg × 6000 kcal\/kg/)
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\{\{/);
+  });
+
+  it('prints the adaptive weight trend in pounds when that unit is configured', () => {
+    mockUsePreferences.mockReturnValue({
+      energyUnit: 'kcal',
+      convertEnergy: (value: number) => value,
+      weightUnit: 'lbs',
+    });
+
+    const { container } = render(<CalorieTargetBreakdown {...trendProps} />);
+
+    expect(
+      screen.getByText(/252\.6 lbs → 244\.5 lbs \(-8\.20 lbs over the 27 days/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/= -0\.2928 lbs\/day/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Daily Weight Change in lbs × 2722 kcal\/lbs/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/114\.6 kg → 110\.9 kg/)).not.toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\{\{/);
+
+    const formulaVars = mockT.mock.calls.find(
+      ([key]) => key === 'settings.breakdown.adaptiveFormula'
+    )?.[1] as Record<string, unknown>;
+    const explainerVars = mockT.mock.calls.find(
+      ([key]) => key === 'settings.breakdown.adaptiveFormulaExplainer'
+    )?.[1] as Record<string, unknown>;
+    // de/es/ru still say "kg" with {{kcalPerKg}}; the per-lb figure belongs
+    // only on kcalPerUnit, which English interpolates with massUnit.
+    expect(formulaVars['kcalPerKg']).toBe(6000);
+    expect(formulaVars['kcalPerUnit']).toBe(2722);
+    expect(explainerVars['kcalPerKg']).toBe(6000);
+    expect(explainerVars['kcalPerUnit']).toBe(2722);
+    expect(explainerVars['fatPerKg']).toBe((9441).toLocaleString());
+    expect(explainerVars['leanPerKg']).toBe((1816).toLocaleString());
+  });
+
+  it('prints stones-configured trends in pounds so the energy working stays a usable figure', () => {
+    mockUsePreferences.mockReturnValue({
+      energyUnit: 'kcal',
+      convertEnergy: (value: number) => value,
+      weightUnit: 'st_lbs',
+    });
+
+    const { container } = render(<CalorieTargetBreakdown {...trendProps} />);
+
+    expect(
+      screen.getByText(/252\.6 lbs → 244\.5 lbs \(-8\.20 lbs over the 27 days/)
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\{\{/);
+  });
+});
+
+describe('CalorieTargetBreakdown adaptive checklist', () => {
+  const renderFallback = (daysOfData: number, fallbackReason: string) =>
+    render(
+      <CalorieTargetBreakdown
+        {...defaultProps}
+        previewResult={{
+          ...defaultProps.previewResult,
+          insufficientHistory: true,
+        }}
+        adaptiveTdeeData={{
+          tdee: 0,
+          isFallback: true,
+          fallbackReason,
+          daysOfData,
+        }}
+      />
+    );
+
+  it('shows the real calorie-day count as met when only the weight rule fails (#3142)', () => {
+    renderFallback(7, 'Insufficient weight entries (need at least 2)');
+    expect(screen.getByText('✓ Met (7/7 days logged)')).toBeInTheDocument();
+    expect(
+      screen.getByText('⚠️ Missing (7/14 days logged)')
+    ).toBeInTheDocument();
+  });
+
+  it('does not mark the calorie rule met below the required days', () => {
+    renderFallback(3, 'Weight entries span less than 7 days');
+    expect(
+      screen.getByText('❌ Missing (3/7 days logged)')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Met \(3\/7/)).not.toBeInTheDocument();
+  });
+});

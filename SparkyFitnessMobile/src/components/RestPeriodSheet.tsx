@@ -1,0 +1,198 @@
+import {
+  forwardRef,
+  useCallback,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import { Text, TouchableOpacity, View } from 'react-native';
+import {
+  BottomSheetModal,
+  BottomSheetTextInput,
+  BottomSheetView,
+} from '@gorhom/bottom-sheet';
+import { useCSSVariable } from 'uniwind';
+import Button from './ui/Button';
+import { sheetContainer, useSheetBackdrop } from './ui/sheetChrome';
+import CollapsibleSection from './CollapsibleSection';
+import StepperInput from './StepperInput';
+import { formatRestLabel } from './RestPeriodChip';
+import { getDefaultRestSec } from '../utils/workoutSession';
+
+export const MIN_REST_SEC = 0;
+export const MAX_REST_SEC = 900;
+const REST_PRESETS: number[] = [0, 5, 15, 30, 45, 60, 90, 120, 180, 300];
+
+/** Clamp to [MIN, MAX] and round to the nearest 5 seconds (0 = no rest). */
+export function clampRestSeconds(seconds: number): number {
+  if (!Number.isFinite(seconds)) return getDefaultRestSec();
+  const clamped = Math.max(MIN_REST_SEC, Math.min(MAX_REST_SEC, seconds));
+  return Math.round(clamped / 5) * 5;
+}
+
+export interface RestPeriodSheetRef {
+  present: (currentSec: number | null | undefined) => void;
+  dismiss: () => void;
+}
+
+interface RestPeriodSheetProps {
+  onChange: (seconds: number) => void;
+}
+
+const RestPeriodSheet = forwardRef<RestPeriodSheetRef, RestPeriodSheetProps>(
+  ({ onChange }, ref) => {
+    const { t } = useTranslation();
+    const bottomSheetRef = useRef<BottomSheetModal>(null);
+    const [accentPrimary, surfaceBg, textMuted] = useCSSVariable([
+      '--color-accent-primary',
+      '--color-surface',
+      '--color-text-muted',
+    ]) as [string, string, string];
+
+    const [currentValue, setCurrentValue] = useState<number>(90);
+    const [customOpen, setCustomOpen] = useState(false);
+    const [customText, setCustomText] = useState('90');
+
+    useImperativeHandle(ref, () => ({
+      present: (sec) => {
+        const initial = clampRestSeconds(sec ?? getDefaultRestSec());
+        setCurrentValue(initial);
+        setCustomText(String(initial));
+        setCustomOpen(!REST_PRESETS.includes(initial));
+        bottomSheetRef.current?.present();
+      },
+      dismiss: () => bottomSheetRef.current?.dismiss(),
+    }));
+
+    const commitPreset = useCallback(
+      (seconds: number) => {
+        onChange(seconds);
+        bottomSheetRef.current?.dismiss();
+      },
+      [onChange]
+    );
+
+    const parsedCustom = useMemo(() => {
+      const n = parseInt(customText, 10);
+      return Number.isNaN(n) ? NaN : n;
+    }, [customText]);
+
+    const adjustCustom = (delta: number) => {
+      const base = Number.isNaN(parsedCustom) ? currentValue : parsedCustom;
+      const next = clampRestSeconds(base + delta);
+      setCustomText(String(next));
+    };
+
+    const handleCustomChange = (text: string) => {
+      // Only allow positive integer digits while typing.
+      if (text === '' || /^\d+$/.test(text)) {
+        setCustomText(text);
+      }
+    };
+
+    const clampCustomOnBlur = () => {
+      if (Number.isNaN(parsedCustom)) {
+        setCustomText(String(currentValue));
+        return;
+      }
+      const next = clampRestSeconds(parsedCustom);
+      setCustomText(String(next));
+    };
+
+    const handleCustomSave = () => {
+      const base = Number.isNaN(parsedCustom) ? currentValue : parsedCustom;
+      const next = clampRestSeconds(base);
+      onChange(next);
+      bottomSheetRef.current?.dismiss();
+    };
+
+    const renderBackdrop = useSheetBackdrop();
+
+    return (
+      <BottomSheetModal
+        ref={bottomSheetRef}
+        enableDynamicSizing
+        keyboardBehavior="interactive"
+        keyboardBlurBehavior="restore"
+        android_keyboardInputMode="adjustPan"
+        containerComponent={sheetContainer}
+        backdropComponent={renderBackdrop}
+        backgroundStyle={{ backgroundColor: surfaceBg }}
+        handleIndicatorStyle={{ backgroundColor: textMuted }}
+      >
+        <BottomSheetView className="px-6 pb-safe-or-8">
+          <Text className="text-lg font-semibold text-text-primary text-center mb-4">
+            {t('restPeriod.title', { defaultValue: 'Rest period' })}
+          </Text>
+
+          <View
+            className="flex-row flex-wrap justify-center"
+            style={{ gap: 8 }}
+          >
+            {REST_PRESETS.map((preset) => {
+              const selected = preset === currentValue;
+              return (
+                <TouchableOpacity
+                  key={preset}
+                  onPress={() => commitPreset(preset)}
+                  activeOpacity={0.7}
+                  className="rounded-full py-2 px-4 border"
+                  style={{
+                    backgroundColor: selected ? accentPrimary : 'transparent',
+                    borderColor: selected ? accentPrimary : textMuted,
+                  }}
+                >
+                  <Text
+                    className="text-sm font-medium"
+                    style={{ color: selected ? '#fff' : textMuted }}
+                  >
+                    {formatRestLabel(
+                      preset,
+                      t('restPeriod.off', { defaultValue: 'Off' })
+                    )}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <CollapsibleSection
+            title={t('restPeriod.custom', { defaultValue: 'Custom' })}
+            expanded={customOpen}
+            onToggle={() => setCustomOpen((v) => !v)}
+            itemCount={1}
+          >
+            <View className="py-3">
+              <View className="flex-row items-center justify-center mb-3">
+                <StepperInput
+                  value={customText}
+                  onChangeText={handleCustomChange}
+                  onBlur={clampCustomOnBlur}
+                  onDecrement={() => adjustCustom(-15)}
+                  onIncrement={() => adjustCustom(15)}
+                  keyboardType="number-pad"
+                  InputComponent={BottomSheetTextInput}
+                />
+                <Text className="text-text-secondary text-base ml-3">
+                  {formatRestLabel(
+                    Number.isNaN(parsedCustom) ? currentValue : parsedCustom,
+                    t('restPeriod.off', { defaultValue: 'Off' })
+                  )}
+                </Text>
+              </View>
+              <Button variant="primary" onPress={handleCustomSave}>
+                {t('common.save', { defaultValue: 'Save' })}
+              </Button>
+            </View>
+          </CollapsibleSection>
+        </BottomSheetView>
+      </BottomSheetModal>
+    );
+  }
+);
+
+RestPeriodSheet.displayName = 'RestPeriodSheet';
+
+export default RestPeriodSheet;

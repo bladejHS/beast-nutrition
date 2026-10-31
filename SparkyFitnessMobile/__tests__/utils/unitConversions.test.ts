@@ -1,0 +1,448 @@
+import {
+  lbsToKg,
+  kgToLbs,
+  weightToKg,
+  weightFromKg,
+  kmToMiles,
+  milesToKm,
+  distanceToKm,
+  distanceFromKm,
+  cmToInches,
+  inchesToCm,
+  lengthToCm,
+  lengthFromCm,
+  cmToFeetInches,
+  feetInchesToCm,
+  kgToStonesLbs,
+  stonesLbsToKg,
+  formatWeightDisplay,
+  getServingVolume,
+  volumeFromMl,
+  formatVolumeForUnit,
+} from '../../src/utils/unitConversions';
+import {
+  carryDistanceFromKm,
+  carryDistanceToKm,
+  carryDistanceUnitLabel,
+} from '@workspace/shared';
+import i18n, {
+  getAppLocale,
+  initializeI18n,
+} from '../../src/localization/i18n';
+
+describe('unitConversions', () => {
+  describe('carry distance', () => {
+    it('shows metres for km and yards for miles', () => {
+      expect(carryDistanceFromKm(0.03, 'km')).toBeCloseTo(30, 6);
+      expect(carryDistanceFromKm(0.03, 'miles')).toBeCloseTo(32.8, 1);
+      expect(carryDistanceUnitLabel('km')).toBe('m');
+      expect(carryDistanceUnitLabel('miles')).toBe('yd');
+    });
+
+    it('round-trips back to km', () => {
+      expect(
+        carryDistanceToKm(carryDistanceFromKm(0.05, 'km'), 'km')
+      ).toBeCloseTo(0.05, 9);
+      expect(
+        carryDistanceToKm(carryDistanceFromKm(0.05, 'miles'), 'miles')
+      ).toBeCloseTo(0.05, 9);
+    });
+  });
+
+  describe('lbsToKg', () => {
+    it('converts 1 lb to ~0.4536 kg', () => {
+      expect(lbsToKg(1)).toBeCloseTo(0.4536, 3);
+    });
+
+    it('converts 100 lbs to ~45.36 kg', () => {
+      expect(lbsToKg(100)).toBeCloseTo(45.359, 2);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(lbsToKg(0)).toBe(0);
+    });
+  });
+
+  describe('kgToLbs', () => {
+    it('converts 1 kg to ~2.2046 lbs', () => {
+      expect(kgToLbs(1)).toBeCloseTo(2.2046, 3);
+    });
+
+    it('converts 100 kg to ~220.46 lbs', () => {
+      expect(kgToLbs(100)).toBeCloseTo(220.462, 1);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(kgToLbs(0)).toBe(0);
+    });
+  });
+
+  describe('round-trip weight conversions', () => {
+    it.each([0, 1, 50, 100, 225, 500])(
+      'kg → lbs → kg preserves %d kg',
+      (kg) => {
+        expect(lbsToKg(kgToLbs(kg))).toBeCloseTo(kg, 4);
+      }
+    );
+
+    it.each([0, 1, 45, 135, 315, 1000])(
+      'lbs → kg → lbs preserves %d lbs',
+      (lbs) => {
+        expect(kgToLbs(lbsToKg(lbs))).toBeCloseTo(lbs, 4);
+      }
+    );
+  });
+
+  describe('weightToKg', () => {
+    it('returns value unchanged when unit is kg', () => {
+      expect(weightToKg(80, 'kg')).toBe(80);
+    });
+
+    it('converts lbs to kg when unit is lbs', () => {
+      expect(weightToKg(100, 'lbs')).toBeCloseTo(45.359, 2);
+    });
+  });
+
+  describe('weightFromKg', () => {
+    it('returns value unchanged when unit is kg', () => {
+      expect(weightFromKg(80, 'kg')).toBe(80);
+    });
+
+    it('converts kg to lbs when unit is lbs', () => {
+      expect(weightFromKg(100, 'lbs')).toBeCloseTo(220.462, 1);
+    });
+  });
+
+  describe('kmToMiles', () => {
+    it('converts 1 km to ~0.6214 miles', () => {
+      expect(kmToMiles(1)).toBeCloseTo(0.6214, 3);
+    });
+
+    it('converts 10 km to ~6.21 miles', () => {
+      expect(kmToMiles(10)).toBeCloseTo(6.214, 2);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(kmToMiles(0)).toBe(0);
+    });
+  });
+
+  describe('milesToKm', () => {
+    it('converts 1 mile to ~1.609 km', () => {
+      expect(milesToKm(1)).toBeCloseTo(1.6093, 3);
+    });
+
+    it('converts a marathon (26.2 miles) to ~42.16 km', () => {
+      expect(milesToKm(26.2)).toBeCloseTo(42.165, 1);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(milesToKm(0)).toBe(0);
+    });
+  });
+
+  describe('round-trip distance conversions', () => {
+    it.each([0, 1, 5, 10, 42.195, 100])(
+      'km → miles → km preserves %d km',
+      (km) => {
+        expect(milesToKm(kmToMiles(km))).toBeCloseTo(km, 3);
+      }
+    );
+
+    it.each([0, 1, 3.1, 6.2, 13.1, 26.2])(
+      'miles → km → miles preserves %d miles',
+      (miles) => {
+        expect(kmToMiles(milesToKm(miles))).toBeCloseTo(miles, 3);
+      }
+    );
+  });
+
+  describe('distanceToKm', () => {
+    it('returns value unchanged when unit is km', () => {
+      expect(distanceToKm(5, 'km')).toBe(5);
+    });
+
+    it('converts miles to km when unit is miles', () => {
+      expect(distanceToKm(1, 'miles')).toBeCloseTo(1.6093, 3);
+    });
+  });
+
+  describe('distanceFromKm', () => {
+    it('returns value unchanged when unit is km', () => {
+      expect(distanceFromKm(5, 'km')).toBe(5);
+    });
+
+    it('converts km to miles when unit is miles', () => {
+      expect(distanceFromKm(10, 'miles')).toBeCloseTo(6.214, 2);
+    });
+  });
+
+  describe('cmToInches', () => {
+    it('converts 2.54 cm to 1 inch', () => {
+      expect(cmToInches(2.54)).toBeCloseTo(1, 4);
+    });
+
+    it('converts 100 cm to ~39.37 inches', () => {
+      expect(cmToInches(100)).toBeCloseTo(39.3701, 2);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(cmToInches(0)).toBe(0);
+    });
+  });
+
+  describe('inchesToCm', () => {
+    it('converts 1 inch to 2.54 cm', () => {
+      expect(inchesToCm(1)).toBeCloseTo(2.54, 4);
+    });
+
+    it('converts 12 inches (1 ft) to 30.48 cm', () => {
+      expect(inchesToCm(12)).toBeCloseTo(30.48, 2);
+    });
+
+    it('returns 0 for 0', () => {
+      expect(inchesToCm(0)).toBe(0);
+    });
+  });
+
+  describe('lengthToCm', () => {
+    it('returns value unchanged when unit is cm', () => {
+      expect(lengthToCm(180, 'cm')).toBe(180);
+    });
+
+    it('converts inches to cm when unit is inches', () => {
+      expect(lengthToCm(36, 'inches')).toBeCloseTo(91.44, 2);
+    });
+  });
+
+  describe('lengthFromCm', () => {
+    it('returns value unchanged when unit is cm', () => {
+      expect(lengthFromCm(180, 'cm')).toBe(180);
+    });
+
+    it('converts cm to inches when unit is inches', () => {
+      expect(lengthFromCm(91.44, 'inches')).toBeCloseTo(36, 2);
+    });
+  });
+
+  describe('round-trip length conversions', () => {
+    it.each([0, 1, 50, 100, 180, 250])('cm → cm preserves %d cm', (cm) => {
+      expect(lengthFromCm(lengthToCm(cm, 'cm'), 'cm')).toBeCloseTo(cm, 4);
+    });
+
+    it.each([0, 1, 30, 70, 90, 120])(
+      'inches → cm → inches preserves %d in',
+      (inches) => {
+        expect(
+          lengthFromCm(lengthToCm(inches, 'inches'), 'inches')
+        ).toBeCloseTo(inches, 4);
+      }
+    );
+  });
+
+  describe('cmToFeetInches', () => {
+    it('splits exact 5 ft into 5/0', () => {
+      const { feet, inches } = cmToFeetInches(152.4);
+      expect(feet).toBe(5);
+      expect(inches).toBeCloseTo(0, 4);
+    });
+
+    it('splits 6\'1" (185.42 cm) into 6/1', () => {
+      const { feet, inches } = cmToFeetInches(185.42);
+      expect(feet).toBe(6);
+      expect(inches).toBeCloseTo(1, 4);
+    });
+
+    it('returns 0/0 for 0 cm', () => {
+      const { feet, inches } = cmToFeetInches(0);
+      expect(feet).toBe(0);
+      expect(inches).toBe(0);
+    });
+  });
+
+  describe('feetInchesToCm', () => {
+    it('combines 5\'0" → 152.4 cm', () => {
+      expect(feetInchesToCm(5, 0)).toBeCloseTo(152.4, 4);
+    });
+
+    it('combines 6\'1" → 185.42 cm', () => {
+      expect(feetInchesToCm(6, 1)).toBeCloseTo(185.42, 4);
+    });
+
+    it('combines 0/0 → 0 cm', () => {
+      expect(feetInchesToCm(0, 0)).toBe(0);
+    });
+  });
+
+  describe('round-trip ft_in conversions', () => {
+    it.each([
+      [5, 0],
+      [5, 7],
+      [6, 1.5],
+      [4, 11],
+      [0, 8],
+    ])('cm → ft/in → cm preserves %d ft %d in', (feet, inches) => {
+      const cm = feetInchesToCm(feet, inches);
+      const split = cmToFeetInches(cm);
+      expect(feetInchesToCm(split.feet, split.inches)).toBeCloseTo(cm, 4);
+    });
+  });
+
+  describe('kgToStonesLbs', () => {
+    it('splits exact 1 stone (6.35029 kg) into 1/0', () => {
+      const { stones, lbs } = kgToStonesLbs(6.35029318);
+      expect(stones).toBe(1);
+      expect(lbs).toBeCloseTo(0, 3);
+    });
+
+    it('splits 80 kg into 12/8.4 (~12st 8.4lb)', () => {
+      const { stones, lbs } = kgToStonesLbs(80);
+      expect(stones).toBe(12);
+      expect(lbs).toBeCloseTo(8.4, 1);
+    });
+
+    it('returns 0/0 for 0 kg', () => {
+      const { stones, lbs } = kgToStonesLbs(0);
+      expect(stones).toBe(0);
+      expect(lbs).toBe(0);
+    });
+  });
+
+  describe('formatWeightDisplay in st_lbs', () => {
+    // The split is exact but the display rounds to one decimal, so a weight
+    // just under a stone boundary rounds its remainder up to 14lb - which is by
+    // definition the next stone, not a pound count that can be shown.
+    it.each([
+      [63.48, '9st 13.9lb'],
+      [63.49, '10st 0lb'],
+      [63.5, '10st 0lb'],
+      [63.51, '10st 0lb'],
+      [6.35, '1st 0lb'],
+      [80, '12st 8.4lb'],
+      [0, '0st 0lb'],
+    ])('formats %d kg as %s', (kg, expected) => {
+      expect(formatWeightDisplay(kg, 'st_lbs')).toBe(expected);
+    });
+
+    it('never renders 14lb across the whole plausible range', () => {
+      for (let tenths = 0; tenths <= 3000; tenths++) {
+        expect(formatWeightDisplay(tenths / 10, 'st_lbs')).not.toMatch(
+          / 14lb$/
+        );
+      }
+    });
+  });
+
+  describe('stonesLbsToKg', () => {
+    it('combines 1st 0lb → ~6.35029 kg', () => {
+      expect(stonesLbsToKg(1, 0)).toBeCloseTo(6.35029, 4);
+    });
+
+    it('combines 12st 8lb → ~79.832 kg', () => {
+      expect(stonesLbsToKg(12, 8)).toBeCloseTo(79.832, 2);
+    });
+
+    it('combines 0/0 → 0 kg', () => {
+      expect(stonesLbsToKg(0, 0)).toBe(0);
+    });
+  });
+
+  describe('round-trip st_lbs conversions', () => {
+    it.each([
+      [10, 0],
+      [12, 8],
+      [8, 13.5],
+      [0, 7],
+      [15, 4.25],
+    ])('kg → st/lb → kg preserves %d st %d lb', (stones, lbs) => {
+      const kg = stonesLbsToKg(stones, lbs);
+      const split = kgToStonesLbs(kg);
+      expect(stonesLbsToKg(split.stones, split.lbs)).toBeCloseTo(kg, 4);
+    });
+  });
+
+  describe('volume helpers', () => {
+    // formatVolumeForUnit formats through formatLocalizedNumber, so the expected text
+    // is whatever the app's `en` locale produces rather than a hardcoded separator.
+    beforeAll(async () => {
+      await initializeI18n('en');
+    });
+
+    beforeEach(async () => {
+      await i18n.changeLanguage('en');
+    });
+
+    describe('volumeFromMl', () => {
+      it('returns millilitres unchanged', () => {
+        expect(volumeFromMl(500, 'ml')).toBe(500);
+      });
+
+      it('converts to fluid ounces', () => {
+        expect(volumeFromMl(1000, 'oz')).toBeCloseTo(33.814, 3);
+      });
+
+      it('converts to litres', () => {
+        expect(volumeFromMl(1500, 'liter')).toBe(1.5);
+      });
+
+      it('falls back to millilitres for an unknown unit', () => {
+        expect(volumeFromMl(500, 'gallons')).toBe(500);
+      });
+    });
+
+    describe('formatVolumeForUnit', () => {
+      it('applies the per-unit decimal rule', () => {
+        const locale = getAppLocale();
+
+        expect(formatVolumeForUnit(1234.567, 'ml')).toBe(
+          (1235).toLocaleString(locale)
+        );
+        expect(formatVolumeForUnit(33.8140227, 'oz')).toBe(
+          (33.8).toLocaleString(locale, { maximumFractionDigits: 1 })
+        );
+        expect(formatVolumeForUnit(1.2345, 'liter')).toBe(
+          (1.23).toLocaleString(locale, { maximumFractionDigits: 2 })
+        );
+      });
+    });
+  });
+  // A container linked to a food carries volume 0 on purpose: its amount lives
+  // on the food. Dividing that by servings gave 0, which the dashboard gauge
+  // rendered as "0 ml per container" beside a +/- that appeared to do nothing.
+  describe('getServingVolume', () => {
+    it('divides a plain container by its servings', () => {
+      expect(
+        getServingVolume({ volume: 2000, servings_per_container: 8 })
+      ).toBe(250);
+    });
+
+    it('treats a missing serving count as one serving', () => {
+      expect(getServingVolume({ volume: 500 })).toBe(500);
+      expect(
+        getServingVolume({ volume: 500, servings_per_container: null })
+      ).toBe(500);
+    });
+
+    it('reports a linked container as having no millilitre figure', () => {
+      expect(
+        getServingVolume({
+          volume: 0,
+          servings_per_container: 1,
+          linked_food_id: 'food-1',
+        })
+      ).toBeNull();
+    });
+
+    it('reports null for a linked container even when a volume was stored', () => {
+      // An override volume means "the glass holds more than the food", not
+      // "this is what one press credits".
+      expect(
+        getServingVolume({
+          volume: 500,
+          servings_per_container: 1,
+          linked_food_id: 'food-1',
+        })
+      ).toBeNull();
+    });
+  });
+});

@@ -1,0 +1,130 @@
+---
+title: Food Management Tool
+description: Comprehensive tool for tracking and managing dietary intake.
+---
+
+# Food Management Tool (`sparky_manage_food`)
+
+The `sparky_manage_food` tool is the primary interface for all nutrition tracking and management within SparkyFitness. It allows users and AI agents to search for food, log meals, create custom food items, and manage their daily food diary.
+
+**Tool Name:** `sparky_manage_food`
+
+**Description:** Primary tool for nutrition tracking. Use this to search for food, log meals, create custom food items, and manage your daily diary. Supports multi-turn conversations where you provide details one by one.
+
+## Actions
+
+The `sparky_manage_food` tool supports the following actions:
+
+### `search_food`
+- **Description:** Search for existing food items in the database.
+- **Parameters:**
+    - `food_name` (string): The name of the food item to search for.
+    - `search_type` (enum: "exact", "broad"): The type of search to perform.
+
+### `list_meal_types`
+- **Description:** Lists the built-in and custom meal types available to the user, including each type's `id`, `name`, and `sort_order`.
+
+### `log_food`
+- **Description:** Logs a food item to your daily diary. Handles both existing and new food items.
+- **Parameters:**
+    - `food_name` (string): The name of the food item.
+    - `food_id` (string, optional): UUID of the food item (if known).
+    - `variant_id` (string, optional): UUID of the food variant (if known).
+    - `quantity` (number): The amount consumed.
+    - `unit` (string): The unit of measurement (e.g., 'g', 'piece', 'serving').
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback (e.g., 'breakfast', 'lunch', 'dinner', 'snacks').
+    - `entry_date` (string, YYYY-MM-DD): The date of the record.
+- **Meal Type Precedence:** Provide at least one of `meal_type_id` or `meal_type`. When both are supplied, `meal_type_id` takes precedence.
+- **Special Handling for Unknown Foods:** If `food_name` is not found, the AI will be instructed to infer nutritional details and create the food via `create_food` before re-attempting to log.
+
+### `log_external_food`
+- **Description:** The preferred way to log a match that `lookup_food_nutrition` returned from an external provider (USDA, OpenFoodFacts, Yazio, ...). The server re-fetches the provider result, saves the food with the provider's full nutrition, and logs it in one call. Prefer this over re-typing provider values into `create_food`; use `create_food` only when no provider has the food.
+- **Parameters:**
+    - `food_name` (string): The food name exactly as it appeared in the `lookup_food_nutrition` result.
+    - `external_id` (string, optional): The result's External ID, pinning the exact provider item. Never pass this as `food_id`.
+    - `provider_type` (string, optional): The provider the match came from.
+    - `quantity` (number, optional): Servings consumed; defaults to 1.
+    - `unit` (string, optional): Unit of measurement; defaults to `serving`.
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback.
+    - `entry_date` (string, optional): `YYYY-MM-DD`; defaults to today.
+    - `entry_time` (string, optional): Time for the entry.
+    - `is_quick_food` (boolean, optional, default `false`): **Quick Add**, with the same meaning as on `create_food` below. Because this action is the one most provider matches take, Quick Add is usually applied here rather than on `create_food` — set the flag on whichever action you were already going to use rather than switching to `create_food`, which would trade verified provider nutrition for an estimate. If the food is already in the user's food list, the existing food is left visible and the confirmation says Quick Add was not applied; an existing food is never retroactively hidden.
+- **Meal Type Requirement:** Provide at least one of `meal_type_id` or `meal_type`.
+- **No provider match:** The tool returns a validation error containing a ready-to-copy `create_food` example. That example preserves both the meal selector and `is_quick_food` when they were supplied.
+
+### `create_food`
+- **Description:** Creates a new custom food item in the database with its nutritional information.
+- **Parameters:** (all nutrition fields are flat, not nested under a `macros` object)
+    - `food_name` (string): The name of the new food item.
+    - `brand` (string, optional): The brand name of the food.
+    - `calories` (number), `protein` (number), `carbs` (number), `fat` (number): required core macros.
+    - `saturated_fat`, `polyunsaturated_fat`, `monounsaturated_fat`, `trans_fat`, `cholesterol`, `sodium`, `potassium`, `fiber`, `sugar`, `vitamin_a`, `vitamin_c`, `calcium`, `iron` (number, optional): micronutrients.
+    - `gi` (string, optional, enum: "None", "Very Low", "Low", "Medium", "High", "Very High")
+    - `quantity` (number, optional): The default serving size value.
+    - `unit` (string, optional): The default serving size unit.
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type for automatic logging.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback for automatic logging.
+    - `entry_date` (string, optional): `YYYY-MM-DD` date for the automatic log; defaults to today.
+    - `entry_time` (string, optional): Time for the automatic log.
+    - `is_quick_food` (boolean, optional, default `false`): **Quick Add** — mirrors the web and mobile "Quick Add (don't save to my food list for future use)" checkbox. The food is logged to the diary but excluded from food search, favorites, recents, and the food list (`foods.is_quick_food = true`). Set it only when the user explicitly asks; because a quick food is hidden from every discovery query, the call must also supply `meal_type_id` (or `meal_type`), otherwise it is rejected with a validation error. The same flag exists on `log_external_food`, which is where most provider-backed foods are logged.
+
+### `search_meal`
+- **Description:** Search for existing meal templates.
+- **Parameters:**
+    - `meal_name` (string): The name of the meal template to search for.
+
+### `log_meal`
+- **Description:** Logs a predefined meal template to your daily diary.
+- **Parameters:**
+    - `meal_id` (string, optional): UUID of the meal template (if known).
+    - `meal_name` (string, optional): Name of the meal template (alternative to ID).
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback (e.g., 'breakfast', 'lunch', 'dinner', 'snacks').
+    - `entry_date` (string, YYYY-MM-DD): The date of the record.
+    - `quantity` (number, optional): Multiplier for the meal template.
+    - `unit` (string, optional): Unit for the meal template multiplier.
+- **Meal Type Requirement:** Provide at least one of `meal_type_id` or `meal_type`. When both are supplied, `meal_type_id` takes precedence.
+
+### `list_diary`
+- **Description:** Retrieves all logged food and meal entries for a specific date.
+- **Parameters:**
+    - `entry_date` (string, YYYY-MM-DD, optional): The date to retrieve the diary for. Defaults to today.
+
+### `delete_entry`
+- **Description:** Deletes a specific food or meal entry from the diary.
+- **Parameters:**
+    - `entry_id` (string): UUID of the entry to delete.
+    - `entry_type` (enum: "food_entry", "food_entry_meal"): The type of entry.
+
+### `update_entry`
+- **Description:** Updates the quantity, unit, or meal type of an existing food or meal entry.
+- **Parameters:**
+    - `entry_id` (string): UUID of the entry to update.
+    - `entry_type` (enum: "food_entry", "food_entry_meal"): The type of entry.
+    - `quantity` (number, optional): The new amount.
+    - `unit` (string, optional): The new unit of measurement.
+    - `meal_type_id` (string, optional): UUID of the new built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback (e.g., 'breakfast', 'lunch', 'dinner', 'snacks').
+- **Requirement:** Provide at least one mutable field (`quantity`, `unit`, `meal_type_id`, or `meal_type`). When both meal type selectors are supplied, `meal_type_id` takes precedence.
+
+### `copy_from_yesterday`
+- **Description:** Copies all food entries from a source date (defaults to yesterday) to a target date (defaults to today) for a specific meal type.
+- **Parameters:**
+    - `target_date` (string, YYYY-MM-DD, optional): The date to copy entries to.
+    - `source_date` (string, YYYY-MM-DD, optional): The date to copy entries from.
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback (e.g., 'breakfast', 'lunch', 'dinner', 'snacks').
+- **Meal Type Precedence:** When both are supplied, `meal_type_id` takes precedence.
+
+### `save_as_meal_template`
+- **Action Requirement:** This action cannot be inferred unambiguously. Always provide `action: "save_as_meal_template".`
+- **Description:** Saves a set of food entries from a specific date and meal type as a new reusable meal template.
+- **Parameters:**
+    - `entry_date` (string, YYYY-MM-DD): The date from which to save entries.
+    - `meal_type_id` (string, optional): UUID of a built-in or custom meal type.
+    - `meal_type` (string, optional): Backwards-compatible built-in fallback (e.g., 'breakfast', 'lunch', 'dinner', 'snacks').
+    - `meal_name` (string): The name for the new meal template.
+    - `description` (string, optional): A description for the meal template.
+- **Meal Type Requirement:** Provide at least one of `meal_type_id` or `meal_type`. When both are supplied, `meal_type_id` takes precedence.

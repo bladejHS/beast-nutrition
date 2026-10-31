@@ -1,0 +1,284 @@
+import { resolveMockDataOptions } from '../utils/mockDataOptions.js';
+import express from 'express';
+import withingsService from '../integrations/withings/withingsService.js';
+import { log } from '../config/logging.js';
+import authMiddleware from '../middleware/authMiddleware.js';
+import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import withingsServiceCentral from '../services/withingsService.js';
+import requireSelfActor from '../middleware/requireSelfMiddleware.js';
+import { OAuthStateError } from '../utils/oauthState.js';
+import { describeError } from '../utils/errors.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+const router = express.Router();
+/**
+ * @swagger
+ * /withings/authorize:
+ *   get:
+ *     summary: Initiate Withings OAuth flow
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Authorization URL.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 authUrl: { type: 'string' }
+ */
+router.get(
+  '/authorize',
+  authMiddleware.authenticate,
+  // Self-only, not checkPermissionMiddleware('diary'): on GET that resolves to
+  // diary_read, which would hand a read-only delegate the owner's client id.
+  requireSelfActor,
+  async (req, res) => {
+    try {
+      const userId = req.userId; // Assuming user ID is available from authentication
+      const authorizationUrl =
+        await withingsService.getAuthorizationUrl(userId);
+      res.json({ authUrl: authorizationUrl });
+    } catch (error) {
+      log(
+        'error',
+        `Error initiating Withings authorization: ${describeError(error)}`
+      );
+      res.status(500).json({
+        message: 'Error initiating Withings authorization',
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /withings/callback:
+ *   post:
+ *     summary: Handle Withings OAuth callback
+ *     tags: [External Integrations]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               code: { type: 'string' }
+ *               state:
+ *                 type: string
+ *                 description: The single-use nonce issued by /withings/authorize and returned by Withings. Never a user id.
+ *               error: { type: 'string', nullable: true }
+ *     responses:
+ *       200:
+ *         description: Successfully linked.
+ *       400:
+ *         description: Missing authorization code, or the OAuth state was invalid, expired, or already used.
+ *       403:
+ *         description: The state is not bound to the authenticated user.
+ */
+router.post('/callback', authMiddleware.authenticate, async (req, res) => {
+  try {
+    const { code, state, error } = req.body;
+    if (error) {
+      log('error', `Withings OAuth callback error: ${error}`);
+      return res.status(400).json({ message: 'Withings OAuth error', error });
+    }
+    if (!code) {
+      return res
+        .status(400)
+        .json({ message: 'Authorization code not received.' });
+    }
+    // `state` is never treated as a user id. The claim is scoped to the
+    // authenticated actor, so a state issued to another user matches no row and
+    // fails before any token exchange or provider-row write.
+    const actorUserId =
+      req.originalUserId || req.authenticatedUserId || req.userId;
+    const tokenExchangeResult = await withingsService.exchangeCodeForTokens(
+      state,
+      code,
+      `${process.env.SPARKY_FITNESS_FRONTEND_URL}/withings/callback`,
+      actorUserId
+    );
+    // Belt and braces: the claim predicate already guarantees this holds.
+    if (tokenExchangeResult.ownerUserId !== actorUserId) {
+      log(
+        'warn',
+        `Withings callback owner ${tokenExchangeResult.ownerUserId} did not match actor ${actorUserId}.`
+      );
+      return res
+        .status(403)
+        .json({ message: 'Forbidden: OAuth state is not bound to this user.' });
+    }
+    if (tokenExchangeResult.success) {
+      res
+        .status(200)
+        .json({ message: 'Withings account linked successfully.' });
+    } else {
+      res.status(500).json({ message: 'Failed to connect Withings account.' });
+    }
+  } catch (error) {
+    // Every state failure returns one opaque 400 so the response never
+    // reveals which check rejected the value.
+    if (error instanceof OAuthStateError) {
+      log('warn', `Withings OAuth state rejected (${error.reason}).`);
+      return res
+        .status(400)
+        .json({ message: 'Invalid or expired authorization state.' });
+    }
+    log(
+      'error',
+      `Error handling Withings OAuth callback: ${describeError(error)}`
+    );
+    res.status(500).json({
+      message: 'Error handling Withings OAuth callback',
+    });
+  }
+});
+/**
+ * @swagger
+ * /withings/sync:
+ *   post:
+ *     summary: Manually trigger a Withings data sync
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: YYYY-MM-DD start date
+ *               endDate:
+ *                 type: string
+ *                 description: YYYY-MM-DD end date
+ *     responses:
+ *       200:
+ *         description: Sync completed successfully.
+ */
+router.post(
+  '/sync',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    log('info', 'Received request to /withings/sync');
+    try {
+      const userId = req.userId;
+      const { startDate, endDate } = req.body || {};
+      const { dataSource, saveMockData } = await resolveMockDataOptions(
+        req.body,
+        req.authenticatedUserId
+      );
+      const started = await startProviderSync(
+        { userId, providerType: 'withings' },
+        () =>
+          withingsServiceCentral.syncWithingsData(
+            userId,
+            'manual',
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
+      );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      const result = await started.running;
+      log(
+        'info',
+        `Withings data sync completed for user ${userId}. Source: ${result.source}`
+      );
+      res.status(200).json({
+        message: 'Withings data sync completed successfully.',
+        source: result.source,
+        // @ts-expect-error TS(2339): Property 'cached_date' does not exist on type '{ s... Remove this comment to see the full error message
+        cached_date: result.cached_date,
+      });
+    } catch (error) {
+      log(
+        'error',
+        `Error initiating manual Withings sync: ${describeError(error)}`
+      );
+      res.status(500).json({
+        message: 'Error initiating manual Withings sync',
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /withings/disconnect:
+ *   post:
+ *     summary: Disconnect a Withings account
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Disconnected successfully.
+ */
+router.post(
+  '/disconnect',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      await withingsService.disconnectWithings(userId);
+      res
+        .status(200)
+        .json({ message: 'Withings account disconnected successfully.' });
+    } catch (error) {
+      log(
+        'error',
+        `Error disconnecting Withings account: ${describeError(error)}`
+      );
+      res.status(500).json({
+        message: 'Error disconnecting Withings account',
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /withings/status:
+ *   get:
+ *     summary: Get Withings connection status and last sync time
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Connection status.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/WithingsStatus'
+ */
+router.get(
+  '/status',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      const status = await withingsService.getStatus(userId);
+      res.status(200).json(status);
+    } catch (error) {
+      log('error', `Error getting Withings status: ${describeError(error)}`);
+      res.status(500).json({
+        message: 'Error getting Withings status',
+      });
+    }
+  }
+);
+export default router;

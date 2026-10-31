@@ -1,0 +1,1256 @@
+import {
+  createExerciseEntry,
+  updateExerciseEntry,
+  fetchExerciseHistory,
+  transformExerciseRow,
+  fetchSuggestedExercises,
+  searchExercises,
+  fetchExercisesPage,
+  createWorkout,
+  updateWorkout,
+  deleteWorkout,
+  deleteExerciseEntry,
+  updateExercise,
+  deleteExerciseFromLibrary,
+  attachExerciseEntryWatchTelemetry,
+  setExerciseEntryStrideLength,
+  type CreateExerciseEntryPayload,
+} from '../../../src/services/api/exerciseApi';
+import {
+  calculateCaloriesBurned,
+  calculateActiveCalories,
+  calculateOtherExerciseCalories,
+  calculateExerciseDuration,
+} from '../../../src/utils/workoutSession';
+import {
+  getActiveServerConfig,
+  ServerConfig,
+} from '../../../src/services/storage';
+import type { ExerciseSessionResponse } from '@workspace/shared';
+
+jest.mock('../../../src/services/storage', () => ({
+  getActiveServerConfig: jest.fn(),
+  proxyHeadersToRecord: jest.requireActual('../../../src/services/storage')
+    .proxyHeadersToRecord,
+}));
+
+jest.mock('../../../src/services/LogService', () => ({
+  addLog: jest.fn(),
+}));
+
+const mockGetActiveServerConfig = getActiveServerConfig as jest.MockedFunction<
+  typeof getActiveServerConfig
+>;
+
+/** Helper to build an individual session with sensible defaults */
+function individual(
+  overrides: Partial<ExerciseSessionResponse & { type: 'individual' }> = {}
+): ExerciseSessionResponse {
+  return {
+    type: 'individual',
+    id: 'i-1',
+    exercise_id: 'ex-1',
+    entry_date: '2024-06-15',
+    duration_minutes: 30,
+    calories_burned: 0,
+    notes: null,
+    distance: null,
+    avg_heart_rate: null,
+    source: null,
+    sets: [],
+    exercise_snapshot: null,
+    activity_details: [],
+    ...overrides,
+  };
+}
+
+/** Helper to build a preset session with sensible defaults */
+function preset(
+  overrides: Partial<ExerciseSessionResponse & { type: 'preset' }> = {}
+): ExerciseSessionResponse {
+  return {
+    type: 'preset',
+    id: 'p-1',
+    entry_date: '2024-06-15',
+    workout_preset_id: null,
+    name: 'Test Workout',
+    description: null,
+    notes: null,
+    source: 'manual',
+    total_duration_minutes: 45,
+    exercises: [],
+    activity_details: [],
+    ...overrides,
+  } as ExerciseSessionResponse;
+}
+
+describe('exerciseApi - createExerciseEntry / updateExerciseEntry', () => {
+  const mockFetch = jest.fn();
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    (globalThis as any).fetch = mockFetch;
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  const testConfig: ServerConfig = {
+    id: 'test-id',
+    url: 'https://example.com',
+    apiKey: 'test-api-key-12345',
+  };
+
+  const testPayload: CreateExerciseEntryPayload = {
+    exercise_id: 'ex-1',
+    duration_minutes: 30,
+    calories_burned: 300,
+    entry_date: '2026-03-12',
+    distance: 5.5,
+    notes: 'Morning run',
+  };
+
+  describe('createExerciseEntry', () => {
+    test('sends POST request to /api/exercise-entries/', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 'new-entry-1' }),
+      });
+
+      await createExerciseEntry(testPayload);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/',
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer test-api-key-12345',
+
+            'X-Meal-Model-Version': '2',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(testPayload),
+        })
+      );
+    });
+
+    test('returns parsed JSON response on success', async () => {
+      const responseData = { id: 'new-entry-1', exercise_id: 'ex-1' };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await createExerciseEntry(testPayload);
+
+      expect(result).toEqual(responseData);
+    });
+
+    test('throws error on non-OK response', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve('Bad Request'),
+      });
+
+      await expect(createExerciseEntry(testPayload)).rejects.toThrow(
+        'Server error: 400 - Bad Request'
+      );
+    });
+
+    test('throws error when no server config exists', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(null);
+
+      await expect(createExerciseEntry(testPayload)).rejects.toThrow(
+        'Server configuration not found.'
+      );
+    });
+  });
+
+  describe('updateExerciseEntry', () => {
+    test('sends PUT request to /api/exercise-entries/:id', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 'entry-1' }),
+      });
+
+      await updateExerciseEntry('entry-1', testPayload);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/entry-1',
+        expect.objectContaining({
+          method: 'PUT',
+          headers: {
+            Authorization: 'Bearer test-api-key-12345',
+
+            'X-Meal-Model-Version': '2',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(testPayload),
+        })
+      );
+    });
+
+    test('returns parsed JSON response on success', async () => {
+      const responseData = { id: 'entry-1', exercise_id: 'ex-1' };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await updateExerciseEntry('entry-1', testPayload);
+
+      expect(result).toEqual(responseData);
+    });
+
+    test('throws error on non-OK response', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
+      });
+
+      await expect(updateExerciseEntry('entry-1', testPayload)).rejects.toThrow(
+        'Server error: 500 - Internal Server Error'
+      );
+    });
+
+    test('throws error when no server config exists', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(null);
+
+      await expect(updateExerciseEntry('entry-1', testPayload)).rejects.toThrow(
+        'Server configuration not found.'
+      );
+    });
+  });
+
+  describe('fetchSuggestedExercises', () => {
+    it('sends GET request with limit param', async () => {
+      const responseData = { recentExercises: [], topExercises: [] };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      await fetchSuggestedExercises(5);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercises/suggested?limit=5',
+        expect.objectContaining({ method: 'GET' })
+      );
+    });
+
+    it('uses default limit of 10', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ recentExercises: [], topExercises: [] }),
+      });
+
+      await fetchSuggestedExercises();
+
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain('limit=10');
+    });
+
+    it('runs every row through the transformer (surfaces userId/isCustom)', async () => {
+      const responseData = {
+        recentExercises: [
+          {
+            id: 'ex-1',
+            name: 'Running',
+            user_id: 'user-1',
+            is_custom: true,
+            equipment: '[]',
+            primary_muscles: '[]',
+            secondary_muscles: '[]',
+            instructions: '[]',
+          },
+        ],
+        topExercises: [
+          {
+            id: 'ex-2',
+            name: 'Bench Press',
+            user_id: null,
+            is_custom: false,
+            equipment: '["barbell"]',
+            primary_muscles: '[]',
+            secondary_muscles: '[]',
+            instructions: '[]',
+          },
+        ],
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await fetchSuggestedExercises();
+
+      expect(result.recentExercises[0]).toMatchObject({
+        id: 'ex-1',
+        name: 'Running',
+        userId: 'user-1',
+        isCustom: true,
+      });
+      expect(result.topExercises[0]).toMatchObject({
+        id: 'ex-2',
+        userId: null,
+        isCustom: false,
+        equipment: ['barbell'],
+      });
+    });
+  });
+
+  describe('searchExercises', () => {
+    it('sends GET request with encoded search term', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve([]),
+      });
+
+      await searchExercises('bench press');
+
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain('/api/exercises/search?searchTerm=bench%20press');
+    });
+
+    it('runs each result through the transformer', async () => {
+      const responseData = [
+        {
+          id: 'ex-1',
+          name: 'Bench Press',
+          user_id: 'user-1',
+          is_custom: true,
+          equipment: '["barbell","bench"]',
+          primary_muscles: '[]',
+          secondary_muscles: '[]',
+          instructions: '[]',
+        },
+      ];
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await searchExercises('bench');
+      expect(result[0]).toMatchObject({
+        id: 'ex-1',
+        name: 'Bench Press',
+        userId: 'user-1',
+        isCustom: true,
+        equipment: ['barbell', 'bench'],
+      });
+    });
+  });
+
+  describe('fetchExercisesPage', () => {
+    it('runs each exercise through the transformer and preserves pagination', async () => {
+      const responseData = {
+        exercises: [
+          {
+            id: 'ex-1',
+            name: 'Squat',
+            user_id: 'user-2',
+            is_custom: false,
+            equipment: '[]',
+            primary_muscles: '["quadriceps"]',
+            secondary_muscles: '[]',
+            instructions: '[]',
+          },
+        ],
+        pagination: { page: 1, pageSize: 20, totalCount: 1, totalPages: 1 },
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await fetchExercisesPage({ page: 1, pageSize: 20 });
+
+      expect(result.pagination).toEqual(responseData.pagination);
+      expect(result.exercises[0]).toMatchObject({
+        id: 'ex-1',
+        userId: 'user-2',
+        isCustom: false,
+        primary_muscles: ['quadriceps'],
+      });
+    });
+
+    it('normalizes nested JSON array strings from exercise endpoints', async () => {
+      const responseData = {
+        exercises: [
+          {
+            id: 'ex-1',
+            name: 'Custom Movement',
+            equipment: ['["barbell","bench"]'],
+            primary_muscles: '"[\\"chest\\"]"',
+            secondary_muscles: '[]',
+            instructions: ['[]'],
+            images: ['[]'],
+          },
+        ],
+        pagination: { page: 1, pageSize: 20, totalCount: 1, totalPages: 1 },
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await fetchExercisesPage({ page: 1, pageSize: 20 });
+
+      expect(result.exercises[0]).toMatchObject({
+        equipment: ['barbell', 'bench'],
+        primary_muscles: ['chest'],
+        secondary_muscles: [],
+        instructions: [],
+        images: [],
+      });
+    });
+  });
+
+  describe('updateExercise', () => {
+    it('sends multipart PUT to /api/exercises/:id with exerciseData JSON', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            id: 'ex-1',
+            name: 'Updated Bench Press',
+            user_id: 'user-1',
+            is_custom: true,
+            equipment: '[]',
+            primary_muscles: '[]',
+            secondary_muscles: '[]',
+            instructions: '[]',
+          }),
+      });
+
+      const result = await updateExercise('ex-1', {
+        name: 'Updated Bench Press',
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercises/ex-1',
+        expect.objectContaining({ method: 'PUT' })
+      );
+      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      expect((init.body as FormData).get('exerciseData')).toEqual(
+        JSON.stringify({ name: 'Updated Bench Press' })
+      );
+      expect(result).toMatchObject({
+        id: 'ex-1',
+        userId: 'user-1',
+        isCustom: true,
+      });
+    });
+
+    it('throws on non-OK response', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve('Forbidden'),
+      });
+
+      await expect(updateExercise('ex-1', { name: 'X' })).rejects.toThrow(
+        'Server error: 403 - Forbidden'
+      );
+    });
+  });
+
+  describe('deleteExerciseFromLibrary', () => {
+    it('defaults to mode=delete, which keeps the diary', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(undefined),
+      });
+
+      await deleteExerciseFromLibrary('ex-1');
+
+      // The default must never be delete_with_history: a caller that forgets to
+      // pass a mode should remove the library row, not destroy logged workouts.
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercises/ex-1?mode=delete',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+    });
+
+    it.each(['hide', 'delete', 'delete_with_history'] as const)(
+      'sends mode=%s when asked for it',
+      async (mode) => {
+        mockGetActiveServerConfig.mockResolvedValue(testConfig);
+        mockFetch.mockResolvedValue({
+          ok: true,
+          json: () => Promise.resolve(undefined),
+        });
+
+        await deleteExerciseFromLibrary('ex-1', mode);
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          `https://example.com/api/exercises/ex-1?mode=${mode}`,
+          expect.objectContaining({ method: 'DELETE' })
+        );
+      }
+    );
+
+    it('throws on 403', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve('Forbidden'),
+      });
+
+      await expect(deleteExerciseFromLibrary('ex-1')).rejects.toThrow(
+        'Server error: 403 - Forbidden'
+      );
+    });
+  });
+
+  describe('createWorkout', () => {
+    it('sends POST request to /api/exercise-preset-entries/', async () => {
+      const payload = {
+        name: 'Push Day',
+        entry_date: '2026-03-20',
+        exercises: [],
+      };
+      const responseData = {
+        id: 'session-1',
+        type: 'preset',
+        name: 'Push Day',
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await createWorkout(payload as any);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-preset-entries/',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(payload),
+        })
+      );
+      expect(result).toEqual(responseData);
+    });
+  });
+
+  describe('updateWorkout', () => {
+    it('sends PUT request to /api/exercise-preset-entries/:id', async () => {
+      const payload = { name: 'Updated Push Day', exercises: [] };
+      const responseData = {
+        id: 'session-1',
+        type: 'preset',
+        name: 'Updated Push Day',
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await updateWorkout('session-1', payload as any);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-preset-entries/session-1',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        })
+      );
+      expect(result).toEqual(responseData);
+    });
+  });
+
+  describe('deleteWorkout', () => {
+    it('sends DELETE request to /api/exercise-preset-entries/:id', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(undefined),
+      });
+
+      await deleteWorkout('session-1');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-preset-entries/session-1',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+    });
+
+    it('throws on server error', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('Not Found'),
+      });
+
+      await expect(deleteWorkout('nonexistent')).rejects.toThrow(
+        'Server error: 404 - Not Found'
+      );
+    });
+  });
+
+  describe('deleteExerciseEntry', () => {
+    it('sends DELETE request to /api/exercise-entries/:id', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(undefined),
+      });
+
+      await deleteExerciseEntry('entry-1');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/entry-1',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+    });
+
+    it('throws on server error', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
+      });
+
+      await expect(deleteExerciseEntry('entry-1')).rejects.toThrow(
+        'Server error: 500 - Internal Server Error'
+      );
+    });
+  });
+
+  describe('setExerciseEntryStrideLength', () => {
+    beforeEach(() => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({}),
+      });
+    });
+
+    it('updates only the stride through the telemetry endpoint', async () => {
+      await setExerciseEntryStrideLength('entry-1', 101.5);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/entry-1/watch-telemetry',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ strideLengthCm: 101.5 }),
+        })
+      );
+    });
+
+    it('clears the stride with null', async () => {
+      await setExerciseEntryStrideLength('entry-1', null);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify({ strideLengthCm: null }),
+        })
+      );
+    });
+
+    it('throws on server error', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('Not Found'),
+      });
+
+      await expect(
+        setExerciseEntryStrideLength('entry-1', 100)
+      ).rejects.toThrow('Server error: 404 - Not Found');
+    });
+  });
+
+  describe('attachExerciseEntryWatchTelemetry', () => {
+    it('sends POST request with the series and measured energy to /api/exercise-entries/:id/watch-telemetry', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(undefined),
+      });
+
+      const hrSamples = [
+        { t: '2026-09-17T10:00:00.000Z', bpm: 120 },
+        { t: '2026-09-17T10:00:10.000Z', bpm: 128 },
+      ];
+      await attachExerciseEntryWatchTelemetry('entry-1', {
+        hrSamples,
+        activeEnergyKcal: 84,
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/entry-1/watch-telemetry',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ hrSamples, activeEnergyKcal: 84 }),
+        })
+      );
+    });
+
+    it('sends energy on its own when there is no usable series', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(undefined),
+      });
+
+      await attachExerciseEntryWatchTelemetry('entry-1', {
+        activeEnergyKcal: 42,
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercise-entries/entry-1/watch-telemetry',
+        expect.objectContaining({
+          body: JSON.stringify({ activeEnergyKcal: 42 }),
+        })
+      );
+    });
+
+    it('throws on server error', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('Not Found'),
+      });
+
+      await expect(
+        attachExerciseEntryWatchTelemetry('entry-1', {
+          hrSamples: [{ t: '2026-09-17T10:00:00.000Z', bpm: 120 }],
+        })
+      ).rejects.toThrow('Server error: 404 - Not Found');
+    });
+  });
+});
+
+describe('exerciseApi', () => {
+  const mockFetch = jest.fn();
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    global.fetch = mockFetch;
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  describe('transformExerciseRow', () => {
+    const baseRow = { id: 'ex-1', name: 'Plank', category: 'isometric' };
+
+    it('passes a valid modality through', () => {
+      expect(
+        transformExerciseRow({ ...baseRow, modality: 'duration' }).modality
+      ).toBe('duration');
+    });
+
+    it('maps an absent modality (pre-modality server) to null', () => {
+      expect(transformExerciseRow(baseRow).modality).toBeNull();
+    });
+
+    it('sanitizes a garbage modality value to null', () => {
+      expect(
+        transformExerciseRow({ ...baseRow, modality: 'cardio!!' }).modality
+      ).toBeNull();
+      expect(
+        transformExerciseRow({ ...baseRow, modality: 42 }).modality
+      ).toBeNull();
+    });
+  });
+
+  describe('calculateCaloriesBurned', () => {
+    test('returns 0 for empty array', () => {
+      expect(calculateCaloriesBurned([])).toBe(0);
+    });
+
+    test('sums calories_burned from individual entries', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 200 }),
+        individual({ id: '2', calories_burned: 350 }),
+      ];
+      expect(calculateCaloriesBurned(entries)).toBe(550);
+    });
+
+    test('handles entries with undefined calories_burned as 0', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 200 }),
+        individual({ id: '2', calories_burned: 0 }),
+      ];
+      expect(calculateCaloriesBurned(entries)).toBe(200);
+    });
+
+    test('handles single entry', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 150 }),
+      ];
+      expect(calculateCaloriesBurned(entries)).toBe(150);
+    });
+
+    test('sums nested exercise calories for preset sessions', () => {
+      const entries: ExerciseSessionResponse[] = [
+        preset({
+          exercises: [
+            {
+              id: 'e1',
+              exercise_id: 'ex-1',
+              duration_minutes: 10,
+              calories_burned: 100,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+            {
+              id: 'e2',
+              exercise_id: 'ex-2',
+              duration_minutes: 15,
+              calories_burned: 200,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+          ],
+        }),
+      ];
+      expect(calculateCaloriesBurned(entries)).toBe(300);
+    });
+
+    test('sums both individual and preset entries', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 100 }),
+        preset({
+          exercises: [
+            {
+              id: 'e1',
+              exercise_id: 'ex-1',
+              duration_minutes: 10,
+              calories_burned: 150,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+          ],
+        }),
+      ];
+      expect(calculateCaloriesBurned(entries)).toBe(250);
+    });
+  });
+
+  describe('calculateActiveCalories', () => {
+    test('returns 0 for empty array', () => {
+      expect(calculateActiveCalories([])).toBe(0);
+    });
+
+    test('returns 0 when no Active Calories exercises exist', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          calories_burned: 200,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        individual({
+          id: '2',
+          calories_burned: 150,
+          exercise_snapshot: { id: 'e2', name: 'Cycling', category: 'Cardio' },
+        }),
+      ];
+      expect(calculateActiveCalories(entries)).toBe(0);
+    });
+
+    test('sums only Active Calories exercises', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          calories_burned: 200,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        individual({
+          id: '2',
+          calories_burned: 450,
+          exercise_snapshot: {
+            id: 'e2',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+        individual({
+          id: '3',
+          calories_burned: 100,
+          exercise_snapshot: {
+            id: 'e3',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+      ];
+      expect(calculateActiveCalories(entries)).toBe(550);
+    });
+
+    test('handles entries without exercise_snapshot', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 200 }),
+        individual({
+          id: '2',
+          calories_burned: 300,
+          exercise_snapshot: {
+            id: 'e2',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+      ];
+      expect(calculateActiveCalories(entries)).toBe(300);
+    });
+
+    test('returns 0 for preset sessions', () => {
+      const entries: ExerciseSessionResponse[] = [
+        preset({
+          exercises: [
+            {
+              id: 'e1',
+              exercise_id: 'ex-1',
+              duration_minutes: 10,
+              calories_burned: 500,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+          ],
+        }),
+      ];
+      expect(calculateActiveCalories(entries)).toBe(0);
+    });
+  });
+
+  describe('fetchExerciseHistory', () => {
+    const testConfig: ServerConfig = {
+      id: 'test-id',
+      url: 'https://example.com',
+      apiKey: 'test-api-key-12345',
+    };
+
+    test('throws error when no server config exists', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(null);
+
+      await expect(fetchExerciseHistory()).rejects.toThrow(
+        'Server configuration not found.'
+      );
+    });
+
+    test('sends GET request to /v2/exercise-entries/history with default params', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            sessions: [],
+            pagination: {
+              page: 1,
+              pageSize: 20,
+              totalCount: 0,
+              hasMore: false,
+            },
+          }),
+      });
+
+      await fetchExerciseHistory();
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/v2/exercise-entries/history?page=1&pageSize=20',
+        expect.objectContaining({
+          method: 'GET',
+          headers: {
+            Authorization: 'Bearer test-api-key-12345',
+
+            'X-Meal-Model-Version': '2',
+          },
+        })
+      );
+    });
+
+    test('passes custom page and pageSize params', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            sessions: [],
+            pagination: {
+              page: 3,
+              pageSize: 10,
+              totalCount: 50,
+              hasMore: true,
+            },
+          }),
+      });
+
+      await fetchExerciseHistory(3, 10);
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/v2/exercise-entries/history?page=3&pageSize=10',
+        expect.anything()
+      );
+    });
+
+    test('appends the exerciseId filter when provided', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            sessions: [],
+            pagination: {
+              page: 1,
+              pageSize: 20,
+              totalCount: 0,
+              hasMore: false,
+            },
+          }),
+      });
+
+      await fetchExerciseHistory(1, 20, 'exercise-uuid-1');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/v2/exercise-entries/history?page=1&pageSize=20&exerciseId=exercise-uuid-1',
+        expect.anything()
+      );
+    });
+
+    test('returns parsed JSON response on success', async () => {
+      const responseData = {
+        sessions: [{ id: '1', type: 'individual', calories_burned: 250 }],
+        pagination: { page: 1, pageSize: 20, totalCount: 1, hasMore: false },
+      };
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(responseData),
+      });
+
+      const result = await fetchExerciseHistory();
+
+      expect(result).toEqual(responseData);
+    });
+
+    test('throws error on non-OK response', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve('Internal Server Error'),
+      });
+
+      await expect(fetchExerciseHistory()).rejects.toThrow(
+        'Server error: 500 - Internal Server Error'
+      );
+    });
+
+    test('rethrows on network failure', async () => {
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockRejectedValue(new Error('Network request failed'));
+
+      await expect(fetchExerciseHistory()).rejects.toThrow(
+        'Network request failed'
+      );
+    });
+  });
+
+  describe('calculateOtherExerciseCalories', () => {
+    test('returns 0 for empty array', () => {
+      expect(calculateOtherExerciseCalories([])).toBe(0);
+    });
+
+    test('returns all calories when no Active Calories exercises exist', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          calories_burned: 200,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        individual({
+          id: '2',
+          calories_burned: 150,
+          exercise_snapshot: { id: 'e2', name: 'Cycling', category: 'Cardio' },
+        }),
+      ];
+      expect(calculateOtherExerciseCalories(entries)).toBe(350);
+    });
+
+    test('excludes Active Calories exercises', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          calories_burned: 200,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        individual({
+          id: '2',
+          calories_burned: 450,
+          exercise_snapshot: {
+            id: 'e2',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+        individual({
+          id: '3',
+          calories_burned: 150,
+          exercise_snapshot: { id: 'e3', name: 'Cycling', category: 'Cardio' },
+        }),
+      ];
+      expect(calculateOtherExerciseCalories(entries)).toBe(350);
+    });
+
+    test('includes entries without exercise_snapshot', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({ id: '1', calories_burned: 200 }),
+        individual({
+          id: '2',
+          calories_burned: 300,
+          exercise_snapshot: {
+            id: 'e2',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+      ];
+      expect(calculateOtherExerciseCalories(entries)).toBe(200);
+    });
+
+    test('sums all nested exercise calories for preset sessions', () => {
+      const entries: ExerciseSessionResponse[] = [
+        preset({
+          exercises: [
+            {
+              id: 'e1',
+              exercise_id: 'ex-1',
+              duration_minutes: 10,
+              calories_burned: 100,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+            {
+              id: 'e2',
+              exercise_id: 'ex-2',
+              duration_minutes: 15,
+              calories_burned: 200,
+              entry_date: null,
+              notes: null,
+              distance: null,
+              avg_heart_rate: null,
+              source: null,
+              sets: [],
+              exercise_snapshot: null,
+              activity_details: [],
+            },
+          ],
+        }),
+      ];
+      expect(calculateOtherExerciseCalories(entries)).toBe(300);
+    });
+  });
+
+  describe('calculateExerciseDuration', () => {
+    test('returns 0 for empty array', () => {
+      expect(calculateExerciseDuration([])).toBe(0);
+    });
+
+    test('sums duration from individual entries, excluding Active Calories', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          duration_minutes: 30,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        individual({
+          id: '2',
+          duration_minutes: 45,
+          exercise_snapshot: {
+            id: 'e2',
+            name: 'Active Calories',
+            category: 'Tracking',
+          },
+        }),
+        individual({
+          id: '3',
+          duration_minutes: 20,
+          exercise_snapshot: { id: 'e3', name: 'Cycling', category: 'Cardio' },
+        }),
+      ];
+      expect(calculateExerciseDuration(entries)).toBe(50);
+    });
+
+    test('uses total_duration_minutes for preset sessions', () => {
+      const entries: ExerciseSessionResponse[] = [
+        preset({ total_duration_minutes: 60 }),
+      ];
+      expect(calculateExerciseDuration(entries)).toBe(60);
+    });
+
+    test('sums both individual and preset durations', () => {
+      const entries: ExerciseSessionResponse[] = [
+        individual({
+          id: '1',
+          duration_minutes: 30,
+          exercise_snapshot: { id: 'e1', name: 'Running', category: 'Cardio' },
+        }),
+        preset({ total_duration_minutes: 45 }),
+      ];
+      expect(calculateExerciseDuration(entries)).toBe(75);
+    });
+  });
+});

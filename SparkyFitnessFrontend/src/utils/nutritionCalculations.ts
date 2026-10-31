@@ -1,0 +1,741 @@
+import type { SupplementTotals } from '@workspace/shared';
+import {
+  resolveSupplementTotals,
+  addSupplementCustomNutrients,
+  FOOD_VARIANT_NUTRIENT_FIELDS,
+  foodVolumeToMl,
+} from '@workspace/shared';
+import { getDietTemplate } from '@/constants/dietTemplates';
+import { EMPTY_MEAL_TOTALS } from '@/constants/nutrients';
+import i18n from '@/i18n';
+import type { FoodEntry, FoodVariant } from '@/types/food';
+import { FoodEntryMeal, MealTotals } from '@/types/meal';
+import {
+  ACTIVITY_MULTIPLIERS,
+  DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
+  calculateBmr,
+  computeCalorieTarget,
+  goalModeFromPrimaryGoal,
+  calculateAge,
+  type CalorieSafetyFloorMode,
+} from '@workspace/shared';
+import { getMealPercentage } from './goals';
+import { ExpandedGoals } from '@/types/goals';
+
+// Utility functions for nutrition calculations
+
+export const calculateFoodEntryNutrition = (entry: FoodEntry) => {
+  // Prefer snapshotted data if available, otherwise calculate from variant/food
+
+  const source =
+    entry.calories !== undefined ||
+    Object.keys(entry.custom_nutrients || {}).length > 0
+      ? entry
+      : entry.food_variants || entry.foods?.default_variant;
+
+  if (!source) {
+    // Return zero for all nutrients if no source is found
+    return {
+      calories: 0,
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      saturated_fat: 0,
+      polyunsaturated_fat: 0,
+      monounsaturated_fat: 0,
+      trans_fat: 0,
+      cholesterol: 0,
+      sodium: 0,
+      potassium: 0,
+      dietary_fiber: 0,
+      sugars: 0,
+      vitamin_a: 0,
+      vitamin_c: 0,
+      calcium: 0,
+      iron: 0,
+      caffeine_mg: 0,
+      alcohol_g: 0,
+      glycemic_index: 'None',
+      water_ml: 0,
+      custom_nutrients: {},
+    };
+  }
+
+  const nutrientValuesPerReferenceSize = {
+    calories: Number(source.calories) || 0,
+    protein: Number(source.protein) || 0,
+    carbs: Number(source.carbs) || 0,
+    fat: Number(source.fat) || 0,
+    saturated_fat: Number(source.saturated_fat) || 0,
+    polyunsaturated_fat: Number(source.polyunsaturated_fat) || 0,
+    monounsaturated_fat: Number(source.monounsaturated_fat) || 0,
+    trans_fat: Number(source.trans_fat) || 0,
+    cholesterol: Number(source.cholesterol) || 0,
+    sodium: Number(source.sodium) || 0,
+    potassium: Number(source.potassium) || 0,
+    dietary_fiber: Number(source.dietary_fiber) || 0,
+    sugars: Number(source.sugars) || 0,
+    vitamin_a: Number(source.vitamin_a) || 0,
+    vitamin_c: Number(source.vitamin_c) || 0,
+    calcium: Number(source.calcium) || 0,
+    iron: Number(source.iron) || 0,
+    caffeine_mg: Number(source.caffeine_mg) || 0,
+    alcohol_g: Number(source.alcohol_g) || 0,
+    // Kept nullable rather than coerced to 0 like the rest: only a MISSING
+    // value falls back to the volume-unit heuristic below. A recorded 0 means
+    // the food genuinely holds no water and must survive to the caller.
+    water_ml:
+      source.water_ml === null || source.water_ml === undefined
+        ? null
+        : Number(source.water_ml) || 0,
+    glycemic_index: source.glycemic_index,
+    custom_nutrients: source.custom_nutrients || {},
+  };
+
+  const effectiveReferenceSize = Number(source.serving_size) || 100;
+
+  // Calculate total nutrition: (nutrient_value_per_reference_size / effective_reference_size) * quantity_consumed
+  return {
+    calories:
+      (nutrientValuesPerReferenceSize.calories / effectiveReferenceSize) *
+      entry.quantity,
+    protein:
+      (nutrientValuesPerReferenceSize.protein / effectiveReferenceSize) *
+      entry.quantity,
+    carbs:
+      (nutrientValuesPerReferenceSize.carbs / effectiveReferenceSize) *
+      entry.quantity,
+    fat:
+      (nutrientValuesPerReferenceSize.fat / effectiveReferenceSize) *
+      entry.quantity,
+    saturated_fat:
+      (nutrientValuesPerReferenceSize.saturated_fat / effectiveReferenceSize) *
+      entry.quantity,
+    polyunsaturated_fat:
+      (nutrientValuesPerReferenceSize.polyunsaturated_fat /
+        effectiveReferenceSize) *
+      entry.quantity,
+    monounsaturated_fat:
+      (nutrientValuesPerReferenceSize.monounsaturated_fat /
+        effectiveReferenceSize) *
+      entry.quantity,
+    trans_fat:
+      (nutrientValuesPerReferenceSize.trans_fat / effectiveReferenceSize) *
+      entry.quantity,
+    cholesterol:
+      (nutrientValuesPerReferenceSize.cholesterol / effectiveReferenceSize) *
+      entry.quantity,
+    sodium:
+      (nutrientValuesPerReferenceSize.sodium / effectiveReferenceSize) *
+      entry.quantity,
+    potassium:
+      (nutrientValuesPerReferenceSize.potassium / effectiveReferenceSize) *
+      entry.quantity,
+    dietary_fiber:
+      (nutrientValuesPerReferenceSize.dietary_fiber / effectiveReferenceSize) *
+      entry.quantity,
+    sugars:
+      (nutrientValuesPerReferenceSize.sugars / effectiveReferenceSize) *
+      entry.quantity,
+    vitamin_a:
+      (nutrientValuesPerReferenceSize.vitamin_a / effectiveReferenceSize) *
+      entry.quantity,
+    vitamin_c:
+      (nutrientValuesPerReferenceSize.vitamin_c / effectiveReferenceSize) *
+      entry.quantity,
+    calcium:
+      (nutrientValuesPerReferenceSize.calcium / effectiveReferenceSize) *
+      entry.quantity,
+    iron:
+      (nutrientValuesPerReferenceSize.iron / effectiveReferenceSize) *
+      entry.quantity,
+    caffeine_mg:
+      (nutrientValuesPerReferenceSize.caffeine_mg / effectiveReferenceSize) *
+      entry.quantity,
+    alcohol_g:
+      (nutrientValuesPerReferenceSize.alcohol_g / effectiveReferenceSize) *
+      entry.quantity,
+    glycemic_index: nutrientValuesPerReferenceSize.glycemic_index, // Pass through glycemic_index
+    // Explicit water_ml wins (scaled like every other nutrient); when the food
+    // carries no water content at all, fall back to the logged volume for
+    // entries logged in a real volume unit (ml, l, cup, fl oz, ...) (#1557,
+    // #1629). Deliberately NOT 'oz' -- in the food unit vocabulary oz is a
+    // WEIGHT ounce (see shared/src/utils/servingSizeConversions.ts), so 4 oz
+    // of cheese must not read as 118 ml of water. Still unconsumed by
+    // calculateDayTotals on purpose: it is not in EMPTY_MEAL_TOTALS, because
+    // the water ring (not the macro grid) owns the day total once the #1557
+    // fold-in preference lands server-side. This field exists for the
+    // per-entry "this drink contributed X ml" affordance.
+    // An explicit 0 is an answer, not a blank: a drink recorded as containing
+    // no water must not have its volume guessed back in. Only a missing value
+    // falls through to the volume.
+    water_ml:
+      nutrientValuesPerReferenceSize.water_ml != null
+        ? (nutrientValuesPerReferenceSize.water_ml / effectiveReferenceSize) *
+          entry.quantity
+        : (foodVolumeToMl(entry.quantity, entry.unit ?? '') ?? 0),
+    custom_nutrients: Object.entries(
+      nutrientValuesPerReferenceSize.custom_nutrients
+    ).reduce(
+      (acc, [key, value]) => {
+        acc[key] = (Number(value) / effectiveReferenceSize) * entry.quantity;
+        return acc;
+      },
+      {} as Record<string, number>
+    ),
+  };
+};
+
+export const convertMlToSelectedUnit = (
+  ml: number | null | undefined,
+  unit: 'ml' | 'oz' | 'liter'
+): number => {
+  // Removed 'cup' from type
+  const safeMl = typeof ml === 'number' && !isNaN(ml) ? ml : 0;
+  let convertedValue: number;
+  switch (unit) {
+    case 'oz':
+      convertedValue = safeMl / 29.5735;
+      break;
+    case 'liter':
+      convertedValue = safeMl / 1000;
+      break;
+    case 'ml':
+    default:
+      convertedValue = safeMl;
+      break;
+  }
+
+  // Apply decimal formatting based on unit
+  return convertedValue; // Return raw converted value
+};
+
+export const convertSelectedUnitToMl = (
+  value: number,
+  unit: 'ml' | 'oz' | 'liter'
+): number => {
+  switch (unit) {
+    case 'oz':
+      return value * 29.5735;
+    case 'liter':
+      return value * 1000;
+    case 'ml':
+    default:
+      return value;
+  }
+};
+
+export const getEnergyUnitString = (unit: 'kcal' | 'kJ'): string => {
+  return unit === 'kcal'
+    ? i18n.t('common.kcalUnit', 'kcal')
+    : i18n.t('common.kJUnit', 'kJ');
+};
+
+export interface CalculatedNutrition {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  saturated_fat: number;
+  polyunsaturated_fat: number;
+  monounsaturated_fat: number;
+  trans_fat: number;
+  cholesterol: number;
+  sodium: number;
+  potassium: number;
+  dietary_fiber: number;
+  sugars: number;
+  vitamin_a: number;
+  vitamin_c: number;
+  calcium: number;
+  iron: number;
+  caffeine_mg: number;
+  alcohol_g: number;
+  water_ml: number;
+  custom_nutrients: Record<string, number>;
+}
+
+export const calculateNutrition = (
+  variant: FoodVariant,
+  quantity: number
+): CalculatedNutrition | null => {
+  if (!variant || !variant.serving_size) {
+    return null;
+  }
+
+  const ratio = quantity / variant.serving_size;
+
+  const nutrition: CalculatedNutrition = {
+    calories: (variant.calories || 0) * ratio,
+    protein: (variant.protein || 0) * ratio,
+    carbs: (variant.carbs || 0) * ratio,
+    fat: (variant.fat || 0) * ratio,
+    saturated_fat: (variant.saturated_fat || 0) * ratio,
+    polyunsaturated_fat: (variant.polyunsaturated_fat || 0) * ratio,
+    monounsaturated_fat: (variant.monounsaturated_fat || 0) * ratio,
+    trans_fat: (variant.trans_fat || 0) * ratio,
+    cholesterol: (variant.cholesterol || 0) * ratio,
+    sodium: (variant.sodium || 0) * ratio,
+    potassium: (variant.potassium || 0) * ratio,
+    dietary_fiber: (variant.dietary_fiber || 0) * ratio,
+    sugars: (variant.sugars || 0) * ratio,
+    vitamin_a: (variant.vitamin_a || 0) * ratio,
+    vitamin_c: (variant.vitamin_c || 0) * ratio,
+    calcium: (variant.calcium || 0) * ratio,
+    iron: (variant.iron || 0) * ratio,
+    caffeine_mg: (variant.caffeine_mg || 0) * ratio,
+    alcohol_g: (variant.alcohol_g || 0) * ratio,
+    // #1557/#1629: explicit water_ml wins (scaled like any other nutrient);
+    // with none recorded, fall back to the logged volume when serving_unit is a
+    // real volume unit -- never 'oz', which is a WEIGHT ounce in the food
+    // vocabulary. Same resolution calculateFoodEntryNutrition and the server's
+    // food-water formula use, so the figure shown per entry matches the one the
+    // day total credits. Deliberately absent from EMPTY_MEAL_TOTALS: the water
+    // ring owns the day total, this is only the per-entry contribution.
+    // As above: an explicit 0 wins, only a missing value falls back.
+    water_ml:
+      variant.water_ml != null
+        ? variant.water_ml * ratio
+        : (foodVolumeToMl(quantity, variant.serving_unit ?? '') ?? 0),
+    custom_nutrients: {},
+  };
+
+  if (variant.custom_nutrients) {
+    for (const [key, value] of Object.entries(variant.custom_nutrients)) {
+      nutrition.custom_nutrients[key] = (Number(value) || 0) * ratio;
+    }
+  }
+
+  return nutrition;
+};
+
+/**
+ * Folds a day's logged supplement doses into its food totals.
+ *
+ * Covers every field in `FOOD_VARIANT_NUTRIENT_FIELDS`, not just the macros. It added only
+ * the five macro fields until #2145: a supplement carrying 10000mg of calcium showed its
+ * calcium in Reports, which sums all seventeen, and nothing in the Diary summary card
+ * beside it, which is the surface the user was actually looking at.
+ *
+ * The older reasoning for the narrow version was that no other surface summed a
+ * supplement's sodium either, so widening here alone would make the Diary the odd one out.
+ * That was already untrue of the range query in `reportRepository`, and the inconsistency
+ * it was avoiding is the one users hit.
+ *
+ * Custom nutrients are folded in as well, and they are where most micronutrients actually
+ * live: only six of the catalog's entries have a fixed column, so a magnesium or vitamin D
+ * supplement contributes nothing the loop below can reach. `NutritionSummaryCard` already
+ * falls back to `dayTotals.custom_nutrients` for a nutrient with no fixed field, so this
+ * needs no display change to become visible.
+ *
+ * Returns the argument itself when there is no supplement arm at all, which now means an
+ * older server or a failed fetch rather than a day without supplements: this server always
+ * sends the arm, so a supplement-free day arrives present-and-zero and takes the merge
+ * below instead. That path adds nothing to the seventeen, but it does leave a
+ * `custom_nutrients` key on totals that may not have carried one. Downstream reads it as
+ * `custom_nutrients?.[nutrient] ?? 0`, so an empty map and an absent one mean the same
+ * thing there.
+ */
+export const addSupplementTotals = <T extends MealTotals>(
+  foodTotals: T,
+  supplementTotals: Partial<SupplementTotals> | undefined | null
+): T => {
+  if (!supplementTotals) return foodTotals;
+  // Merges against a full-width zero object, so an older server answering with only the
+  // five macro keys yields 0 for the rest rather than `number + undefined` = NaN.
+  const supplements = resolveSupplementTotals(supplementTotals);
+  const combined = { ...foodTotals };
+  for (const field of FOOD_VARIANT_NUTRIENT_FIELDS) {
+    const food = Number(foodTotals[field]) || 0;
+    (combined as MealTotals)[field] = food + supplements[field];
+  }
+  // Replaced with a new map rather than mutated: `foodTotals.custom_nutrients` is the
+  // object the caller's food totals hold, and adding doses into it in place would
+  // double-count as soon as anything folds the same day again.
+  combined.custom_nutrients = addSupplementCustomNutrients(
+    foodTotals.custom_nutrients,
+    supplements
+  );
+  return combined;
+};
+
+export const calculateDayTotals = (
+  entries: FoodEntry[],
+  meals: FoodEntryMeal[] | undefined
+): MealTotals => {
+  if (!entries || !meals || (entries.length === 0 && meals.length === 0)) {
+    return EMPTY_MEAL_TOTALS;
+  }
+  const combinedItems: { nutrition: MealTotals; meal_type: string }[] = [];
+
+  entries.forEach((entry) => {
+    const entryNutrition = calculateFoodEntryNutrition(entry); // Assumes this returns kcal
+    // calculateFoodEntryNutrition returns custom_nutrients, we need to ensure they are passed along
+    combinedItems.push({
+      nutrition: {
+        ...entryNutrition,
+        // Explicitly ensure custom_nutrients are carried over if calculateFoodEntryNutrition returns them
+        custom_nutrients: entryNutrition.custom_nutrients || {},
+      },
+      meal_type: entry.meal_type,
+    });
+  });
+
+  meals.forEach((meal) => {
+    // For FoodEntryMeal, its aggregated nutritional data is directly available (assumed to be in kcal)
+    // Note: The backend already scales component food entries by the meal quantity when creating,
+    // and aggregates those scaled values. Do NOT multiply by quantity again here.
+    combinedItems.push({
+      nutrition: {
+        calories: meal.calories || 0, // kcal - already aggregated with quantity
+        protein: meal.protein || 0,
+        carbs: meal.carbs || 0,
+        fat: meal.fat || 0,
+        dietary_fiber: meal.dietary_fiber || 0,
+        sugars: meal.sugars || 0,
+        sodium: meal.sodium || 0,
+        cholesterol: meal.cholesterol || 0,
+        saturated_fat: meal.saturated_fat || 0,
+        monounsaturated_fat: meal.monounsaturated_fat || 0,
+        polyunsaturated_fat: meal.polyunsaturated_fat || 0,
+        trans_fat: meal.trans_fat || 0,
+        potassium: meal.potassium || 0,
+        vitamin_a: meal.vitamin_a || 0,
+        vitamin_c: meal.vitamin_c || 0,
+        iron: meal.iron || 0,
+        calcium: meal.calcium || 0,
+        caffeine_mg: meal.caffeine_mg || 0,
+        alcohol_g: meal.alcohol_g || 0,
+        custom_nutrients:
+          (meal.custom_nutrients as Record<string, number>) || {},
+      },
+      meal_type: meal.meal_type,
+    });
+  });
+
+  const totals = combinedItems.reduce(
+    (acc, item) => {
+      const typedAcc = acc as Record<string, number | object | undefined>;
+      Object.keys(acc).forEach((key) => {
+        if (key === 'custom_nutrients') return; // Handle separately
+
+        const k = key as keyof MealTotals;
+        const val = item.nutrition[k];
+
+        // Safely add numbers, ignoring other types
+        if (typeof val === 'number') {
+          (typedAcc[key] as number) += val;
+        }
+      });
+
+      // Aggregate custom nutrients
+      if (item.nutrition.custom_nutrients && acc.custom_nutrients) {
+        Object.entries(item.nutrition.custom_nutrients).forEach(
+          ([name, value]) => {
+            acc.custom_nutrients![name] =
+              (acc.custom_nutrients![name] || 0) + (value as number);
+          }
+        );
+      }
+
+      return acc;
+    },
+    {
+      calories: 0, // kcal
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      dietary_fiber: 0,
+      sugars: 0,
+      sodium: 0,
+      cholesterol: 0,
+      saturated_fat: 0,
+      monounsaturated_fat: 0,
+      polyunsaturated_fat: 0,
+      trans_fat: 0,
+      potassium: 0,
+      vitamin_a: 0,
+      vitamin_c: 0,
+      iron: 0,
+      calcium: 0,
+      caffeine_mg: 0,
+      alcohol_g: 0,
+      custom_nutrients: {} as Record<string, number>,
+    }
+  );
+
+  return totals;
+};
+
+export const getMealTotals = (
+  mealType: string,
+  foodEntries: FoodEntry[],
+  foodEntryMeals: FoodEntryMeal[]
+): MealTotals => {
+  if (
+    !foodEntries ||
+    !foodEntryMeals ||
+    (foodEntries.length === 0 && foodEntryMeals.length === 0)
+  ) {
+    return EMPTY_MEAL_TOTALS;
+  }
+  const entries = foodEntries.filter((entry) => entry.meal_type === mealType);
+  const meals = foodEntryMeals.filter((meal) => meal.meal_type === mealType);
+
+  const combinedItems: (FoodEntry | FoodEntryMeal)[] = [...entries, ...meals];
+
+  const totals = combinedItems.reduce(
+    (acc, item) => {
+      const itemNutrition = getEntryNutrition(item);
+      const accRecord = acc as Record<string, unknown>;
+      Object.keys(acc).forEach((key) => {
+        if (key === 'custom_nutrients') return; // Handle separately
+
+        const k = key as keyof MealTotals;
+        const val = itemNutrition[k];
+
+        if (typeof val === 'number') {
+          (accRecord[key] as number) += val;
+        }
+      });
+
+      // Aggregate custom nutrients
+      if (itemNutrition.custom_nutrients && acc.custom_nutrients) {
+        Object.entries(itemNutrition.custom_nutrients).forEach(
+          ([name, value]) => {
+            acc.custom_nutrients![name] =
+              (acc.custom_nutrients![name] || 0) + (value as number);
+          }
+        );
+      }
+
+      return acc;
+    },
+    {
+      calories: 0, // kcal
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      dietary_fiber: 0,
+      sugars: 0,
+      sodium: 0,
+      cholesterol: 0,
+      saturated_fat: 0,
+      monounsaturated_fat: 0,
+      polyunsaturated_fat: 0,
+      trans_fat: 0,
+      potassium: 0,
+      vitamin_a: 0,
+      vitamin_c: 0,
+      iron: 0,
+      calcium: 0,
+      caffeine_mg: 0,
+      // Summed like any other nutrient so a meal can state the water it holds.
+      // The hydration ring still owns the DAY total -- this is the per-meal
+      // contribution, and calculateDayTotals deliberately does not read it.
+      water_ml: 0,
+      alcohol_g: 0,
+      custom_nutrients: {} as Record<string, number>,
+    }
+  );
+  return totals;
+};
+
+export const getEntryNutrition = (
+  item: FoodEntry | FoodEntryMeal
+): MealTotals => {
+  let nutrition: MealTotals;
+  if ('foods' in item) {
+    // It's a FoodEntryMeal, use its aggregated properties (assumed to be in kcal)
+    // Note: The backend already scales component food entries by the meal quantity when creating,
+    // and aggregates those scaled values. Do NOT multiply by quantity again here.
+    nutrition = {
+      calories: item.calories || 0, // kcal - already aggregated with quantity
+      protein: item.protein || 0,
+      carbs: item.carbs || 0,
+      fat: item.fat || 0,
+      dietary_fiber: item.dietary_fiber || 0,
+      sugars: item.sugars || 0,
+      sodium: item.sodium || 0,
+      cholesterol: item.cholesterol || 0,
+      saturated_fat: item.saturated_fat || 0,
+      monounsaturated_fat: item.monounsaturated_fat || 0,
+      polyunsaturated_fat: item.polyunsaturated_fat || 0,
+      trans_fat: item.trans_fat || 0,
+      potassium: item.potassium || 0,
+      vitamin_a: item.vitamin_a || 0,
+      vitamin_c: item.vitamin_c || 0,
+      iron: item.iron || 0,
+      calcium: item.calcium || 0,
+      caffeine_mg: item.caffeine_mg || 0,
+      water_ml: item.water_ml || 0,
+      alcohol_g: item.alcohol_g || 0,
+      custom_nutrients: (item.custom_nutrients as Record<string, number>) || {},
+    };
+  } else {
+    // It's a FoodEntry
+    const calculated = calculateFoodEntryNutrition(item);
+    nutrition = {
+      ...calculated,
+      custom_nutrients: calculated.custom_nutrients || {},
+    };
+  }
+  return nutrition;
+};
+
+export const getMealData = (
+  mealType: string,
+  foodEntries: FoodEntry[],
+  foodEntryMeals: FoodEntryMeal[],
+  goals: ExpandedGoals
+): {
+  name: string;
+  type: string;
+  entries: (FoodEntry | FoodEntryMeal)[];
+  targetCalories: number;
+} => {
+  if (!foodEntries || !foodEntryMeals) {
+    return { name: '', type: '', targetCalories: 0, entries: [] };
+  }
+
+  const entries =
+    foodEntries.length !== 0
+      ? foodEntries.filter((entry) => entry.meal_type === mealType)
+      : [];
+  const meals =
+    foodEntryMeals.length !== 0
+      ? foodEntryMeals.filter((meal) => meal.meal_type === mealType)
+      : [];
+
+  const combinedEntries: (FoodEntry | FoodEntryMeal)[] = [...entries, ...meals];
+
+  const percentage = getMealPercentage(mealType, goals);
+
+  const i18nKey = `common.${mealType.toLowerCase()}`;
+  const displayName = i18n.exists(i18nKey) ? i18n.t(i18nKey) : mealType;
+
+  return {
+    name: displayName,
+    type: mealType,
+    entries: combinedEntries,
+    targetCalories: goals ? (goals.calories * percentage) / 100 : 0,
+  };
+};
+
+export interface CalculatorFormData {
+  sex: 'male' | 'female' | '';
+  primaryGoal: 'lose_weight' | 'maintain_weight' | 'gain_weight' | '';
+  currentWeight: number | '';
+  height: number | '';
+  birthDate: string;
+  activityLevel: 'not_much' | 'light' | 'moderate' | 'heavy' | '';
+}
+
+export interface BasePlan {
+  bmr: number;
+  tdee: number;
+  finalDailyCalories: number;
+  macros: {
+    carbs: number;
+    protein: number;
+    fat: number;
+    fiber: number;
+  };
+}
+
+// ... (existing code)
+
+// ... (existing code)
+
+export const calculateBasePlan = (
+  formData: CalculatorFormData,
+  localSelectedDiet: string,
+  customPercentages: { carbs: number; protein: number; fat: number },
+  safetyFloor: {
+    calorieSafetyFloorMode: CalorieSafetyFloorMode;
+    calorieSafetyFloorValue: number;
+  } = {
+    calorieSafetyFloorMode: 'standard',
+    calorieSafetyFloorValue: DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
+  }
+): BasePlan | null => {
+  // formData values are already in Metric (kg/cm) because they come from UnitInput or normalized state
+  const weightKg = Number(formData.currentWeight) || 0;
+  const heightCm = Number(formData.height) || 0;
+
+  // Year subtraction is a year off until the birthday passes; calculateAge
+  // accounts for the month and day.
+  const age = formData.birthDate ? calculateAge(formData.birthDate) : 30;
+
+  if (
+    isNaN(weightKg) ||
+    isNaN(heightCm) ||
+    isNaN(age) ||
+    !formData.activityLevel ||
+    weightKg <= 0 ||
+    heightCm <= 0
+  ) {
+    return null;
+  }
+
+  const gender = formData.sex === 'male' ? 'male' : 'female';
+  const bmr = calculateBmr('Mifflin-St Jeor', weightKg, heightCm, age, gender);
+
+  // Route through the same engine the rest of the app uses, so the plan produced
+  // here matches what Calculation Settings will show afterwards. Presenting it as
+  // adaptive-with-no-history makes the baseline BMR x activity multiplier and
+  // applies the safety floors, which the previous ad-hoc math skipped entirely.
+  const targetResult = computeCalorieTarget({
+    goalMode: goalModeFromPrimaryGoal(formData.primaryGoal),
+    calculationMethod: 'adaptive',
+    customPercentage: 0,
+    bmr,
+    activityLevelMultiplier:
+      ACTIVITY_MULTIPLIERS[formData.activityLevel] ?? 1.2,
+    adaptiveTdee: null,
+    adaptiveTdeeFallback: true,
+    adaptiveTdeeDaysOfData: 0,
+    weightKg,
+    heightCm,
+    age,
+    gender,
+    currentGoalCalories: 0,
+    calculateBmrFn: calculateBmr,
+    calorieSafetyFloorMode: safetyFloor.calorieSafetyFloorMode,
+    calorieSafetyFloorValue: safetyFloor.calorieSafetyFloorValue,
+  });
+
+  const finalDailyCalories = Math.round(targetResult.finalTarget / 10) * 10;
+
+  const dietTemplate =
+    localSelectedDiet === 'custom'
+      ? {
+          carbsPercentage: customPercentages.carbs,
+          proteinPercentage: customPercentages.protein,
+          fatPercentage: customPercentages.fat,
+        }
+      : getDietTemplate(localSelectedDiet);
+
+  const fiberGrams = Math.round((finalDailyCalories / 1000) * 14);
+  const adjustedCalories = Math.max(0, finalDailyCalories - fiberGrams * 2);
+
+  const macros = {
+    carbs: Math.round(
+      (adjustedCalories * ((dietTemplate?.carbsPercentage ?? 0) / 100)) / 4
+    ),
+    protein: Math.round(
+      (adjustedCalories * ((dietTemplate?.proteinPercentage ?? 0) / 100)) / 4
+    ),
+    fat: Math.round(
+      (adjustedCalories * ((dietTemplate?.fatPercentage ?? 0) / 100)) / 9
+    ),
+    fiber: fiberGrams,
+  };
+
+  return {
+    bmr,
+    tdee: targetResult.baselineTdee,
+    finalDailyCalories,
+    macros,
+  };
+};

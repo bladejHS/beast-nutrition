@@ -1,0 +1,1071 @@
+import { betterAuth } from 'better-auth';
+import { APIError } from 'better-auth/api';
+import pg from 'pg';
+import { log } from './config/logging.js';
+import { handleConnectionLoss } from './db/poolManager.js';
+import { retryPoolConnects } from './db/connectRetry.js';
+import { applicationName } from './db/applicationName.js';
+import bcrypt from 'bcryptjs';
+import { syncUserGroups } from './utils/oidcGroupSync.js';
+import userRepository from './models/userRepository.js';
+import { resolveTwoFactorDisableUserUpdate } from './utils/twoFactorState.js';
+import {
+  sendPasswordResetEmail,
+  sendMagicLinkEmail,
+  sendEmailMfaCode,
+} from './services/emailService.js';
+import { createDefaultNutrientPreferencesForUser } from './services/nutrientDisplayPreferenceService.js';
+import { isPrivateNetworkAddress } from './utils/corsHelper.js';
+import { apiKey } from '@better-auth/api-key';
+import { v4 } from 'uuid';
+import {
+  emailOTP,
+  magicLink,
+  admin,
+  twoFactor,
+  jwt,
+} from 'better-auth/plugins';
+import { sso } from '@better-auth/sso';
+import { expo } from '@better-auth/expo';
+import { expoSsoCookieRelay } from './utils/expoSsoCookieRelay.js';
+import { passkey } from '@better-auth/passkey';
+import { isDemoMode } from './middleware/demoGuardMiddleware.js';
+import { isEmailLoginDisabled } from './utils/emailLogin.js';
+import { mcp } from '@better-auth/mcp';
+import {
+  createMcpOAuthAuthorizationRedirectValidator,
+  getMcpOAuthAvailability,
+  getMcpResourceUrl,
+  MCP_OAUTH_SCOPE,
+} from './utils/mcpOAuth.js';
+import { jwtSchema, mcpOAuthSchema } from './utils/mcpOAuthSchema.js';
+import { getMcpOAuthAllowedRedirectUris } from './models/globalSettingsRepository.js';
+
+const { Pool } = pg;
+/**
+ * Gathers and cleans origins from environment variables.
+ * @returns {string[]} An array of cleaned origin strings.
+ */
+function getBaseTrustedOrigins() {
+  const primary = process.env.SPARKY_FITNESS_FRONTEND_URL;
+  const rawExtras = process.env.SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS;
+  const origins = [primary];
+  if (rawExtras) {
+    const extras = rawExtras.split(',').map((o) => o.trim());
+    origins.push(...extras);
+  }
+  return (
+    [...new Set(origins)]
+      .filter(Boolean)
+      // @ts-expect-error
+      .map((url) => url.replace(/\/$/, ''))
+  );
+}
+/**
+ * Extracts Origin and Referer headers consistently across different Better Auth request objects.
+ * @param {Request|Object} request - The incoming request object.
+ * @returns {{origin: string|null, referer: string|null}}
+ */
+// @ts-expect-error
+function extractRequestHeaders(request) {
+  // @ts-expect-error
+  const getHeader = (name) =>
+    typeof request?.headers?.get === 'function'
+      ? request.headers.get(name)
+      : request?.headers?.[name];
+  return {
+    origin: getHeader('origin') || null,
+    referer: getHeader('referer') || null,
+  };
+}
+// Create a dedicated pool for Better Auth
+/*
+console.log("DEBUG: Initializing Better Auth Pool with:", {
+    user: process.env.SPARKY_FITNESS_DB_USER,
+    host: process.env.SPARKY_FITNESS_DB_HOST,
+    database: process.env.SPARKY_FITNESS_DB_NAME,
+    port: process.env.SPARKY_FITNESS_DB_PORT || 5432,
+    password: process.env.SPARKY_FITNESS_DB_PASSWORD ? "****" : "MISSING"
+});
+*/
+const authPool = new Pool({
+  user: process.env.SPARKY_FITNESS_DB_USER,
+  host: process.env.SPARKY_FITNESS_DB_HOST,
+  database: process.env.SPARKY_FITNESS_DB_NAME,
+  password: process.env.SPARKY_FITNESS_DB_PASSWORD,
+  // @ts-expect-error
+  port: process.env.SPARKY_FITNESS_DB_PORT || 5432,
+  application_name: applicationName('auth'),
+  // Without it a connect to an unreachable host waits for the operating
+  // system's TCP timeout, which the connect retry below cannot bound.
+  connectionTimeoutMillis: 5000,
+  // pg returns bigint columns as strings, but Better Auth does arithmetic on
+  // them as numbers (rate_limit.last_request, epoch milliseconds); a string
+  // there turns the 429 retry-after into concatenated digits.
+  types: {
+    getTypeParser: (oid: number, format?: 'text' | 'binary') =>
+      oid === pg.types.builtins.INT8
+        ? Number
+        : pg.types.getTypeParser(oid, format),
+  },
+});
+// Better Auth holds this pool instance for the process lifetime, so it cannot be
+// swapped or ended the way poolManager's pools are during a restore. Without a
+// listener, an idle client dying (e.g. pg_terminate_backend while the restore
+// flow wipes the database) becomes an unhandled 'error' event and kills the
+// process mid-restore. Log and let pg discard the client; it reconnects lazily.
+authPool.on('error', (err) => {
+  log('error', 'Unexpected error on idle Better Auth client', err);
+});
+handleConnectionLoss(authPool, 'Better Auth');
+// Better Auth acquires its own connections, so the retry has to live on the pool.
+retryPoolConnects(authPool);
+// Persistent array reference for trusted providers
+// Mutation of this array will be visible to Better Auth since it holds the reference
+// @ts-expect-error
+const dynamicTrustedProviders = [];
+/**
+ * Origins of the configured SSO identity providers.
+ *
+ * Better Auth 1.7 validates the OIDC discovery URL -- and every endpoint inside
+ * the discovery document -- against `trustedOrigins` before fetching any of
+ * them (an SSRF guard). An IdP lives on its own domain, so without this the
+ * whole list is rejected with `discovery_untrusted_origin` and SSO sign-in
+ * fails with a 400.
+ *
+ * Used when Better Auth resolves options without an HTTP request, including
+ * during initialization. HTTP requests load their own current origin snapshot.
+ */
+const dynamicTrustedSsoOrigins: string[] = [];
+/**
+ * Origin of a provider URL, or null when it is missing or unparseable.
+ * A bad row must not take down origin resolution for every other provider.
+ */
+function originOf(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+/** Load provider origins used to validate OIDC discovery and endpoint requests. */
+async function loadTrustedSsoOrigins(): Promise<string[]> {
+  const repoPath = './models/oidcProviderRepository.js';
+  const { default: oidcProviderRepository } = await import(repoPath);
+  // Collect each provider's own origin so 1.7's discovery SSRF guard allows
+  // fetching its well-known document and the endpoints that document names.
+  const rows = await oidcProviderRepository.getOidcProviders();
+  const ssoOrigins = new Set<string>();
+  for (const row of rows ?? []) {
+    // getOidcProviders() renames the columns on the way out: the issuer is
+    // `issuer_url` and the endpoints are camelCase. Reading the raw column
+    // names here would silently collect nothing but the discovery origin,
+    // which only happens to work while every endpoint shares one host.
+    for (const candidate of [
+      row?.issuer_url,
+      row?.discoveryEndpoint,
+      row?.authorizationEndpoint,
+      row?.tokenEndpoint,
+      row?.userInfoEndpoint,
+      row?.jwksEndpoint,
+    ]) {
+      const origin = originOf(candidate);
+      if (origin) ssoOrigins.add(origin);
+    }
+  }
+  return [...ssoOrigins];
+}
+
+const requestSsoOrigins = new WeakMap<Request, Promise<string[]>>();
+
+/** Share one origin snapshot across repeated checks of the same request. */
+async function getTrustedSsoOrigins(request?: Request): Promise<string[]> {
+  if (!request) return dynamicTrustedSsoOrigins;
+  let origins = requestSsoOrigins.get(request);
+  if (!origins) {
+    origins = loadTrustedSsoOrigins();
+    requestSsoOrigins.set(request, origins);
+  }
+  return origins;
+}
+
+// Function to sync trusted providers from database
+async function syncTrustedProviders() {
+  try {
+    const repoPath = './models/oidcProviderRepository.js';
+    const { default: oidcProviderRepository } = await import(repoPath);
+    const providers = await oidcProviderRepository.getActiveOidcProviderIds();
+    // Update the array without changing the reference
+    dynamicTrustedProviders.length = 0;
+    dynamicTrustedProviders.push(...providers);
+    console.log(
+      '[AUTH] Synced trusted SSO providers for auto-linking:',
+      // @ts-expect-error
+      dynamicTrustedProviders
+    );
+    const ssoOrigins = await loadTrustedSsoOrigins();
+    dynamicTrustedSsoOrigins.length = 0;
+    dynamicTrustedSsoOrigins.push(...ssoOrigins);
+    log(
+      'info',
+      '[AUTH] Synced trusted SSO provider origins:',
+      dynamicTrustedSsoOrigins
+    );
+    // @ts-expect-error
+    return dynamicTrustedProviders;
+  } catch (error) {
+    console.error('[AUTH] Error syncing trusted providers:', error);
+    // @ts-expect-error
+    return dynamicTrustedProviders;
+  }
+}
+// Initial sync on startup - deferred to SparkyFitnessServer.js after migrations
+// syncTrustedProviders().catch(err => console.error('[AUTH] Startup sync failed:', err));
+/**
+ * Window and attempt cap for the credential-checking auth endpoints.
+ *
+ * Two properties of Better Auth's limiter drive these numbers:
+ *  - the counter increments on *every* response, successes included, so this
+ *    caps total sign-in traffic per IP, not just failures; and
+ *  - the window only resets after a full `window` of silence (each counted
+ *    request refreshes `lastRequest`), so a long window lets a client that
+ *    keeps retrying hold itself blocked.
+ *
+ * Both argue for a short window. 60s also keeps sustained failures under the
+ * threshold an upstream IDS watches for (see the `customRules` comment below),
+ * while self-healing after a minute of quiet. Raise these if your instance
+ * sits behind a shared or carrier-NAT address with many users.
+ */
+const SIGN_IN_WINDOW =
+  Number.parseInt(
+    process.env.SPARKY_FITNESS_SIGN_IN_RATELIMIT_WINDOW ?? '',
+    10
+  ) || 60;
+const SIGN_IN_MAX =
+  Number.parseInt(process.env.SPARKY_FITNESS_SIGN_IN_RATELIMIT_MAX ?? '', 10) ||
+  4;
+
+const apiKeyPlugin = apiKey({
+  enableSessionForAPIKeys: true, // Required for getSession to work with API Keys
+  rateLimit: {
+    enabled: true,
+    timeWindow:
+      Number.parseInt(
+        // @ts-expect-error
+        process.env.SPARKY_FITNESS_API_KEY_RATELIMIT_WINDOW_MS,
+        10
+      ) || 60_000, // 1 minute
+    maxRequests:
+      Number.parseInt(
+        // @ts-expect-error
+        process.env.SPARKY_FITNESS_API_KEY_RATELIMIT_MAX_REQUESTS,
+        10
+      ) || 100, // 100 req/min (Better Auth defaults to 10/day)
+  },
+  schema: {
+    apikey: {
+      modelName: 'api_key',
+      fields: {
+        // @ts-expect-error
+        id: 'id',
+        name: 'name',
+        key: 'key',
+        referenceId: 'reference_id',
+        configId: 'config_id',
+        token: 'key', // Better Auth sometimes looks for 'token'
+        metadata: 'metadata',
+        createdAt: 'created_at',
+        updatedAt: 'updated_at',
+        expiresAt: 'expires_at',
+        start: 'start',
+        prefix: 'prefix',
+        refillInterval: 'refill_interval',
+        refillAmount: 'refill_amount',
+        lastRefillAt: 'last_refill_at',
+        enabled: 'enabled',
+        rateLimitEnabled: 'rate_limit_enabled',
+        rateLimitTimeWindow: 'rate_limit_time_window',
+        rateLimitMax: 'rate_limit_max',
+        requestCount: 'request_count',
+        remaining: 'remaining',
+        lastRequest: 'last_request',
+        permissions: 'permissions',
+      },
+    },
+  },
+});
+let passkeyRpID: string | undefined;
+try {
+  const frontendUrl = process.env.SPARKY_FITNESS_FRONTEND_URL;
+  const urlString =
+    process.env.BETTER_AUTH_URL ||
+    (frontendUrl
+      ? frontendUrl.startsWith('http')
+        ? frontendUrl
+        : `https://${frontendUrl}`
+      : undefined);
+  if (urlString) {
+    const url = new URL(urlString);
+    passkeyRpID = url.hostname;
+  }
+} catch {
+  // Fall back to default
+}
+
+// OAuth resource configuration is seeded asynchronously when Better Auth is
+// constructed. Unit tests deliberately run without PostgreSQL, so keep these
+// database-backed plugins out unless the database-backed schema/startup test
+// explicitly enables them. The MCP plugin also rejects non-HTTPS public URLs
+// (except loopback), so an API-key-only LAN install must skip it rather than
+// crashing at module load.
+const shouldInstallMcpOAuthPlugins =
+  process.env.NODE_ENV !== 'test' ||
+  process.env.SPARKY_FITNESS_TEST_MCP_OAUTH_PLUGINS === 'true';
+const mcpOAuthAvailability = getMcpOAuthAvailability();
+const installMcpOAuthPlugins =
+  shouldInstallMcpOAuthPlugins && mcpOAuthAvailability.available;
+if (shouldInstallMcpOAuthPlugins && !mcpOAuthAvailability.available) {
+  log(
+    'warn',
+    `[MCP OAuth] OAuth endpoints are unavailable: ${mcpOAuthAvailability.reason}`
+  );
+}
+const mcpOAuthPlugins = installMcpOAuthPlugins
+  ? (() => {
+      const mcpResourceUrl = getMcpResourceUrl();
+      return [
+        jwt({ schema: jwtSchema, disableSettingJwtHeader: true }),
+        mcp({
+          loginPage: '/login',
+          consentPage: '/oauth/consent',
+          resource: mcpResourceUrl,
+          resources: [
+            {
+              identifier: mcpResourceUrl,
+              name: 'SparkyFitness MCP',
+              allowedScopes: [MCP_OAUTH_SCOPE],
+            },
+          ],
+          scopes: [MCP_OAUTH_SCOPE, 'offline_access'],
+          clientRegistrationDefaultScopes: [MCP_OAUTH_SCOPE, 'offline_access'],
+          allowDynamicClientRegistration: true,
+          allowUnauthenticatedClientRegistration: true,
+          clientRegistrationDefaultApplicationType: 'infer',
+          validateRedirectUri: createMcpOAuthAuthorizationRedirectValidator(
+            getMcpOAuthAllowedRedirectUris
+          ),
+          clientPrivileges: ({ user }) => user?.role === 'admin',
+          resourcePrivileges: ({ user }) => user?.role === 'admin',
+          schema: mcpOAuthSchema,
+        }),
+      ];
+    })()
+  : [];
+
+const auth = betterAuth({
+  database: authPool,
+  // The JWT plugin's generic /token endpoint overlaps the OAuth provider's
+  // standards-compliant /oauth2/token endpoint and must not be exposed.
+  disabledPaths: ['/token'],
+  // @ts-expect-error
+  secret: Buffer.from(process.env.BETTER_AUTH_SECRET, 'base64'),
+  secrets: [
+    {
+      version: 1,
+      // @ts-expect-error
+      value: Buffer.from(process.env.BETTER_AUTH_SECRET, 'base64'),
+    },
+  ],
+  // Base URL configuration - MUST use public frontend URL for OIDC to work
+  baseURL:
+    process.env.BETTER_AUTH_URL ||
+    (process.env.SPARKY_FITNESS_FRONTEND_URL?.startsWith('http')
+      ? process.env.SPARKY_FITNESS_FRONTEND_URL
+      : `https://${process.env.SPARKY_FITNESS_FRONTEND_URL}`
+    )?.replace(/\/$/, '') + '/api/auth',
+  onAPIError: {
+    errorURL: new URL(
+      '/error',
+      (process.env.SPARKY_FITNESS_FRONTEND_URL?.startsWith('http')
+        ? process.env.SPARKY_FITNESS_FRONTEND_URL
+        : `https://${process.env.SPARKY_FITNESS_FRONTEND_URL}`
+      )?.replace(/\/$/, '') + '/'
+    ).toString(),
+  },
+  basePath: '/api/auth',
+  // Rate limiting for auth endpoints
+  rateLimit: {
+    enabled: true,
+    // Counted in the database rather than in memory so that every server
+    // instance enforces one shared limit per client address.
+    storage: 'database',
+    modelName: 'rate_limit',
+    fields: { lastRequest: 'last_request' },
+    window: 60,
+    max: 100,
+    // Credential checks answer 401, which intrusion-detection tooling reads as
+    // a brute-force signal. A common scenario (CrowdSec's generic 401 rule)
+    // burns an IP after six POST 401s arriving faster than one per 10s. Better
+    // Auth's own default for /sign-in is 3 per 10s -- a tight burst but 18/min
+    // sustained, so a user fumbling their password manager can emit six 401s
+    // in ~20s and get the whole IP banned at the edge for hours.
+    //
+    // Capping sustained rate (4/min) rather than burst is what fixes that: the
+    // 5th attempt in a minute gets a local 429, which such rules do not count,
+    // so failures can never accumulate to the ban threshold. This is stricter
+    // than the default for sustained guessing and no looser for bursts.
+    //
+    // Deliberately short: successes count toward the same budget, so this is a
+    // ceiling on all sign-in traffic from one address. Instances behind a
+    // shared or carrier-NAT IP with many users should raise SIGN_IN_MAX.
+    customRules: {
+      '/sign-in/email': { window: SIGN_IN_WINDOW, max: SIGN_IN_MAX },
+      '/two-factor/*': { window: SIGN_IN_WINDOW, max: SIGN_IN_MAX },
+      '/email-otp/verify-email': { window: SIGN_IN_WINDOW, max: SIGN_IN_MAX },
+    },
+  },
+  // Email/Password authentication
+  emailAndPassword: {
+    // The demo sandbox signs its user in through auth.api.signInEmail(), an
+    // in-process call that this same flag switches off -- so honouring
+    // DISABLE_EMAIL_LOGIN here takes the demo's one-click button down with it
+    // (400 EMAIL_PASSWORD_DISABLED) while the operator only meant to hide the
+    // password form. Keep the credential backend loaded in demo mode and close
+    // the *public* route instead; SparkyFitnessServer.ts refuses
+    // /api/auth/sign-in/email and /sign-up/email with the identical response
+    // Better Auth would have sent, so nothing outside can tell the difference.
+    enabled: isDemoMode() || !isEmailLoginDisabled(),
+    requireEmailVerification: false,
+    minPasswordLength: 8,
+    sendResetPassword: async ({ user, url }) => {
+      await sendPasswordResetEmail(user.email, url);
+    },
+    password: {
+      // Use bcrypt for compatibility with existing hashes
+      hash: (password) => bcrypt.hash(password, 10),
+      verify: ({ password, hash }) => bcrypt.compare(password, hash),
+    },
+  },
+  // Session configuration
+  session: {
+    expiresIn: 60 * 60 * 24 * 30, // 30 days
+    updateAge: 60 * 60 * 24, // Update session every 24 hours
+    // freshAge keeps Better Auth's default 24h "fresh session" requirement.
+    // Passkey registration (generate-register-options) is gated on it via
+    // freshSessionMiddleware — planting a new login credential should require a
+    // recent login. The mobile app satisfies this by minting a short-lived,
+    // single-use registration ticket from a fresh session (re-authenticating
+    // via ReauthModal when the session is stale). See
+    // routes/auth/authCoreRoutes.ts (web-login/register-ticket).
+    cookieCache: {
+      enabled: false, // Disabled to prevent stale data after manual DB updates
+    },
+    fields: {
+      // @ts-expect-error
+      id: 'id',
+      userId: 'user_id',
+      expiresAt: 'expires_at',
+      ipAddress: 'ip_address',
+      userAgent: 'user_agent',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  // Advanced session options
+  advanced: {
+    cookiePrefix: 'sparky',
+    // DROP SECURE FLAG if private network access is enabled (typically for local IP access over HTTP)
+    // DROP SECURE FLAG if private network access is enabled OR if we trust an HTTP IP (Fixes browser cookie rejection on IPs)
+    useSecureCookies:
+      process.env.ALLOW_PRIVATE_NETWORK_CORS === 'true' ||
+      process.env.SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS?.includes('http://')
+        ? false
+        : process.env.SPARKY_FITNESS_FRONTEND_URL?.startsWith('https'),
+    // Honour `x-forwarded-host` / `x-forwarded-proto`. Since 1.7 Better Auth
+    // resolves the request origin from the `Host` header and ignores forwarded
+    // headers unless this is set, which breaks sign-in for every deployment
+    // sitting behind nginx (i.e. the default docker-compose setup).
+    // Supersedes the old `trustProxy: true`, which was never a real option.
+    trustedProxyHeaders: true,
+    // Client IP detection for Better Auth rate limiting and audit logging.
+    // Better Auth resolves client IP from `ipAddressHeaders`. We prioritize
+    // `x-client-ip` (injected by Express middleware from getClientIp(req),
+    // which honours SPARKY_FITNESS_TRUSTED_PROXY_HOPS and SPARKY_FITNESS_REAL_IP_HEADER).
+    // If SPARKY_FITNESS_TRUSTED_PROXIES is specified, Better Auth also trusts
+    // those CIDR ranges when inspecting multi-hop X-Forwarded-For chains directly.
+    ipAddress: {
+      ipAddressHeaders: [
+        'x-client-ip',
+        ...(process.env.SPARKY_FITNESS_REAL_IP_HEADER?.trim() &&
+        process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase() !==
+          'x-forwarded-for' &&
+        process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase() !==
+          'x-client-ip'
+          ? [process.env.SPARKY_FITNESS_REAL_IP_HEADER.trim().toLowerCase()]
+          : []),
+        'x-forwarded-for',
+      ],
+      ...(process.env.SPARKY_FITNESS_TRUSTED_PROXIES?.trim()
+        ? {
+            trustedProxies: process.env.SPARKY_FITNESS_TRUSTED_PROXIES.split(
+              ','
+            )
+              .map((p) => p.trim())
+              .filter(Boolean),
+          }
+        : {}),
+    },
+    crossSubDomainCookies: {
+      enabled: false,
+    },
+    database: {
+      generateId: () => v4(),
+    },
+  },
+  user: {
+    fields: {
+      // @ts-expect-error
+      id: 'id',
+      emailVerified: 'email_verified',
+      twoFactorEnabled: 'two_factor_enabled',
+      banned: 'banned',
+      banReason: 'ban_reason',
+      banExpires: 'ban_expires',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+    // Email changes must go through the step-up-protected
+    // /identity/update-email route, which this built-in endpoint would bypass.
+    changeEmail: {
+      enabled: false,
+    },
+    additionalFields: {
+      mfaTotpEnabled: {
+        type: 'boolean',
+        fieldName: 'mfa_totp_enabled',
+        required: false,
+        defaultValue: false,
+        returned: true,
+      },
+      mfaEmailEnabled: {
+        type: 'boolean',
+        fieldName: 'mfa_email_enabled',
+        required: false,
+        defaultValue: false,
+        returned: true,
+      },
+      lastLoginAt: {
+        type: 'date',
+        fieldName: 'last_login_at',
+        required: false,
+        returned: true,
+      },
+    },
+  },
+  account: {
+    accountLinking: {
+      enabled: true,
+      // Better Auth 1.7 refuses to link an SSO identity to an existing user
+      // unless that user's email is already verified locally (it guards against
+      // an attacker pre-registering an unverified account at a victim's address
+      // and capturing their first SSO sign-in).
+      //
+      // SparkyFitness has no email-verification flow to satisfy that gate:
+      // `requireEmailVerification` is false, no verification email is ever sent,
+      // and there is no verify route -- so nothing sets email_verified except
+      // an incidental magic-link or email-OTP sign-in, which itself needs SMTP
+      // that many self-hosted instances never configure. Leaving the gate on
+      // therefore breaks SSO permanently for every existing account rather than
+      // prompting anyone to verify anything.
+      //
+      // The residual risk needs signup to be open on this instance AND the
+      // attacker to register the victim's address before the victim's first SSO
+      // login; SPARKY_FITNESS_DISABLE_SIGNUP closes that off entirely.
+      //
+      // NOTE: deprecated upstream -- the gate becomes unconditional in the next
+      // minor, so real email verification (or auto-verifying on a trusted IdP
+      // assertion) has to land before that upgrade.
+      requireLocalEmailVerified: false,
+      // Use a getter to ensure Better Auth always checks the current state of our dynamic list
+      get trustedProviders() {
+        log(
+          'debug',
+          '[AUTH] Checking trustedProviders for linkable SSO. Current list:',
+          // @ts-expect-error
+          dynamicTrustedProviders
+        );
+        // @ts-expect-error
+        return dynamicTrustedProviders;
+      },
+    },
+    fields: {
+      // @ts-expect-error
+      id: 'id',
+      userId: 'user_id',
+      accountId: 'account_id',
+      providerId: 'provider_id',
+      accessToken: 'access_token',
+      refreshToken: 'refresh_token',
+      idToken: 'id_token',
+      accessTokenExpiresAt: 'access_token_expires_at',
+      refreshTokenExpiresAt: 'refresh_token_expires_at',
+      scope: 'scope',
+      password: 'password',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  verification: {
+    fields: {
+      // @ts-expect-error
+      id: 'id',
+      expiresAt: 'expires_at',
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+    },
+  },
+  // Trust proxy (for Docker/Nginx deployments)
+  // NOTE: Better Auth calls this with the raw Request object directly (not a context wrapper)
+  trustedOrigins: async (request) => {
+    const cleanOrigins = [
+      ...getBaseTrustedOrigins(),
+      'sparkyfitnessmobile://',
+      // IdP origins -- required since 1.7 validates OIDC discovery URLs against
+      // this list before fetching them.
+      ...(await getTrustedSsoOrigins(request)),
+    ];
+    const { origin: originHeader, referer: refererHeader } =
+      extractRequestHeaders(request);
+    // Identify if this is a non-primary origin (IP, extra domain, etc.) or null
+    const primaryUrl = process.env.SPARKY_FITNESS_FRONTEND_URL;
+    const isExtraOrigin =
+      (originHeader && !originHeader.includes(primaryUrl)) ||
+      (refererHeader && !refererHeader.includes(primaryUrl)) ||
+      originHeader === 'null';
+    if (isExtraOrigin) {
+      log(
+        'debug',
+        `[AUTH] Verifying Origin: ${originHeader}, Referer: ${refererHeader}`
+      );
+    }
+    // 1. Primary Check: If Origin is missing/null (HTTPS -> HTTP call), trust based on Referer
+    if (!originHeader || originHeader === 'null') {
+      if (refererHeader) {
+        try {
+          const refOrigin = new URL(refererHeader).origin;
+          if (cleanOrigins.includes(refOrigin)) {
+            if (isExtraOrigin) {
+              log(
+                'debug',
+                `[AUTH] Allowing request via Trusted Referer: ${refOrigin}`
+              );
+            }
+            return [...cleanOrigins, originHeader, refOrigin].filter(Boolean);
+          }
+        } catch (e) {
+          throw new Error('Invalid referrer', { cause: e });
+        }
+      }
+    }
+    // 2. Private Network Check (if enabled)
+    const isPrivateEnabled = process.env.ALLOW_PRIVATE_NETWORK_CORS === 'true';
+    if (isPrivateEnabled) {
+      const target =
+        originHeader && originHeader !== 'null' ? originHeader : refererHeader;
+      if (target) {
+        try {
+          const url = new URL(target);
+          if (isPrivateNetworkAddress(url.hostname)) {
+            if (isExtraOrigin) {
+              log(
+                'debug',
+                `[AUTH] Allowing Private Network Origin: ${url.origin}`
+              );
+            }
+            return [...cleanOrigins, originHeader, url.origin].filter(Boolean);
+          }
+        } catch (e) {
+          throw new Error('Invalid url', { cause: e });
+        }
+      }
+    }
+    if (isExtraOrigin && originHeader && !cleanOrigins.includes(originHeader)) {
+      log('warn', `[AUTH] Rejecting Untrusted Origin: ${originHeader}`);
+    }
+    return cleanOrigins;
+  },
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (user, ctx) => {
+          log(
+            'debug',
+            // @ts-expect-error
+            `[AUTH] user.create.before hook triggered. Path: ${ctx.path}`
+          );
+          // 1. MASTER TOGGLE: Global signup blockade
+          if (process.env.SPARKY_FITNESS_DISABLE_SIGNUP === 'true') {
+            log(
+              'info',
+              '[AUTH] Blocking signup: SPARKY_FITNESS_DISABLE_SIGNUP is true'
+            );
+            throw new APIError('BAD_REQUEST', {
+              message: 'Signups are currently disabled by the administrator.',
+            });
+          }
+          // 2. PER-PROVIDER TOGGLE: SSO auto_register check
+          // SSO callback paths are /sso/callback/[providerId]
+          // @ts-expect-error
+          if (ctx.path.includes('/sso/callback/')) {
+            // Better Auth might use :providerId in ctx.path, so we check ctx.params or the request URL
+            // @ts-expect-error
+            let providerId = ctx.params?.providerId;
+            // Fallback: Extract from the actual request URL if template is used in ctx.path
+            if (!providerId || providerId === ':providerId') {
+              // @ts-expect-error
+              const url = new URL(ctx.request.url, 'http://localhost');
+              const pathParts = url.pathname.split('/');
+              providerId = pathParts[pathParts.length - 1];
+            }
+            log(
+              'info',
+              // @ts-expect-error
+              `[AUTH] Verifying auto-register for SSO provider: ${providerId} (Original Path: ${ctx.path})`
+            );
+            try {
+              const repoPath = './models/oidcProviderRepository.js';
+              const { default: oidcProviderRepository } = await import(
+                repoPath
+              );
+
+              const provider =
+                await oidcProviderRepository.getOidcProviderById(providerId);
+              if (provider) {
+                log(
+                  'debug',
+                  `[AUTH] Provider found: ${provider.provider_id}. auto_register: ${provider.auto_register} (Type: ${typeof provider.auto_register})`
+                );
+              } else {
+                log(
+                  'debug',
+                  `[AUTH] No provider found in DB for ID: ${providerId}`
+                );
+              }
+              if (provider && provider.auto_register === false) {
+                log(
+                  'info',
+                  `[AUTH] Blocking SSO registration: auto_register is disabled for ${providerId}`
+                );
+                throw new APIError('BAD_REQUEST', {
+                  message:
+                    'New account registration is disabled for this login provider.',
+                });
+              }
+            } catch (error) {
+              // Re-throw APIErrors, log others
+              if (error instanceof APIError) throw error;
+              log('error', '[AUTH] Error during auto_register check:', error);
+            }
+          }
+          return { data: user };
+        },
+        after: async (user) => {
+          log(
+            'info',
+            `[AUTH] Hook: User created, initializing Sparky data for ${user.id}`
+          );
+          try {
+            // We use the user.name or email if name is missing for the profile
+            await userRepository.ensureUserInitialization(
+              user.id,
+              user.name || user.email.split('@')[0],
+              user.image
+            );
+            // Also initialize default nutrient preferences
+            await createDefaultNutrientPreferencesForUser(user.id);
+            log('info', `[AUTH] Hook: Initialization complete for ${user.id}`);
+          } catch (error) {
+            log(
+              'error',
+              `[AUTH] Hook Error: Failed to initialize user ${user.id}:`,
+              error
+            );
+            // We don't throw here to avoid blocking the signup, but we log the failure
+          }
+        },
+      },
+      update: {
+        before: async (user, ctx) => {
+          const data = await resolveTwoFactorDisableUserUpdate(
+            user,
+            ctx,
+            userRepository.findUserById
+          );
+          if (!data) {
+            return;
+          }
+          log(
+            'info',
+            '[AUTH] Preserving email MFA while Better Auth disables TOTP.'
+          );
+          return { data };
+        },
+      },
+    },
+    account: {
+      create: {
+        before: async (account, ctx) => {
+          log('debug', '[AUTH] account.create.before hook triggered');
+          log(
+            'debug',
+            '[AUTH] Account data:',
+            JSON.stringify({
+              providerId: account.providerId,
+              accountId: account.accountId,
+              userId: account.userId,
+              // @ts-expect-error
+              path: ctx.path,
+            })
+          );
+          return { data: account };
+        },
+        after: async (account) => {
+          log(
+            'debug',
+            '[AUTH] account.create.after hook - Account link created successfully'
+          );
+          log(
+            'debug',
+            '[AUTH] Created account:',
+            JSON.stringify({
+              id: account.id,
+              providerId: account.providerId,
+              userId: account.userId,
+            })
+          );
+        },
+      },
+    },
+    session: {
+      create: {
+        after: async (session) => {
+          log(
+            'info',
+            `[AUTH] Hook: Session created for user ${session.userId}. Updating last login and checking group sync.`
+          );
+          try {
+            await userRepository.updateUserLastLogin(session.userId);
+          } catch (loginError) {
+            log(
+              'error',
+              `[AUTH] Hook Error: Failed to update last login for user ${session.userId}:`,
+              loginError
+            );
+          }
+          try {
+            // Get all accounts for this user to find the OIDC provider used
+            const client = await authPool.connect();
+            const repoPath = './models/oidcProviderRepository.js';
+            const { default: oidcProviderRepository } = await import(repoPath);
+
+            try {
+              const activeOidcIds =
+                await oidcProviderRepository.getActiveOidcProviderIds();
+              let query =
+                'SELECT provider_id FROM "account" WHERE user_id = $1 AND (provider_id LIKE \'oidc-%\'';
+              const queryParams = [session.userId];
+              if (activeOidcIds.length > 0) {
+                query += ' OR provider_id = ANY($2::text[])';
+                queryParams.push(activeOidcIds);
+              }
+              query += ')';
+              const { rows: accounts } = await client.query(query, queryParams);
+              for (const acc of accounts) {
+                const providerId = acc.provider_id;
+                const provider =
+                  await oidcProviderRepository.getOidcProviderById(providerId);
+                if (provider && provider.admin_group) {
+                  log(
+                    'info',
+                    `[AUTH] Syncing groups for user ${session.userId} using provider ${providerId} (Admin Group: ${provider.admin_group})`
+                  );
+                  await syncUserGroups(
+                    { pool: authPool, userRepository, oidcProviderRepository },
+                    session.userId,
+                    provider.admin_group,
+                    provider.provider_id
+                  );
+                }
+              }
+            } finally {
+              client.release();
+            }
+          } catch (error) {
+            log(
+              'error',
+              `[AUTH] Hook Error: Group sync failed for session ${session.id}:`,
+              error
+            );
+          }
+        },
+      },
+    },
+  },
+  plugins: [
+    // OAuth 2.1 authorization for the top-level /mcp protected resource.
+    // API-key and session authentication remain available on /mcp; these
+    // plugins own discovery, authorization, DCR, token issuance, and JWT keys.
+    ...mcpOAuthPlugins,
+    // Expo mobile app support: maps the app's expo-origin header to origin and
+    // serves /expo-authorization-proxy so the system browser carries the OAuth
+    // state cookie. The relay plugin forwards the session cookie to the app on
+    // /sso/callback redirects (the official plugin only covers /callback paths).
+    expo(),
+    expoSsoCookieRelay(),
+    emailOTP({
+      // @ts-expect-error
+      async sendVerificationOTP({ user, otp }) {
+        await sendEmailMfaCode(user.email, otp);
+      },
+    }),
+    magicLink({
+      expiresIn: 900, // 15 minutes (matches email template)
+      sendMagicLink: async ({ email, url }) => {
+        await sendMagicLinkEmail(email, url);
+      },
+    }),
+    // The admin plugin contributes its own user/session columns, and those are
+    // separate from the root `user.fields` map above -- without this block it
+    // looks for literal `banReason` / `banExpires` / `impersonatedBy` columns.
+    admin({
+      schema: {
+        user: {
+          fields: {
+            role: 'role',
+            banned: 'banned',
+            banReason: 'ban_reason',
+            banExpires: 'ban_expires',
+          },
+        },
+        session: {
+          fields: {
+            impersonatedBy: 'impersonated_by',
+          },
+        },
+      },
+    }),
+    twoFactor({
+      issuer:
+        process.env.NODE_ENV === 'production'
+          ? 'SparkyFitness'
+          : 'SparkyFitnessDev',
+      schema: {
+        user: {
+          fields: {
+            twoFactorEnabled: 'two_factor_enabled',
+          },
+        },
+        twoFactor: {
+          modelName: 'two_factor',
+          fields: {
+            id: 'id',
+            userId: 'user_id',
+            secret: 'secret',
+            backupCodes: 'backup_codes',
+            createdAt: 'created_at',
+            updatedAt: 'updated_at',
+            // Added in Better Auth 1.7 to back the TOTP lockout / re-enrolment
+            // guard. Every verify reads `lockedUntil` and bumps the counter, so
+            // these are required, not optional extras.
+            verified: 'verified',
+            failedVerificationCount: 'failed_verification_count',
+            lockedUntil: 'locked_until',
+          },
+        },
+      },
+      otpOptions: {
+        async sendOTP({ user, otp }) {
+          await sendEmailMfaCode(user.email, otp);
+        },
+      },
+    }),
+    sso({
+      modelName: 'sso_provider', // Map to my snake_case table
+      trustEmailVerified: true, // Trust that OIDC provider emails are verified
+      disableImplicitSignUp: false, // Allow implicit sign-up for OIDC users
+      fields: {
+        id: 'id',
+        providerId: 'provider_id',
+        issuer: 'issuer',
+        oidcConfig: 'oidc_config', // Added this mapping
+        samlConfig: 'saml_config', // Added this mapping
+        // Better Auth 1.7 keys SSO providers to an owning user (and optionally
+        // an organization); without these it looks for literal camelCase columns.
+        userId: 'user_id',
+        organizationId: 'organization_id',
+        domain: 'domain',
+        additionalConfig: 'additional_config',
+        createdAt: 'created_at',
+        updatedAt: 'updated_at',
+      },
+    }),
+    passkey({
+      rpID: passkeyRpID,
+      rpName: 'SparkyFitness',
+      schema: {
+        passkey: {
+          modelName: 'passkey',
+          fields: {
+            // @ts-expect-error
+            id: 'id',
+            name: 'name',
+            publicKey: 'public_key',
+            userId: 'user_id',
+            credentialID: 'credential_id',
+            counter: 'counter',
+            deviceType: 'device_type',
+            backedUp: 'backed_up',
+            transports: 'transports',
+            createdAt: 'created_at',
+            updatedAt: 'updated_at',
+            aaguid: 'aaguid',
+          },
+        },
+      },
+    }),
+    apiKeyPlugin,
+  ],
+});
+/**
+ * Proactive session cleanup
+ * Deletes expired sessions from the database to maintain performance.
+ * Better Auth doesn't do this automatically on every request for performance reasons.
+ */
+async function cleanupSessions() {
+  log('info', '[AUTH] Running proactive session cleanup...');
+  const client = await authPool.connect();
+  try {
+    const result = await client.query(
+      'DELETE FROM "session" WHERE expires_at < NOW()'
+    );
+    log(
+      'info',
+      `[AUTH] Cleanup complete. Removed ${result.rowCount} expired sessions.`
+    );
+    return result.rowCount;
+  } catch (error) {
+    log('error', '[AUTH] Session cleanup failed:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+export { auth };
+export { syncTrustedProviders };
+export { cleanupSessions };
+export default {
+  auth,
+  syncTrustedProviders,
+  cleanupSessions,
+};

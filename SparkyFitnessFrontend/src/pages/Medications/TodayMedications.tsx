@@ -1,0 +1,1301 @@
+import { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Clock,
+  Syringe,
+  Pill,
+  Tablets,
+  CheckCircle2,
+  X,
+  RotateCcw,
+  Calendar,
+  Pencil,
+  Trash2,
+  Activity,
+  Trophy,
+  Flame,
+  AlertTriangle,
+  type LucideIcon,
+} from 'lucide-react';
+import {
+  adherenceBar,
+  adherenceTier,
+  computeAdherence,
+  computeChecklistProgress,
+  entryMatchesDue,
+  getDueDosesForDate,
+  dayToUtcRange,
+  localDateTimeToUtc,
+  utcToLocalDateTimeInput,
+  visibleDoseCards,
+  formatDose,
+  INJECTION_SITES,
+  type MedSubtype,
+  type SharedScheduleRule,
+} from '@workspace/shared';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { DateTimeInput } from '@/components/ui/TimeInput';
+import { Label } from '@/components/ui/label';
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import { formatTimeOfDayString } from '@/utils/timeFormatters';
+import { useActiveUser } from '@/contexts/ActiveUserContext';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import {
+  useCreateMedicationEntryMutation,
+  useUpdateMedicationEntryMutation,
+  useDeleteMedicationEntryMutation,
+  useLogGlpInjectionEntryMutation,
+  useUpdateInjectionEntryMutation,
+  useDeleteInjectionEntryMutation,
+} from '@/hooks/useMedications';
+import type {
+  Medication,
+  MedicationDetail,
+  MedicationEntry,
+  MedicationSchedule,
+} from '@/types/medications';
+import { MedTypeIcon } from './AddMedicationDialog';
+import GlpDailyCheckIn from './GlpDailyCheckIn';
+import Glp1QuickLogDialog from './Glp1QuickLogDialog';
+import MedicationLogCalendar from './MedicationLogCalendar';
+
+export interface DueDose {
+  medication: MedicationDetail;
+  schedule: SharedScheduleRule & { id: string };
+}
+
+// GLP-1 injectable doses are logged as injection entries (single source of truth with
+// the Cabinet), same rule as Glp1Coach. Oral GLP-1 meds stay on the adherence path.
+const isGlp1Injectable = (med: Medication) =>
+  med.is_glp1 && med.type_id === 'injection';
+
+export interface TodayMedicationsProps {
+  selectedDate: string;
+  today: string;
+  meds: MedicationDetail[];
+  entries: MedicationEntry[];
+  recentEntries: MedicationEntry[];
+  loadingMeds: boolean;
+  loadingEntries: boolean;
+  onSelectDate: (date: string) => void;
+  subtype?: MedSubtype;
+}
+
+export default function TodayMedications({
+  selectedDate,
+  today,
+  meds,
+  entries,
+  recentEntries,
+  loadingMeds,
+  loadingEntries,
+  onSelectDate,
+  subtype = 'all',
+}: TodayMedicationsProps) {
+  const { t } = useTranslation();
+  const { timezone, formatTime, timeFormat } = usePreferences();
+  const { hasPermission, activeUserName } = useActiveUser();
+
+  // The GLP-1 check-in stores its data as check-in custom measurements, so it
+  // requires check-in access. A delegate with only medications access would
+  // otherwise trigger a 403 loading custom categories.
+  const canViewGlpCheckIn = hasPermission('checkin');
+  const hasGlpMed = meds.some((m) => m.is_glp1);
+
+  // Notes state for logging
+  const [logNotes, setLogNotes] = useState<Record<string, string>>({});
+
+  // Edit-time dialog state (correct the "when" of an already-logged dose)
+  const [editingEntry, setEditingEntry] = useState<MedicationEntry | null>(
+    null
+  );
+  const [editTime, setEditTime] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editSite, setEditSite] = useState('none');
+
+  // GLP-1 injectable dose awaiting the compact site prompt before logging
+  const [pendingInjection, setPendingInjection] = useState<{
+    medication: MedicationDetail;
+    takenAt: string;
+    noteKey: string;
+    notes: string | null;
+  } | null>(null);
+
+  // Mutations
+  const createEntryMutation = useCreateMedicationEntryMutation();
+  const updateEntryMutation = useUpdateMedicationEntryMutation();
+  const deleteEntryMutation = useDeleteMedicationEntryMutation();
+  const logInjectionMutation = useLogGlpInjectionEntryMutation();
+  const updateInjectionMutation = useUpdateInjectionEntryMutation();
+  const deleteInjectionMutation = useDeleteInjectionEntryMutation();
+
+  const isPending =
+    createEntryMutation.isPending ||
+    updateEntryMutation.isPending ||
+    deleteEntryMutation.isPending ||
+    logInjectionMutation.isPending ||
+    updateInjectionMutation.isPending ||
+    deleteInjectionMutation.isPending;
+
+  // Schedules evaluation
+  const dueDoses = useMemo(() => {
+    if (loadingMeds || meds.length === 0) return [];
+    return getDueDosesForDate(meds, selectedDate, timezone);
+  }, [meds, selectedDate, timezone, loadingMeds]);
+
+  const prnMeds = useMemo(() => {
+    return meds.filter((m) => {
+      if (!m.is_active) return false;
+      // Exclude if it's currently due today to prevent showing it twice
+      if (dueDoses.some((d) => d.medication.id === m.id)) return false;
+      if (!m.schedules || m.schedules.length === 0) return true;
+      return m.schedules.some(
+        (s: MedicationSchedule) => s.schedule_type_id === 'prn'
+      );
+    });
+  }, [meds, dueDoses]);
+
+  // Split the ALREADY subtype-filtered lists for the two Log cards. Partitioning at
+  // render time rather than re-deriving keeps the adherence overview, the progress
+  // ring and completedDosesCount reading the full filtered set, exactly as before.
+  const medicationDues = useMemo(
+    () => dueDoses.filter((d) => !d.medication.is_supplement),
+    [dueDoses]
+  );
+  const supplementDues = useMemo(
+    () => dueDoses.filter((d) => Boolean(d.medication.is_supplement)),
+    [dueDoses]
+  );
+  const medicationPrns = useMemo(
+    () => prnMeds.filter((m) => !m.is_supplement),
+    [prnMeds]
+  );
+  const supplementPrns = useMemo(
+    () => prnMeds.filter((m) => Boolean(m.is_supplement)),
+    [prnMeds]
+  );
+
+  // The medications card also carries the "nothing scheduled at all" empty state, so
+  // it stays in the All view even with no medications; the narrowed views show
+  // exactly one card, and All only grows the supplement card once there is one.
+  const { medications: showMedicationCard, supplements: showSupplementCard } =
+    visibleDoseCards(
+      subtype,
+      supplementDues.length > 0 || supplementPrns.length > 0
+    );
+
+  // Renders the Log card once per subtype so medications and supplements read as
+  // separate sections instead of one mixed list. Deliberately a render FUNCTION and
+  // not a child component: the body closes over ~a dozen handlers and per-row note
+  // state, and a component would take a new identity each render, remounting the
+  // note inputs and stealing focus mid-typing.
+  const renderDoseCard = ({
+    title,
+    description,
+    emptyDueText,
+    emptyPrnText,
+    loadingPrnText,
+    Icon,
+    accentBg,
+    accentFg,
+    dues,
+    prns,
+  }: {
+    title: string;
+    description: string;
+    emptyDueText: string;
+    emptyPrnText: string;
+    loadingPrnText: string;
+    Icon: LucideIcon;
+    accentBg: string;
+    accentFg: string;
+    dues: typeof dueDoses;
+    prns: typeof prnMeds;
+  }) => (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base font-semibold">
+          <span
+            className={`inline-flex h-6 w-6 items-center justify-center rounded-full ${accentBg}`}
+          >
+            <Icon className={`h-3.5 w-3.5 ${accentFg}`} />
+          </span>
+          {title}
+        </CardTitle>
+        <CardDescription>{description}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Due Today Group */}
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground uppercase tracking-wider">
+            <Clock className="h-3.5 w-3.5" />{' '}
+            {t('medications.today.dueToday', 'Due today')}
+          </h3>
+
+          {loadingMeds && (
+            <p className="text-sm text-muted-foreground">
+              {t('medications.today.loadingChecklist', 'Loading checklist…')}
+            </p>
+          )}
+          {!loadingMeds && dues.length === 0 && (
+            <div className="text-sm text-muted-foreground bg-muted/30 p-3 rounded-lg border border-dashed text-center">
+              {emptyDueText}
+            </div>
+          )}
+          {!loadingMeds &&
+            dues.map((due, idx) => {
+              const entry = entries.find((e) => entryMatchesDue(e, due));
+              const isLogged =
+                entry &&
+                (entry.status === 'taken' || entry.status === 'skipped');
+              const isSnoozed = entry && entry.status === 'snoozed';
+              const doseLabel = formatDose(due.medication, due.schedule);
+
+              return (
+                <div
+                  key={`${due.medication.id}-${due.schedule.id}-${idx}`}
+                  className={`flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 border rounded-lg transition-all ${
+                    isLogged
+                      ? 'bg-muted/30 border-muted text-muted-foreground'
+                      : isSnoozed
+                        ? 'border-amber-200 bg-amber-50/20'
+                        : 'bg-card border-border hover:shadow-sm'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 shrink-0">
+                      {isLogged && entry.status === 'taken' ? (
+                        <CheckCircle2 className="h-5 w-5 text-green-500" />
+                      ) : isLogged && entry.status === 'skipped' ? (
+                        <X className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <MedTypeIcon
+                          typeId={due.medication.type_id}
+                          isGlp1={due.medication.is_glp1}
+                          className="h-5 w-5"
+                        />
+                      )}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p
+                          className={`font-semibold text-sm ${isLogged ? 'line-through' : ''}`}
+                        >
+                          {due.medication.display_name || due.medication.name}
+                        </p>
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] px-1.5 py-0 border-blue-200 text-blue-700 bg-blue-50/50 dark:border-blue-900 dark:text-blue-300 dark:bg-blue-950/30"
+                        >
+                          {t('medications.today.scheduled', 'Scheduled')}
+                        </Badge>
+                      </div>
+                      <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground mt-0.5">
+                        {doseLabel != null && (
+                          <>
+                            <span>{doseLabel}</span>
+                            <span>•</span>
+                          </>
+                        )}
+                        <span className="flex items-center gap-1 font-medium text-primary">
+                          <Clock className="h-3 w-3" />
+                          {due.schedule.time_of_day
+                            ? formatTimeOfDayString(
+                                due.schedule.time_of_day,
+                                timeFormat
+                              )
+                            : t('medications.schedule.anyTime', 'Any time')}
+                        </span>
+                      </div>
+                      {!isLogged && (
+                        <Input
+                          placeholder={t(
+                            'medications.today.addNote',
+                            'Add note...'
+                          )}
+                          value={logNotes[due.schedule.id] || ''}
+                          onChange={(e) =>
+                            setLogNotes((prev) => ({
+                              ...prev,
+                              [due.schedule.id]: e.target.value,
+                            }))
+                          }
+                          className="h-7 text-xs mt-2 max-w-[200px]"
+                        />
+                      )}
+                      {isLogged && entry?.notes && (
+                        <p className="text-xs text-muted-foreground italic mt-1.5">
+                          {t('medications.today.note2', 'Note: {{notes}}', {
+                            notes: entry.notes,
+                          })}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 mt-3 sm:mt-0 shrink-0">
+                    {isLogged && entry ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-xs hover:bg-destructive/10 hover:text-destructive flex items-center gap-1"
+                        onClick={() => handleUndoEntry(entry)}
+                        disabled={isPending}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />{' '}
+                        {t('medications.today.undo', 'Undo')}
+                      </Button>
+                    ) : (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs text-amber-600 border-amber-200 hover:bg-amber-50"
+                          onClick={() => handleLogScheduled(due, 'snoozed')}
+                          disabled={isPending || isSnoozed}
+                        >
+                          {isSnoozed
+                            ? t('medications.today.snoozed', 'Snoozed')
+                            : t('medications.today.snooze', 'Snooze')}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs text-muted-foreground hover:bg-muted"
+                          onClick={() => handleLogScheduled(due, 'skipped')}
+                          disabled={isPending}
+                        >
+                          {t('medications.today.skip', 'Skip')}
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => handleLogScheduled(due, 'taken')}
+                          disabled={isPending}
+                        >
+                          {t('medications.today.take', 'Take')}
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+
+        {/* As Needed Group */}
+        <div className="space-y-3 pt-4 border-t border-border">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-muted-foreground uppercase tracking-wider">
+              <Pill className="h-3.5 w-3.5" />{' '}
+              {t('medications.today.asNeeded', 'As needed')}
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t(
+                'medications.today.asNeededHint',
+                'Tap to log a dose now (no fixed schedule or not due today).'
+              )}
+            </p>
+          </div>
+
+          {loadingMeds && (
+            <p className="text-sm text-muted-foreground">{loadingPrnText}</p>
+          )}
+          {!loadingMeds && prns.length === 0 && (
+            <p className="text-sm text-muted-foreground py-2 text-center bg-muted/10 rounded-lg border border-dashed">
+              {emptyPrnText}
+            </p>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            {prns.map((med) => {
+              const prnSched = med.schedules?.find(
+                (s) => s.schedule_type_id === 'prn'
+              );
+              const schedId = prnSched?.id || med.id;
+              return (
+                <div
+                  key={med.id}
+                  className="flex flex-col p-3 border rounded-lg bg-card border-border hover:shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <MedTypeIcon
+                        typeId={med.type_id}
+                        isGlp1={med.is_glp1}
+                        className="h-4.5 w-4.5 shrink-0"
+                      />
+                      <div className="text-left truncate">
+                        <p className="font-semibold text-xs truncate">
+                          {med.display_name || med.name}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {formatDose(med) ?? med.type_id}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge
+                      variant="secondary"
+                      className="text-[9px] px-1.5 py-0 bg-purple-100 text-purple-700 hover:bg-purple-100 dark:bg-purple-950 dark:text-purple-300 dark:hover:bg-purple-950 shrink-0"
+                    >
+                      {t('medications.todayMedications.prn', 'PRN')}
+                    </Badge>
+                  </div>
+                  <Input
+                    placeholder={t('medications.today.addNote', 'Add note...')}
+                    value={logNotes[schedId] || ''}
+                    onChange={(e) =>
+                      setLogNotes((prev) => ({
+                        ...prev,
+                        [schedId]: e.target.value,
+                      }))
+                    }
+                    className="h-7 text-xs mt-2"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs bg-purple-600 hover:bg-purple-700 text-white mt-2 w-full"
+                    onClick={() => handleLogPrn(med)}
+                    disabled={isPending}
+                  >
+                    {t('medications.today.logIntake', 'Log Intake')}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const { completed: completedDosesCount, pct: progressPercentage } = useMemo(
+    () => computeChecklistProgress(dueDoses, entries),
+    [dueDoses, entries]
+  );
+
+  // True 14-day adherence: evaluate each day's scheduled doses vs. what was taken.
+  const adherence14 = useMemo(
+    () =>
+      computeAdherence({
+        medications: meds,
+        entries: recentEntries,
+        endDate: selectedDate,
+        timezone,
+      }),
+    [meds, selectedDate, recentEntries, timezone]
+  );
+
+  // The next GLP-1 dose due today (if any), for the next-injection banner.
+  const nextGlpDue = useMemo(() => {
+    return (
+      dueDoses.find((d) => {
+        if (!d.medication.is_glp1) return false;
+        // Check if already logged on the selected date to hide the due banner once taken/skipped
+        const isLogged = entries.some(
+          (e) =>
+            entryMatchesDue(e, d) &&
+            (e.status === 'taken' || e.status === 'skipped')
+        );
+        return !isLogged;
+      }) ?? null
+    );
+  }, [dueDoses, entries]);
+
+  const handleLogScheduled = (
+    due: DueDose,
+    status: 'taken' | 'skipped' | 'snoozed'
+  ) => {
+    let scheduledFor = null;
+    if (due.schedule.time_of_day) {
+      try {
+        const { start } = dayToUtcRange(selectedDate, timezone);
+        const [h, m] = due.schedule.time_of_day.split(':');
+        scheduledFor = new Date(
+          start.getTime() +
+            parseInt(h || '0', 10) * 3600000 +
+            parseInt(m || '0', 10) * 60000
+        ).toISOString();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    const notesVal = logNotes[due.schedule.id]?.trim() || null;
+    const takenAt =
+      selectedDate === today
+        ? new Date().toISOString()
+        : `${selectedDate}T12:00:00.000Z`;
+    const clearNote = () =>
+      setLogNotes((prev) => {
+        const copy = { ...prev };
+        delete copy[due.schedule.id];
+        return copy;
+      });
+
+    // Taking a GLP-1 injectable logs a real injection (deducting the auto-picked pen)
+    // so the Cabinet and this tab stay in sync. A compact prompt captures the
+    // injection site first. Skip/snooze stay adherence entries.
+    if (status === 'taken' && isGlp1Injectable(due.medication)) {
+      setPendingInjection({
+        medication: due.medication,
+        takenAt,
+        noteKey: due.schedule.id,
+        notes: notesVal,
+      });
+      return;
+    }
+
+    createEntryMutation.mutate(
+      {
+        medication_id: due.medication.id,
+        schedule_id: due.schedule.id,
+        status,
+        taken_at: takenAt,
+        scheduled_for: scheduledFor,
+        entry_date: selectedDate,
+        notes: notesVal,
+      },
+      { onSuccess: clearNote }
+    );
+  };
+
+  const handleLogPrn = (med: MedicationDetail) => {
+    const prnSched = med.schedules?.find((s) => s.schedule_type_id === 'prn');
+    const schedId = prnSched?.id || med.id;
+    const notesVal = logNotes[schedId]?.trim() || null;
+    const takenAt =
+      selectedDate === today
+        ? new Date().toISOString()
+        : `${selectedDate}T12:00:00.000Z`;
+    const clearNote = () =>
+      setLogNotes((prev) => {
+        const copy = { ...prev };
+        delete copy[schedId];
+        return copy;
+      });
+
+    if (isGlp1Injectable(med)) {
+      setPendingInjection({
+        medication: med,
+        takenAt,
+        noteKey: schedId,
+        notes: notesVal,
+      });
+      return;
+    }
+
+    createEntryMutation.mutate(
+      {
+        medication_id: med.id,
+        schedule_id: prnSched?.id || null,
+        status: 'prn_taken',
+        taken_at: takenAt,
+        entry_date: selectedDate,
+        notes: notesVal,
+      },
+      { onSuccess: clearNote }
+    );
+  };
+
+  const handleConfirmQuickLog = (site: string | null) => {
+    if (!pendingInjection) return;
+    const { medication, takenAt, noteKey, notes } = pendingInjection;
+    logInjectionMutation.mutate(
+      {
+        medication_id: medication.id,
+        injected_at: takenAt,
+        entry_date: selectedDate,
+        deduct_pen: true,
+        site,
+        notes,
+      },
+      {
+        onSuccess: () => {
+          setLogNotes((prev) => {
+            const copy = { ...prev };
+            delete copy[noteKey];
+            return copy;
+          });
+          setPendingInjection(null);
+        },
+      }
+    );
+  };
+
+  const handleUndoEntry = (entry: MedicationEntry) => {
+    // Merged injection rows carry injection ids; deleting through the injection
+    // endpoint also credits the dose back to the pen it was deducted from.
+    if (entry.entry_type === 'injection') {
+      deleteInjectionMutation.mutate(entry.id);
+    } else {
+      deleteEntryMutation.mutate(entry.id);
+    }
+  };
+
+  const openEditEntry = (entry: MedicationEntry) => {
+    setEditingEntry(entry);
+    setEditTime(utcToLocalDateTimeInput(entry.taken_at, timezone));
+    setEditNotes(entry.notes ?? '');
+    setEditSite(entry.site ?? 'none');
+  };
+
+  const handleSaveEditEntry = () => {
+    if (!editingEntry) return;
+    const notes = editNotes.trim() || null;
+    const takenAtUtc = editTime
+      ? localDateTimeToUtc(editTime, timezone).toISOString()
+      : undefined;
+    // Keep the calendar day aligned with the edited local time.
+    const entryDate = editTime ? editTime.substring(0, 10) : undefined;
+    const onSuccess = () => setEditingEntry(null);
+
+    if (editingEntry.entry_type === 'injection') {
+      updateInjectionMutation.mutate(
+        {
+          id: editingEntry.id,
+          body: {
+            ...(takenAtUtc ? { injected_at: takenAtUtc } : {}),
+            ...(entryDate ? { entry_date: entryDate } : {}),
+            site: editSite === 'none' ? null : editSite,
+            notes,
+          },
+        },
+        { onSuccess }
+      );
+    } else {
+      updateEntryMutation.mutate(
+        {
+          id: editingEntry.id,
+          body: {
+            ...(takenAtUtc ? { taken_at: takenAtUtc } : {}),
+            ...(entryDate ? { entry_date: entryDate } : {}),
+            notes,
+          },
+        },
+        { onSuccess }
+      );
+    }
+  };
+
+  const formatEntryTime = (timestamp: string) => {
+    try {
+      return formatTime(timestamp);
+    } catch (e) {
+      return '--:--';
+    }
+  };
+
+  const ringColor = useMemo(() => {
+    const tier = adherenceTier(adherence14.pct);
+    return tier === 'good'
+      ? '#22c55e'
+      : tier === 'fair'
+        ? '#f59e0b'
+        : '#ef4444';
+  }, [adherence14.pct]);
+
+  const tiles = useMemo(() => {
+    return [
+      {
+        label:
+          selectedDate === today
+            ? t('medications.today.dosesToday', 'Doses today')
+            : t('medications.today.doses', 'Doses'),
+        value: `${completedDosesCount}/${dueDoses.length}`,
+        Icon: Pill,
+        grad: 'from-emerald-50 to-white dark:from-emerald-950/40 dark:to-transparent',
+        chip: 'bg-emerald-100 dark:bg-emerald-900/50',
+        num: 'text-emerald-600 dark:text-emerald-400',
+      },
+      {
+        label: t('medications.today.adherence14', '14-day adherence'),
+        value: `${adherence14.pct}%`,
+        Icon: CheckCircle2,
+        grad: 'from-blue-50 to-white dark:from-blue-950/40 dark:to-transparent',
+        chip: 'bg-blue-100 dark:bg-blue-900/50',
+        num: 'text-blue-600 dark:text-blue-400',
+      },
+      {
+        label: t('medications.today.perfectDays', 'Perfect days (14d)'),
+        value: String(adherence14.perfectDays),
+        Icon: Trophy,
+        grad: 'from-amber-50 to-white dark:from-amber-950/40 dark:to-transparent',
+        chip: 'bg-amber-100 dark:bg-amber-900/50',
+        num: 'text-amber-600 dark:text-amber-400',
+      },
+    ];
+  }, [
+    selectedDate,
+    today,
+    completedDosesCount,
+    dueDoses.length,
+    adherence14.pct,
+    adherence14.perfectDays,
+    t,
+  ]);
+
+  return (
+    <div className="space-y-6">
+      {/* Next GLP-1 injection banner */}
+      {nextGlpDue && (
+        <Card className="border-blue-500/30 bg-blue-50/40 dark:bg-blue-950/20">
+          <CardContent className="flex items-center justify-between gap-4 p-4">
+            <div className="flex items-center gap-3">
+              <Syringe className="h-5 w-5 text-blue-500" />
+              <div>
+                <p className="font-semibold">
+                  {selectedDate === today
+                    ? t('medications.today.injectionDueToday', {
+                        defaultValue: '{{name}} injection — due today',
+                        name:
+                          nextGlpDue.medication.display_name ||
+                          nextGlpDue.medication.name,
+                      })
+                    : t('medications.today.injectionScheduled', {
+                        defaultValue: '{{name}} injection — scheduled',
+                        name:
+                          nextGlpDue.medication.display_name ||
+                          nextGlpDue.medication.name,
+                      })}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {nextGlpDue.schedule.time_of_day
+                    ? t('medications.today.scheduledAt', {
+                        defaultValue: 'Scheduled {{time}}',
+                        time: formatTimeOfDayString(
+                          nextGlpDue.schedule.time_of_day,
+                          timeFormat
+                        ),
+                      })
+                    : selectedDate === today
+                      ? t('medications.today.anyTimeToday', 'Any time today')
+                      : t('medications.schedule.anyTime', 'Any time')}
+                </p>
+              </div>
+            </div>
+            {!entries.some(
+              (e) =>
+                entryMatchesDue(e, nextGlpDue) &&
+                (e.status === 'taken' || e.status === 'skipped')
+            ) && (
+              <Button
+                size="sm"
+                className="bg-blue-600 text-white hover:bg-blue-700"
+                onClick={() => handleLogScheduled(nextGlpDue, 'taken')}
+                disabled={isPending}
+              >
+                {t('medications.today.logShot', 'Log shot')}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Adherence overview + Today's Checklist (left) alongside the log calendar (right) */}
+      {/* One grid, two flowing columns. The log calendar is taller than the
+          adherence stack, so keeping these as two separate stacked grids left a
+          dead gap under the checklist until the calendar row ended. Column order
+          is unchanged: adherence then doses on the left, calendar then activity
+          on the right. */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_400px] lg:items-start">
+        <div className="space-y-6">
+          {/* Today stats + 14-day adherence ring */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/50">
+                  <Activity className="h-3.5 w-3.5 text-indigo-500" />
+                </span>
+                {t('medications.today.adherenceTitle', 'Adherence overview')}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-0">
+              <div className="flex flex-col items-center gap-5 sm:flex-row sm:justify-between">
+                <div className="grid w-full grid-cols-3 gap-3">
+                  {tiles.map((tile) => (
+                    <div
+                      key={tile.label}
+                      className={`rounded-xl border bg-gradient-to-br ${tile.grad} p-3`}
+                    >
+                      <div
+                        className={`mb-1.5 inline-flex h-8 w-8 items-center justify-center rounded-full ${tile.chip}`}
+                      >
+                        <tile.Icon className="h-4.5 w-4.5" />
+                      </div>
+                      <p
+                        className={`text-2xl font-bold leading-none tabular-nums ${tile.num}`}
+                      >
+                        {tile.value}
+                      </p>
+                      <p className="mt-1 text-[11px] font-medium text-muted-foreground">
+                        {tile.label}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <div className="relative h-24 w-24 shrink-0">
+                  <svg viewBox="0 0 36 36" className="h-24 w-24 -rotate-90">
+                    <circle
+                      cx="18"
+                      cy="18"
+                      r="15.9155"
+                      fill="none"
+                      className="stroke-muted"
+                      strokeWidth="3"
+                    />
+                    <circle
+                      cx="18"
+                      cy="18"
+                      r="15.9155"
+                      fill="none"
+                      stroke={ringColor}
+                      strokeWidth="3"
+                      strokeDasharray={`${adherence14.pct}, 100`}
+                      strokeLinecap="round"
+                      style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span
+                      className="text-lg font-bold tabular-nums"
+                      style={{ color: ringColor }}
+                    >
+                      {adherence14.pct}%
+                    </span>
+                    <span className="text-[9px] text-muted-foreground">
+                      {t('medications.today.ring14Day', '14-day')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 14-day adherence strip + streak */}
+              <div>
+                <div className="mb-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+                  <span>{t('medications.today.last14', 'Last 14 days')}</span>
+                  {adherence14.streak > 0 && (
+                    <span className="flex items-center gap-1 font-semibold text-orange-500">
+                      <Flame className="h-3.5 w-3.5 fill-orange-500/20" />{' '}
+                      {t('medications.today.streak', '{{count}}-day streak', {
+                        count: adherence14.streak,
+                      })}
+                    </span>
+                  )}
+                </div>
+                <div className="flex h-10 items-end gap-1">
+                  {adherence14.days.map((d, i) => {
+                    const noScheduled = d.due === 0;
+                    const hasPrn = d.prnTaken > 0;
+                    const { level, heightPct } = adherenceBar(d);
+                    const idle = level === 'idle';
+
+                    // d.pct already includes PRN contribution
+                    const color = {
+                      idle: 'bg-muted',
+                      full: 'bg-green-500',
+                      partial: 'bg-amber-500',
+                      low: 'bg-orange-500',
+                      missed: 'bg-red-500',
+                    }[level];
+
+                    const tooltip = noScheduled
+                      ? hasPrn
+                        ? `${d.date}: ${d.prnTaken} PRN dose${d.prnTaken > 1 ? 's' : ''}`
+                        : `${d.date}: no doses`
+                      : `${d.date}: ${d.taken}/${d.due} taken${d.prnTaken > 0 ? ` + ${d.prnTaken} PRN` : ''}`;
+
+                    return (
+                      <div
+                        key={i}
+                        title={tooltip}
+                        className={`flex-1 rounded-sm transition-all hover:opacity-80 ${color} ${idle ? 'opacity-40' : ''}`}
+                        style={{
+                          height: `${heightPct}%`,
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Progress Banner */}
+          <Card className="bg-gradient-to-r from-blue-500/10 to-teal-500/10 border border-blue-500/20 shadow-sm">
+            <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="text-lg font-bold flex items-center gap-2">
+                  <Calendar className="h-5 w-5 text-blue-500" />{' '}
+                  {selectedDate === today
+                    ? t('medications.today.checklistToday', "Today's Checklist")
+                    : t(
+                        'medications.today.checklistMed',
+                        'Medication Checklist'
+                      )}
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  {dueDoses.length === 0
+                    ? selectedDate === today
+                      ? t(
+                          'medications.today.noScheduledToday',
+                          'No scheduled doses for today.'
+                        )
+                      : t(
+                          'medications.today.noScheduledDay',
+                          'No scheduled doses for this day.'
+                        )
+                    : selectedDate === today
+                      ? t('medications.today.loggedToday', {
+                          completed: completedDosesCount,
+                          total: dueDoses.length,
+                          defaultValue: `${completedDosesCount} of ${dueDoses.length} doses logged today.`,
+                        })
+                      : t('medications.today.loggedDay', {
+                          completed: completedDosesCount,
+                          total: dueDoses.length,
+                          defaultValue: `${completedDosesCount} of ${dueDoses.length} doses logged for this day.`,
+                        })}
+                </CardDescription>
+              </div>
+              {dueDoses.length > 0 && (
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div className="w-full bg-muted rounded-full h-2.5 max-w-[200px] overflow-hidden">
+                    <div
+                      className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+                      style={{ width: `${progressPercentage}%` }}
+                    ></div>
+                  </div>
+                  <span className="text-sm font-semibold">
+                    {progressPercentage}%
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          {hasGlpMed &&
+            (canViewGlpCheckIn ? (
+              <GlpDailyCheckIn selectedDate={selectedDate} />
+            ) : (
+              <Card className="border-amber-300 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30">
+                <CardContent className="flex items-start gap-3 py-4">
+                  <span className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/50">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                  </span>
+                  <div className="space-y-0.5 text-sm">
+                    <p className="font-medium">
+                      {t(
+                        'medications.checkin.noAccessTitle',
+                        'GLP-1 daily check-in needs check-in access'
+                      )}
+                    </p>
+                    <p className="text-muted-foreground">
+                      {t('medications.checkin.noAccessBody', {
+                        defaultValue:
+                          'Ask {{name}} to share Check-in access to track hunger, food noise, fullness and energy here.',
+                        name: activeUserName || 'this profile',
+                      })}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          {/* Today's Medications */}
+          {showMedicationCard &&
+            renderDoseCard({
+              title: t(
+                'medications.today.medicationsTitle',
+                "Today's medications"
+              ),
+              description: t(
+                'medications.today.medicationsDescription',
+                'Track scheduled doses and log as-needed medications'
+              ),
+              emptyDueText: t(
+                'medications.today.noMedicationDoses',
+                'No scheduled doses today — log any medication as-needed below.'
+              ),
+              emptyPrnText: t(
+                'medications.today.noPrnMedications',
+                'No as-needed or non-scheduled medications configured.'
+              ),
+              loadingPrnText: t(
+                'medications.today.loadingMedications',
+                'Loading active medications…'
+              ),
+              Icon: Pill,
+              accentBg: 'bg-blue-100 dark:bg-blue-900/50',
+              accentFg: 'text-blue-500',
+              dues: medicationDues,
+              prns: medicationPrns,
+            })}
+          {showSupplementCard &&
+            renderDoseCard({
+              title: t(
+                'medications.today.supplementsTitle',
+                "Today's supplements"
+              ),
+              description: t(
+                'medications.today.supplementsDescription',
+                'Track scheduled doses and log as-needed supplements'
+              ),
+              emptyDueText: t(
+                'medications.today.noSupplementDoses',
+                'No scheduled doses today — log any supplement as-needed below.'
+              ),
+              emptyPrnText: t(
+                'medications.today.noPrnSupplements',
+                'No as-needed or non-scheduled supplements configured.'
+              ),
+              loadingPrnText: t(
+                'medications.today.loadingSupplements',
+                'Loading active supplements…'
+              ),
+              Icon: Tablets,
+              accentBg: 'bg-emerald-100 dark:bg-emerald-900/50',
+              accentFg: 'text-emerald-500',
+              dues: supplementDues,
+              prns: supplementPrns,
+            })}
+        </div>
+
+        <div className="space-y-6">
+          <MedicationLogCalendar
+            medications={meds}
+            selectedDate={selectedDate}
+            onSelectDate={onSelectDate}
+            subtype={subtype}
+          />
+          {/* Today Activity Log Column */}
+          <div>
+            <Card className="h-full">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/50">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                  </span>
+                  {t('medications.today.loggedActivity', 'Logged today')}
+                </CardTitle>
+                <CardDescription>
+                  {t(
+                    'medications.today.loggedActivityDescription',
+                    "Everything you've taken or skipped on this date."
+                  )}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {loadingEntries && (
+                  <p className="text-sm text-muted-foreground">
+                    {t('medications.today.loadingHistory', 'Loading history…')}
+                  </p>
+                )}
+                {!loadingEntries && entries.length === 0 && (
+                  <div className="text-center py-8 text-sm text-muted-foreground">
+                    {t(
+                      'medications.today.noIntake',
+                      'No entries logged yet today.'
+                    )}
+                  </div>
+                )}
+                {entries.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center justify-between p-2.5 rounded-lg border bg-muted/10 text-sm"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <MedTypeIcon
+                        typeId={
+                          meds.find((m) => m.id === entry.medication_id)
+                            ?.type_id
+                        }
+                        isGlp1={
+                          meds.find((m) => m.id === entry.medication_id)
+                            ?.is_glp1
+                        }
+                        className="h-4 w-4 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="font-medium text-foreground truncate">
+                          {entry.med_name_snapshot}
+                        </p>
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                          <span className="tabular-nums font-medium">
+                            {formatEntryTime(entry.taken_at)}
+                          </span>
+                          <span>•</span>
+                          <Badge
+                            variant="secondary"
+                            className={`text-[10px] px-1.5 py-0 border-none font-semibold ${
+                              entry.status === 'taken'
+                                ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300'
+                                : entry.status === 'prn_taken'
+                                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                                  : entry.status === 'snoozed'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                    : 'bg-gray-100 text-gray-800 dark:bg-gray-850 dark:text-gray-300'
+                            }`}
+                          >
+                            {entry.status === 'taken'
+                              ? t('medications.today.taken', 'Taken')
+                              : entry.status === 'prn_taken'
+                                ? t('medications.today.prnTaken', 'PRN Taken')
+                                : entry.status === 'snoozed'
+                                  ? t('medications.today.snoozed', 'Snoozed')
+                                  : t(
+                                      'medications.calendar.skipped',
+                                      'Skipped'
+                                    )}
+                          </Badge>
+                        </div>
+                        {entry.notes && (
+                          <p className="text-[11px] text-muted-foreground italic mt-1">
+                            {t('medications.today.note2', 'Note: {{notes}}', {
+                              notes: entry.notes,
+                            })}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground"
+                        onClick={() => openEditEntry(entry)}
+                        disabled={isPending}
+                        aria-label={t(
+                          'medications.today.editEntryTime',
+                          'Edit entry time'
+                        )}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        onClick={() => handleUndoEntry(entry)}
+                        disabled={isPending}
+                        aria-label={t(
+                          'medications.today.removeEntry',
+                          'Remove entry'
+                        )}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </div>
+
+      {/* Compact site prompt for GLP-1 injectables logged from this tab */}
+      {pendingInjection && (
+        <Glp1QuickLogDialog
+          med={pendingInjection.medication}
+          onConfirm={handleConfirmQuickLog}
+          onClose={() => setPendingInjection(null)}
+          isPending={logInjectionMutation.isPending}
+        />
+      )}
+
+      {/* Edit logged dose time/notes */}
+      <Dialog
+        open={!!editingEntry}
+        onOpenChange={(open) => !open && setEditingEntry(null)}
+      >
+        <DialogContent className="max-w-sm max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {t('medications.today.editLogged', 'Edit logged dose')}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {editingEntry?.med_name_snapshot && (
+              <p className="text-sm font-medium">
+                {editingEntry.med_name_snapshot}
+              </p>
+            )}
+            <div className="space-y-1">
+              <Label
+                id="medication-taken-at-label"
+                className="text-xs text-muted-foreground"
+              >
+                {t('medications.today.takenAt', 'Taken at')}
+              </Label>
+              <DateTimeInput
+                aria-labelledby="medication-taken-at-label"
+                value={editTime}
+                onChange={setEditTime}
+              />
+            </div>
+            {editingEntry?.entry_type === 'injection' && (
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">
+                  {t('medications.glp1.injectionSite', 'Injection site')}
+                </Label>
+                <Select value={editSite} onValueChange={setEditSite}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">—</SelectItem>
+                    {INJECTION_SITES.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {t('medications.sites.label.' + s.id, s.label)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">
+                {t('medications.glp1.notes', 'Notes')}
+              </Label>
+              <Input
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingEntry(null)}>
+              {t('common.cancel', 'Cancel')}
+            </Button>
+            <Button onClick={handleSaveEditEntry} disabled={isPending}>
+              {isPending
+                ? t('common.saving', 'Saving...')
+                : t('common.save', 'Save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

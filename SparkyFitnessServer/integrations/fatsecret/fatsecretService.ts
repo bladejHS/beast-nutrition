@@ -1,0 +1,702 @@
+import { log } from '../../config/logging.js';
+import { altBarcode } from '../../utils/foodUtils.js';
+import { nutrientNumber } from '../../utils/foodPortionResolver.js';
+
+interface FatSecretServing {
+  serving_id?: string;
+  serving_description?: string;
+  serving_url?: string;
+  metric_serving_amount?: string;
+  metric_serving_unit?: string;
+  number_of_units?: string;
+  measurement_description?: string;
+  is_default?: string;
+  calories?: string;
+  protein?: string;
+  carbohydrate?: string;
+  fat?: string;
+  saturated_fat?: string;
+  polyunsaturated_fat?: string;
+  monounsaturated_fat?: string;
+  trans_fat?: string;
+  cholesterol?: string;
+  sodium?: string;
+  potassium?: string;
+  fiber?: string;
+  sugar?: string;
+  vitamin_a?: string;
+  vitamin_c?: string;
+  calcium?: string;
+  iron?: string;
+  [key: string]: string | number | undefined;
+}
+
+/** One image entry from FatSecret's `food_images` block. */
+interface FatSecretFoodImage {
+  image_url?: string;
+}
+
+interface FatSecretFood {
+  food_name: string;
+  brand_name?: string | null;
+  barcode?: string;
+  food_id: string | number;
+  food_images?: {
+    food_image?: FatSecretFoodImage | FatSecretFoodImage[];
+  };
+  servings?: {
+    serving?: FatSecretServing | FatSecretServing[];
+  };
+}
+
+/**
+ * FatSecret returns `food_image` as either a single object or an array
+ * depending on how many images the food has. Normalize to the first URL.
+ */
+function firstFatSecretImageUrl(food: FatSecretFood): string | null {
+  const image = food.food_images?.food_image;
+  if (!image) {
+    return null;
+  }
+  const first = Array.isArray(image) ? image[0] : image;
+  return first?.image_url || null;
+}
+
+interface FatSecretFoodResponse {
+  food?: FatSecretFood;
+}
+
+interface FatSecretSearchItem {
+  food_name: string;
+  brand_name?: string | null;
+  food_id?: string | number;
+  food_description?: string;
+}
+
+interface FatSecretApiError {
+  code: number | string;
+  message?: string;
+}
+
+interface FatSecretApiResponse {
+  error?: FatSecretApiError;
+  [key: string]: unknown;
+}
+
+// Cache tokens by `${clientId}:${scope}` — see getFatSecretAccessToken.
+const tokensByScope = new Map<string, { token: string; expiry: number }>();
+
+// Serving fields that describe the serving itself rather than a nutrient value;
+// excluded when harvesting all nutrient fields for custom-nutrient matching.
+const FATSECRET_NON_NUTRIENT_SERVING_KEYS = new Set([
+  'serving_id',
+  'serving_description',
+  'serving_url',
+  'metric_serving_amount',
+  'metric_serving_unit',
+  'number_of_units',
+  'measurement_description',
+  'is_default',
+]);
+
+// Harvest every numeric nutrient field FatSecret reports on a serving (including
+// ones with no standard column, e.g. vitamin_d, added_sugars), keyed by a
+// readable label, so users can discover them and custom nutrients can match.
+function extractFatSecretProviderNutrients(
+  serving: FatSecretServing
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!serving || typeof serving !== 'object') return out;
+  for (const [key, value] of Object.entries(serving)) {
+    if (FATSECRET_NON_NUTRIENT_SERVING_KEYS.has(key)) continue;
+    const num = parseFloat(value as string);
+    if (!Number.isFinite(num)) continue;
+    const name = key.replace(/_/g, ' ').trim();
+    if (name) out[name] = num;
+  }
+  return out;
+}
+// In-memory cache for FatSecret food nutrient data
+const foodNutrientCache = new Map();
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+const FATSECRET_OAUTH_TOKEN_URL = 'https://oauth.fatsecret.com/connect/token';
+const FATSECRET_API_BASE_URL = 'https://platform.fatsecret.com/rest';
+const MAX_REASONABLE_METRIC_SERVING_SIZE = 1000;
+// Placeholder for serving unit aliases. In a real application, this would be more comprehensive.
+const SERVING_UNIT_ALIASES = {
+  g: 'g',
+  gram: 'g',
+  grams: 'g',
+  ml: 'ml',
+  milliliter: 'ml',
+  milliliters: 'ml',
+  oz: 'oz',
+  ounce: 'oz',
+  ounces: 'oz',
+  cup: 'cup',
+  cups: 'cup',
+  tbsp: 'tbsp',
+  tablespoon: 'tbsp',
+  tablespoons: 'tbsp',
+  tsp: 'tsp',
+  teaspoon: 'tsp',
+  teaspoons: 'tsp',
+  serving: 'serving',
+  servings: 'serving',
+  unit: 'unit',
+  units: 'unit',
+  'fl oz': 'fl oz',
+  'fluid ounce': 'fl oz',
+  'fluid ounces': 'fl oz',
+  piece: 'piece',
+  pieces: 'piece',
+  slice: 'slice',
+  slices: 'slice',
+  package: 'package',
+  packages: 'package',
+  container: 'container',
+  containers: 'container',
+  bottle: 'bottle',
+  bottles: 'bottle',
+  can: 'can',
+  cans: 'can',
+  box: 'box',
+  boxes: 'box',
+  bar: 'bar',
+  bars: 'bar',
+  bag: 'bag',
+  bags: 'bag',
+  each: 'each',
+  item: 'item',
+  items: 'item',
+  small: 'small',
+  medium: 'medium',
+  large: 'large',
+  'extra large': 'extra large',
+  'extra-large': 'extra large',
+  'x-large': 'extra large',
+  'x large': 'extra large',
+  'small (approx)': 'small',
+  'medium (approx)': 'medium',
+  'large (approx)': 'large',
+  'extra large (approx)': 'extra large',
+  'small (edible portion)': 'small',
+  'medium (edible portion)': 'medium',
+  'large (edible portion)': 'large',
+  'extra large (edible portion)': 'extra large',
+};
+function normalizeServingUnit(unit?: string): string {
+  if (!unit) return 'g';
+  // Strip anything in parentheses at the end: "serving (237g)" -> "serving"
+  const clean = unit
+    .replace(/\s*\([^)]*\)\s*$/i, '')
+    .toLowerCase()
+    .trim();
+  const cleanFirstWord = clean.split(/\s+/)[0];
+  const result =
+    SERVING_UNIT_ALIASES[clean as keyof typeof SERVING_UNIT_ALIASES] ||
+    SERVING_UNIT_ALIASES[cleanFirstWord as keyof typeof SERVING_UNIT_ALIASES] ||
+    clean;
+  return result;
+}
+
+function evaluateFraction(fractionStr?: string): number {
+  if (!fractionStr) return 0;
+  // Handle strings like "1 1/4 cup" by only taking the leading number/fraction part
+  const match = fractionStr.trim().match(/^([\d\s./]+)/);
+  if (!match) return 0;
+  const parts = match[1].trim().split(/\s+/);
+  let total = 0;
+  for (const part of parts) {
+    if (part.includes('/')) {
+      const [num, den] = part.split('/');
+      const n = parseFloat(num);
+      const d = parseFloat(den);
+      if (d !== 0) total += n / d;
+    } else {
+      const val = parseFloat(part);
+      if (!isNaN(val)) total += val;
+    }
+  }
+  return total || 0;
+}
+// FatSecret's REST endpoints return HTTP 200 even on failure, embedding the
+// error as { error: { code, message } } (e.g. code 21 "Invalid IP" when the
+// server IP isn't whitelisted). Surface it instead of letting it fall through
+// as empty "No results found".
+function assertNoFatSecretApiError(data?: FatSecretApiResponse | null): void {
+  const apiError = data?.error;
+  const hasCode = apiError?.code !== undefined && apiError?.code !== null;
+  const hasMessage =
+    apiError?.message !== undefined && apiError?.message !== null;
+  if (!apiError || (!hasCode && !hasMessage)) {
+    return;
+  }
+  const code = apiError.code;
+  const message = apiError.message || 'Unknown FatSecret API error';
+  throw Object.assign(
+    new Error(
+      `FatSecret API error${hasCode ? ` (code ${code})` : ''}: ${message}`
+    ),
+    // `status` is honored by the v2 route handlers; `statusCode` by the
+    // centralized errorHandler middleware.
+    { status: 502, statusCode: 502, fatSecretErrorCode: code }
+  );
+}
+// Function to get FatSecret OAuth 2.0 Access Token
+async function getFatSecretAccessToken(
+  clientId: string | undefined,
+  clientSecret: string | undefined,
+  requestedScope = 'basic',
+  signal?: AbortSignal
+): Promise<string> {
+  signal?.throwIfAborted();
+  if (!clientId || !clientSecret) {
+    throw new Error('FatSecret API credentials are not configured.');
+  }
+  // Keyed by credential as well as scope: two users with different FatSecret
+  // apps must never share a token, or the second silently authenticates as the
+  // first. Mirrors premierUnavailableUntil in services/foodIntegrationService.
+  const cacheKey = `${clientId}:${requestedScope}`;
+  const cached = tokensByScope.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.token;
+  }
+  try {
+    log(
+      'info',
+      `Attempting to get FatSecret Access Token for scope "${requestedScope}" from: ${FATSECRET_OAUTH_TOKEN_URL}`
+    );
+    const response = await fetch(FATSECRET_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      ...(signal && { signal }),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        scope: requestedScope,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }).toString(),
+    });
+    signal?.throwIfAborted();
+    if (!response.ok) {
+      const errorData = (await response.json()) as {
+        error?: string;
+        error_description?: string;
+      };
+      signal?.throwIfAborted();
+      log(
+        'error',
+        `FatSecret OAuth Token API error for scope "${requestedScope}":`,
+        errorData
+      );
+      // Fallback: If "basic barcode" fails with invalid_scope, try "basic"
+      if (
+        requestedScope === 'basic barcode' &&
+        errorData.error === 'invalid_scope'
+      ) {
+        log(
+          'warn',
+          'FatSecret "barcode" scope invalid, falling back to "basic"'
+        );
+        return getFatSecretAccessToken(clientId, clientSecret, 'basic', signal);
+      }
+      // Keep FatSecret's OAuth code (e.g. invalid_scope) in the message: premier
+      // entitlement detection matches on it to start the premier cooldown.
+      throw Object.assign(
+        new Error(
+          `FatSecret authentication failed: ${[errorData.error, errorData.error_description].filter(Boolean).join(' - ') || response.statusText}`
+        ),
+        { fatSecretOAuthError: errorData.error }
+      );
+    }
+    const data = (await response.json()) as {
+      access_token: string;
+      expires_in: number;
+    };
+    signal?.throwIfAborted();
+    const token = data.access_token;
+    const expiry = Date.now() + data.expires_in * 1000 - 60000; // Set expiry 1 minute early
+    tokensByScope.set(cacheKey, { token, expiry });
+    return token;
+  } catch (error) {
+    signal?.throwIfAborted();
+    // A rejection from FatSecret itself is not a network error; rethrow it as is.
+    if ((error as { fatSecretOAuthError?: unknown }).fatSecretOAuthError) {
+      throw error;
+    }
+    log(
+      'error',
+      `Network error during FatSecret OAuth token acquisition for scope "${requestedScope}":`,
+      error
+    );
+    throw new Error(
+      'Network error during FatSecret authentication. Please try again.',
+      { cause: error }
+    );
+  }
+}
+
+async function searchFatSecretByBarcode(
+  barcode: string,
+  clientId: string,
+  clientSecret: string,
+  surfaceErrors = false,
+  signal?: AbortSignal
+) {
+  try {
+    // Specifically request barcode scope for this call
+    const accessToken = await getFatSecretAccessToken(
+      clientId,
+      clientSecret,
+      'basic barcode',
+      signal
+    );
+    signal?.throwIfAborted();
+    const url = `${FATSECRET_API_BASE_URL}/food/barcode/find-by-id/v2?${new URLSearchParams(
+      {
+        barcode: barcode,
+        format: 'json',
+      }
+    ).toString()}`;
+    log('info', `FatSecret Barcode Lookup URL: ${url}`);
+    const response = await fetch(url, {
+      method: 'GET',
+      ...(signal && { signal }),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+    });
+    signal?.throwIfAborted();
+    if (!response.ok) {
+      if (surfaceErrors && response.status !== 404) {
+        throw Object.assign(
+          new Error(
+            `FatSecret barcode lookup failed (HTTP ${response.status}).`
+          ),
+          { status: 502 }
+        );
+      }
+      if (response.status === 404) {
+        const alt = altBarcode(barcode);
+
+        if (alt) {
+          const altUrl = `${FATSECRET_API_BASE_URL}/food/barcode/find-by-id/v2?${new URLSearchParams(
+            {
+              barcode: alt,
+              format: 'json',
+            }
+          ).toString()}`;
+          const altResponse = await fetch(altUrl, {
+            method: 'GET',
+            ...(signal && { signal }),
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+          });
+          signal?.throwIfAborted();
+          if (altResponse.ok) {
+            const data = await altResponse.json();
+            signal?.throwIfAborted();
+            if (surfaceErrors) {
+              if (data.error && String(data.error.code) === '211') return null;
+              assertNoFatSecretApiError(data);
+            }
+            return data;
+          }
+          if (surfaceErrors && altResponse.status !== 404) {
+            throw Object.assign(
+              new Error(
+                `FatSecret barcode lookup failed (HTTP ${altResponse.status}).`
+              ),
+              { status: 502 }
+            );
+          }
+        }
+        return null;
+      }
+      const errorText = await response.text();
+      signal?.throwIfAborted();
+      log('error', 'FatSecret Barcode API error:', errorText);
+      // If we get an error related to scope/permission, we know barcode API isn't available
+      if (response.status === 403 || response.status === 401) {
+        log(
+          'warn',
+          'FatSecret Barcode API access forbidden or unauthorized (likely non-Premier account)'
+        );
+        return null;
+      }
+      throw new Error(`FatSecret Barcode API error: ${errorText}`);
+    }
+    const data = await response.json();
+    signal?.throwIfAborted();
+    if (data.error && String(data.error.code) === '211') {
+      return null; // No food item detected
+    }
+    assertNoFatSecretApiError(data);
+    return data;
+  } catch (error) {
+    log('error', `Error searching FatSecret by barcode ${barcode}:`, error);
+    throw error;
+  }
+}
+function mapFatSecretFood(data: FatSecretFoodResponse) {
+  const food = data.food;
+  if (!food) return null;
+  // Servings can be an array or a single object in FatSecret API
+  const servingsList: FatSecretServing[] = Array.isArray(food.servings?.serving)
+    ? food.servings.serving
+    : food.servings?.serving
+      ? [food.servings.serving]
+      : [];
+  const variantsMap = new Map();
+  servingsList.forEach((serving: FatSecretServing) => {
+    // We will attempt to create TWO variants per FatSecret serving:
+    // 1. Household variant (e.g., "1 serving", "1/4 cup")
+    // 2. Metric variant (e.g., "237 g", "100 ml")
+    const baseNutrients = {
+      calories: nutrientNumber(serving.calories),
+      protein: nutrientNumber(serving.protein),
+      carbs: nutrientNumber(serving.carbohydrate),
+      fat: nutrientNumber(serving.fat),
+      saturated_fat: nutrientNumber(serving.saturated_fat),
+      polyunsaturated_fat: nutrientNumber(serving.polyunsaturated_fat),
+      monounsaturated_fat: nutrientNumber(serving.monounsaturated_fat),
+      trans_fat: nutrientNumber(serving.trans_fat),
+      cholesterol: nutrientNumber(serving.cholesterol),
+      sodium: nutrientNumber(serving.sodium),
+      potassium: nutrientNumber(serving.potassium),
+      dietary_fiber: nutrientNumber(serving.fiber),
+      sugars: nutrientNumber(serving.sugar),
+      vitamin_a: nutrientNumber(serving.vitamin_a),
+      vitamin_c: nutrientNumber(serving.vitamin_c),
+      calcium: nutrientNumber(serving.calcium),
+      iron: nutrientNumber(serving.iron),
+    };
+    const rawNutrients = extractFatSecretProviderNutrients(serving);
+    const addVariant = (size: number, unit: string, isDefault: boolean) => {
+      if (!Number.isFinite(size) || size <= 0 || !unit) return;
+      const normalizedUnit = normalizeServingUnit(unit);
+      const key = `${size}_${normalizedUnit}`.toLowerCase();
+      if (!variantsMap.has(key) || isDefault) {
+        log(
+          'info',
+          `FATSECRET_DEBUG: Adding variant: size=${size}, unit=${unit}, normalizedUnit=${normalizedUnit}, key=${key}, isDefault=${isDefault}`
+        );
+        variantsMap.set(key, {
+          serving_size: size,
+          serving_unit: normalizedUnit,
+          ...baseNutrients,
+          provider_nutrients: rawNutrients,
+          is_default: isDefault,
+        });
+      }
+    };
+    // 1. Try to create Household variant
+    let hhSize = serving.number_of_units
+      ? evaluateFraction(serving.number_of_units)
+      : NaN;
+    let hhUnit = serving.measurement_description;
+    const isGenericHH =
+      !hhUnit ||
+      hhUnit.toLowerCase() === 'portion' ||
+      hhUnit.toLowerCase() === 'serving';
+    if (isNaN(hhSize) || isGenericHH) {
+      // Try parsing from serving_description
+      const desc = serving.serving_description || '';
+      const descMatch = desc.match(/^([\d\s./]+)\s+(.+)$/);
+      if (descMatch) {
+        const parsedSize = evaluateFraction(descMatch[1]);
+        const parsedUnit = descMatch[2].trim();
+        if (parsedSize > 0 && parsedUnit) {
+          hhSize = parsedSize;
+          hhUnit = parsedUnit;
+        }
+      }
+    }
+    if (isNaN(hhSize) || !hhUnit) {
+      hhSize = 1;
+      hhUnit = serving.serving_description || 'serving';
+    }
+    addVariant(hhSize, hhUnit, serving.is_default === '1');
+    // 2. Try to create Metric variant
+    const mSize = parseFloat(serving.metric_serving_amount || '');
+    const mUnit = serving.metric_serving_unit;
+    if (!isNaN(mSize) && mUnit) {
+      // Only add metric if it's different from household (to avoid duplicates like "100 g" and "100 g")
+      addVariant(mSize, mUnit, serving.is_default === '1');
+    }
+  });
+  const mappedVariants = Array.from(variantsMap.values());
+  // Ensure exactly one default
+  let defaultVariant = mappedVariants.find((v) => v.is_default);
+  if (!defaultVariant && mappedVariants.length > 0) {
+    defaultVariant = mappedVariants[0];
+    defaultVariant.is_default = true;
+  }
+  return {
+    name: food.food_name,
+    brand: food.brand_name || null,
+    barcode: food.barcode,
+    provider_external_id: String(food.food_id),
+    provider_type: 'fatsecret',
+    is_custom: false,
+    // Hotlinked in search results; localized on import (see models/food.ts).
+    image_url: firstFatSecretImageUrl(food),
+    default_variant: defaultVariant,
+    variants: mappedVariants,
+  };
+}
+function mapFatSecretSearchItem(item: FatSecretSearchItem) {
+  if (!item) return null;
+  // FatSecret search descriptions look like:
+  // "Per 100g - Calories: 165kcal | Fat: 3.57g | Carbs: 0.00g | Protein: 31.02g"
+  // "Per 1 serving (28g) - Calories: 110kcal | Fat: 2.00g | Carbs: 15.00g | Protein: 7.00g"
+  const desc = item.food_description || '';
+  const calories =
+    parseFloat(desc.match(/Calories:\s*([\d.]+)/)?.[1] || '') || 0;
+  const fat = parseFloat(desc.match(/Fat:\s*([\d.]+)/)?.[1] || '') || 0;
+  const carbs = parseFloat(desc.match(/Carbs:\s*([\d.]+)/)?.[1] || '') || 0;
+  const protein = parseFloat(desc.match(/Protein:\s*([\d.]+)/)?.[1] || '') || 0;
+  // Extract serving info from formats like:
+  //   "Per 100g - ..."           → 100 g
+  //   "Per 250ml - ..."          → 250 ml
+  //   "Per 1 serving (28g) - ..." → 28 g  (prefer metric in parentheses)
+  //   "Per 1 serving - ..."      → 1 serving
+  //   "Per 1 bar - ..."          → 1 bar
+  //   "Per 1/4 cup - ..."        → 0.25 cup
+  // 1. Try to find metric in parentheses: "Per ... (28g) -"
+  const parenMetricMatch = desc.match(/\(([\d.]+)(g|ml)\)\s*-/);
+  // 2. Try to find direct metric: "Per 100g -"
+  const directMetricMatch = desc.match(/^Per\s+([\d.]+)(g|ml)\s*-/);
+  // 3. Try to find household with potential fractions: "Per 1/4 cup -"
+  const householdMatch = desc.match(/^Per\s+([\d\s./]+)\s+(.+?)\s*-/);
+  let servingSize, servingUnit;
+  // Priority for search item mapping:
+  // 1. Specific household (e.g. "cup", "slice")
+  // 2. Reasonable metric in parentheses (e.g. "serving (28g)")
+  // 3. Generic household fallback
+  // 4. Direct metric
+  const hSize = householdMatch ? evaluateFraction(householdMatch[1]) : 0;
+  const hUnitOrig = householdMatch ? householdMatch[2].trim() : '';
+  const hUnitNorm = normalizeServingUnit(hUnitOrig);
+  const isTrueGeneric = ['serving', 'portion', 'unit', 'item'].some((g) =>
+    hUnitNorm.includes(g)
+  );
+  const isContainer = [
+    'container',
+    'package',
+    'bag',
+    'box',
+    'recipe',
+    'pot',
+    'can',
+    'bottle',
+    'packet',
+    'bowl',
+    'plate',
+  ].some((g) => hUnitNorm.includes(g));
+  const isGeneric = isTrueGeneric || isContainer;
+  const pSize = parenMetricMatch ? parseFloat(parenMetricMatch[1]) : 0;
+  const pUnit = parenMetricMatch ? parenMetricMatch[2] : '';
+  let usedParenMetric = false;
+  if (householdMatch && !isGeneric) {
+    // Specific household unit like "cup", "slice", "tbsp"
+    servingSize = hSize;
+    servingUnit = hUnitNorm;
+  } else if (
+    parenMetricMatch &&
+    ((pSize > 0 && pSize <= MAX_REASONABLE_METRIC_SERVING_SIZE) ||
+      isTrueGeneric)
+  ) {
+    // Metric in parents is usually better for "serving" or "portion" unless it's a whole container/pot
+    servingSize = pSize;
+    servingUnit = normalizeServingUnit(pUnit);
+    usedParenMetric = true;
+  } else if (householdMatch) {
+    // Fallback to generic or container household
+    servingSize = hSize;
+    servingUnit = hUnitNorm;
+  } else if (directMetricMatch) {
+    servingSize = parseFloat(directMetricMatch[1]);
+    servingUnit = normalizeServingUnit(directMetricMatch[2]);
+  } else {
+    servingSize = 100;
+    servingUnit = 'g';
+  }
+  // Mandatory normalization
+  servingUnit = normalizeServingUnit(servingUnit);
+  log(
+    'info',
+    `FATSECRET_DEBUG: Search item final mapping: size=${servingSize}, unit=${servingUnit}, desc="${desc}"`
+  );
+  // Ensure weight labels aren't "Per 2135 g" if we can help it,
+  // but we must keep the nutrients in sync.
+  // FatSecret description nutrients ALIGN with the serving shown.
+  // Scaler for "weird g": if metric weight is too large/specific, scale nutrients to 100g/ml
+  let scaledCalories = calories;
+  let scaledProtein = protein;
+  let scaledCarbs = carbs;
+  let scaledFat = fat;
+  const keepParenMetric =
+    usedParenMetric && servingSize <= MAX_REASONABLE_METRIC_SERVING_SIZE;
+  if (
+    !keepParenMetric &&
+    (servingUnit === 'g' || servingUnit === 'ml') &&
+    servingSize > 0 &&
+    servingSize !== 100 &&
+    servingSize > 1
+  ) {
+    const factor = 100 / servingSize;
+    scaledCalories = Math.round(calories * factor);
+    scaledProtein = Math.round(protein * factor * 10) / 10;
+    scaledCarbs = Math.round(carbs * factor * 10) / 10;
+    scaledFat = Math.round(fat * factor * 10) / 10;
+    servingSize = 100;
+    log(
+      'info',
+      `FATSECRET_DEBUG: Scaling search result from ${servingSize / factor}${servingUnit} to 100${servingUnit}`
+    );
+  }
+  return {
+    name: item.food_name,
+    brand: item.brand_name || null,
+    provider_external_id:
+      item.food_id !== undefined ? String(item.food_id) : '',
+    provider_type: 'fatsecret',
+    is_custom: false,
+    default_variant: {
+      serving_size: servingSize,
+      serving_unit: servingUnit,
+      calories: Math.round(scaledCalories),
+      protein: scaledProtein,
+      carbs: scaledCarbs,
+      fat: scaledFat,
+      is_default: true,
+    },
+  };
+}
+export { getFatSecretAccessToken };
+export { assertNoFatSecretApiError };
+export { searchFatSecretByBarcode };
+export { mapFatSecretFood };
+export { mapFatSecretSearchItem };
+export { foodNutrientCache };
+export { CACHE_DURATION_MS };
+export { FATSECRET_API_BASE_URL };
+export default {
+  getFatSecretAccessToken,
+  assertNoFatSecretApiError,
+  searchFatSecretByBarcode,
+  mapFatSecretFood,
+  mapFatSecretSearchItem,
+  foodNutrientCache,
+  CACHE_DURATION_MS,
+  FATSECRET_API_BASE_URL,
+};

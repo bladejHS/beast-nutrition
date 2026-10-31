@@ -1,0 +1,97 @@
+import type React from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import MealBuilder from '../../components/MealBuilder';
+import FavoriteStarButton from '@/components/FavoriteStarButton';
+import type { Meal, MealFood } from '@/types/meal';
+
+import { useTranslation } from 'react-i18next';
+interface LogMealDialogProps {
+  mealTemplate: Meal | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  date: string;
+  mealType: string;
+  initialEntryTime?: string | null;
+}
+
+const LogMealDialog: React.FC<LogMealDialogProps> = ({
+  mealTemplate,
+  open,
+  onOpenChange,
+  date,
+  mealType,
+  initialEntryTime,
+}) => {
+  const { t } = useTranslation();
+  const handleSave = () => {
+    onOpenChange(false);
+  };
+
+  if (!mealTemplate) return null;
+
+  // Ensure foods have necessary serving info for MealBuilder
+  // The search result from repository usually includes flattened variant info,
+  // but let's make sure MealBuilder accepts it as MealFood[].
+  // The repository returns fields that match MealFood interface quite well.
+  const initialFoods: MealFood[] = mealTemplate.foods || [];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span>
+              {t('diary.logMealDialog.logMeal', 'Log Meal: {{name}}', {
+                name: mealTemplate.name,
+              })}
+            </span>
+            {mealTemplate.id && (
+              <FavoriteStarButton type="meal" id={mealTemplate.id} />
+            )}
+          </DialogTitle>
+          <DialogDescription>
+            {t(
+              'diary.logMealDialog.adjustThePortionSizeOr',
+              'Adjust the portion size or ingredients for this meal entry.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <MealBuilder
+          mealId={mealTemplate.id} // Pass template ID so it can be linked
+          initialFoods={initialFoods}
+          initialMealName={mealTemplate.name}
+          initialDescription={mealTemplate.description}
+          initialNotes={mealTemplate.notes || ''}
+          onSave={handleSave}
+          onCancel={() => onOpenChange(false)}
+          source="food-diary"
+          foodEntryDate={date}
+          foodEntryMealType={mealType}
+          initialServingSize={mealTemplate.serving_size}
+          initialServingUnit={mealTemplate.serving_unit}
+          initialTotalServings={mealTemplate.total_servings}
+          initialTotalAmount={
+            mealTemplate.serving_unit !== 'serving'
+              ? (mealTemplate.serving_size || 1) *
+                (mealTemplate.total_servings || 1)
+              : null
+          }
+          initialConsumedQuantity={
+            mealTemplate.serving_unit === 'serving'
+              ? 1
+              : mealTemplate.serving_size || 1
+          }
+          initialEntryTime={initialEntryTime}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+export default LogMealDialog;

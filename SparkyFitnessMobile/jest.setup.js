@@ -1,0 +1,912 @@
+// jsdom doesn't expose TextEncoder/TextDecoder globally, but Expo SDK 55's "winter"
+// runtime lazily installs URL/URLSearchParams via whatwg-url-minimum, which requires them.
+const { TextEncoder, TextDecoder } = require('util');
+if (typeof globalThis.TextEncoder === 'undefined')
+  globalThis.TextEncoder = TextEncoder;
+if (typeof globalThis.TextDecoder === 'undefined')
+  globalThis.TextDecoder = TextDecoder;
+
+// Deterministic expo-localization: tests read the device language through
+// getLocales(). The localization suite overrides the return value per test;
+// the default here keeps every other test environment-agnostic (en-US).
+jest.mock('expo-localization', () => ({
+  getLocales: jest.fn(() => [
+    {
+      languageCode: 'en',
+      languageTag: 'en-US',
+      regionCode: 'US',
+      textDirection: 'ltr',
+    },
+  ]),
+}));
+
+// Mock radon-ide (ESM module that Jest can't transform)
+jest.mock('radon-ide', () => ({
+  preview: jest.fn(),
+}));
+
+// Mock expo-asset
+jest.mock('expo-asset', () => ({
+  Asset: {
+    loadAsync: jest.fn(),
+    fromModule: jest.fn(() => ({ uri: 'mock-uri' })),
+  },
+}));
+
+// Mock expo-font
+jest.mock('expo-font', () => ({
+  loadAsync: jest.fn(),
+  isLoaded: jest.fn(() => true),
+}));
+
+// Mock @expo/vector-icons
+jest.mock('@expo/vector-icons', () => {
+  const { View } = require('react-native');
+  return {
+    Ionicons: View,
+    MaterialIcons: View,
+    FontAwesome: View,
+    AntDesign: View,
+  };
+});
+
+// Mock react-native-nitro-modules
+jest.mock('react-native-nitro-modules', () => ({
+  NitroModules: {
+    createHybridObject: jest.fn(),
+  },
+}));
+
+// Mock @kingstinct/react-native-healthkit
+jest.mock('@kingstinct/react-native-healthkit', () => ({
+  requestAuthorization: jest.fn().mockResolvedValue(true),
+  queryQuantitySamples: jest.fn(),
+  queryCategorySamples: jest.fn(),
+  queryStatisticsForQuantity: jest.fn(),
+  queryStatisticsCollectionForQuantity: jest.fn().mockResolvedValue([]),
+  queryWorkoutSamples: jest.fn(),
+  queryCorrelationSamples: jest.fn(),
+  queryActivitySummary: jest.fn().mockResolvedValue([]),
+  ActivitySummaryTypeIdentifier: 'HKActivitySummaryTypeIdentifier',
+  // Writeback saves return the persisted sample (orchestrator reads .uuid off it);
+  // a bare `true` would make UUID-tracking assertions silently test nothing.
+  saveQuantitySample: jest.fn().mockResolvedValue({ uuid: 'hk-quantity-uuid' }),
+  saveCategorySample: jest.fn().mockResolvedValue({ uuid: 'hk-category-uuid' }),
+  saveCorrelationSample: jest.fn().mockResolvedValue({
+    uuid: 'hk-correlation-uuid',
+    objects: [
+      {
+        uuid: 'hk-object-uuid',
+        quantityType: 'HKQuantityTypeIdentifierDietaryEnergyConsumed',
+      },
+    ],
+  }),
+  saveWorkoutSample: jest.fn().mockResolvedValue({}),
+  deleteObjects: jest.fn().mockResolvedValue(0),
+  // Default sharingAuthorized (2) so unrelated suites touching the healthkit module
+  // don't change behavior; the writeback partial-auth test overrides per-type.
+  authorizationStatusFor: jest.fn(() => 2),
+  currentAppSource: jest.fn(() => ({
+    bundleIdentifier: 'com.sparkyfitness.mobile',
+    name: 'SparkyFitness',
+  })),
+  AuthorizationStatus: {
+    notDetermined: 0,
+    sharingDenied: 1,
+    sharingAuthorized: 2,
+  },
+  HKQuantityTypeIdentifier: {
+    stepCount: 'HKQuantityTypeIdentifierStepCount',
+    activeEnergyBurned: 'HKQuantityTypeIdentifierActiveEnergyBurned',
+    basalEnergyBurned: 'HKQuantityTypeIdentifierBasalEnergyBurned',
+    bodyMass: 'HKQuantityTypeIdentifierBodyMass',
+    heartRate: 'HKQuantityTypeIdentifierHeartRate',
+  },
+  HKStatisticsOptions: {
+    cumulativeSum: 'cumulativeSum',
+  },
+  isHealthDataAvailable: jest.fn().mockResolvedValue(true),
+  enableBackgroundDelivery: jest.fn().mockResolvedValue(true),
+  disableBackgroundDelivery: jest.fn().mockResolvedValue(undefined),
+  disableAllBackgroundDelivery: jest.fn().mockResolvedValue(undefined),
+  subscribeToChanges: jest.fn().mockReturnValue({ remove: jest.fn() }),
+  UpdateFrequency: { immediate: 1, hourly: 2, daily: 3, weekly: 4 },
+}));
+
+// Mock react-native-health-connect
+jest.mock('react-native-health-connect', () => ({
+  initialize: jest.fn().mockResolvedValue(true),
+  requestPermission: jest.fn().mockResolvedValue([]),
+  getGrantedPermissions: jest.fn().mockResolvedValue([]),
+  readRecords: jest.fn().mockResolvedValue({ records: [] }),
+  requestExerciseRoute: jest.fn().mockResolvedValue([]),
+  aggregateRecord: jest.fn().mockResolvedValue({}),
+  aggregateGroupByDuration: jest.fn().mockResolvedValue([]),
+  aggregateGroupByPeriod: jest.fn().mockResolvedValue([]),
+  getSdkStatus: jest.fn().mockResolvedValue(3),
+  SdkAvailabilityStatus: {
+    SDK_AVAILABLE: 3,
+  },
+}));
+
+// Mock expo-task-manager
+jest.mock('expo-task-manager', () => ({
+  defineTask: jest.fn(),
+  isTaskDefined: jest.fn(() => true),
+  isTaskRegisteredAsync: jest.fn(() => Promise.resolve(false)),
+  unregisterTaskAsync: jest.fn(() => Promise.resolve()),
+}));
+
+// Mock expo-background-task
+jest.mock('expo-background-task', () => ({
+  registerTaskAsync: jest.fn(() => Promise.resolve()),
+  unregisterTaskAsync: jest.fn(() => Promise.resolve()),
+  getStatusAsync: jest.fn(() => Promise.resolve(2)),
+  triggerTaskWorkerForTestingAsync: jest.fn(() => Promise.resolve(true)),
+  BackgroundTaskStatus: { Restricted: 1, Available: 2 },
+  BackgroundTaskResult: { Success: 1, Failed: 2 },
+}));
+
+// Mock expo-notifications
+jest.mock('expo-notifications', () => {
+  let nextId = 1;
+  return {
+    setNotificationHandler: jest.fn(),
+    setNotificationChannelAsync: jest.fn().mockResolvedValue(undefined),
+    getPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+    requestPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
+    scheduleNotificationAsync: jest.fn(async () => `mock-notif-${nextId++}`),
+    cancelScheduledNotificationAsync: jest.fn().mockResolvedValue(undefined),
+    cancelAllScheduledNotificationsAsync: jest
+      .fn()
+      .mockResolvedValue(undefined),
+    getAllScheduledNotificationsAsync: jest.fn().mockResolvedValue([]),
+    setNotificationCategoryAsync: jest.fn().mockResolvedValue(undefined),
+    getPresentedNotificationsAsync: jest.fn().mockResolvedValue([]),
+    dismissNotificationAsync: jest.fn().mockResolvedValue(undefined),
+    addNotificationResponseReceivedListener: jest.fn(() => ({
+      remove: jest.fn(),
+    })),
+    registerTaskAsync: jest.fn().mockResolvedValue(null),
+    BackgroundNotificationTaskResult: { NewData: 0, NoData: 1, Failed: 2 },
+    DEFAULT_ACTION_IDENTIFIER: 'expo.modules.notifications.actions.DEFAULT',
+    getLastNotificationResponse: jest.fn(() => null),
+    clearLastNotificationResponse: jest.fn(),
+    AndroidImportance: { HIGH: 4, DEFAULT: 3, LOW: 2, MIN: 1, NONE: 0 },
+    SchedulableTriggerInputTypes: {
+      CALENDAR: 'calendar',
+      DAILY: 'daily',
+      WEEKLY: 'weekly',
+      MONTHLY: 'monthly',
+      YEARLY: 'yearly',
+      DATE: 'date',
+      TIME_INTERVAL: 'timeInterval',
+    },
+  };
+});
+
+// Mock expo-haptics
+jest.mock('expo-haptics', () => ({
+  notificationAsync: jest.fn().mockResolvedValue(undefined),
+  NotificationFeedbackType: {
+    Success: 'success',
+    Warning: 'warning',
+    Error: 'error',
+  },
+  selectionAsync: jest.fn().mockResolvedValue(undefined),
+  impactAsync: jest.fn().mockResolvedValue(undefined),
+  ImpactFeedbackStyle: {
+    Light: 'light',
+    Medium: 'medium',
+    Heavy: 'heavy',
+    Soft: 'soft',
+    Rigid: 'rigid',
+  },
+}));
+
+// Mock expo-audio
+jest.mock('expo-audio', () => {
+  const recorder = {
+    isRecording: false,
+    uri: 'file:///voice.m4a',
+    prepareToRecordAsync: jest.fn().mockResolvedValue(undefined),
+    record: jest.fn(),
+    stop: jest.fn().mockResolvedValue(undefined),
+  };
+  return {
+    createAudioPlayer: jest.fn(() => ({
+      play: jest.fn(),
+      pause: jest.fn(),
+      seekTo: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn(),
+    })),
+    RecordingPresets: { HIGH_QUALITY: {} },
+    getRecordingPermissionsAsync: jest
+      .fn()
+      .mockResolvedValue({ granted: false }),
+    requestRecordingPermissionsAsync: jest
+      .fn()
+      .mockResolvedValue({ granted: true }),
+    setAudioModeAsync: jest.fn().mockResolvedValue(undefined),
+    setIsAudioActiveAsync: jest.fn().mockResolvedValue(undefined),
+    useAudioRecorder: jest.fn(() => recorder),
+    useAudioRecorderState: jest.fn(() => ({
+      isRecording: false,
+      metering: -160,
+    })),
+  };
+});
+
+// Mock expo-speech (guided workout narration)
+jest.mock('expo-speech', () => ({
+  speak: jest.fn(),
+  stop: jest.fn().mockResolvedValue(undefined),
+  getAvailableVoicesAsync: jest.fn().mockResolvedValue([]),
+}));
+
+// Mock expo-camera
+jest.mock('expo-camera', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+
+  return {
+    CameraView: React.forwardRef(({ children, ...props }, ref) => {
+      React.useImperativeHandle(ref, () => ({
+        takePictureAsync: jest.fn(),
+      }));
+      return React.createElement(
+        View,
+        { testID: 'camera-view', ...props },
+        children
+      );
+    }),
+    useCameraPermissions: jest.fn(() => [{ granted: true }, jest.fn()]),
+  };
+});
+
+// Mock expo-image-picker
+jest.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: jest.fn().mockResolvedValue({ canceled: true }),
+}));
+
+// Mock expo-secure-store
+jest.mock('expo-secure-store', () => {
+  const store = {};
+  return {
+    AFTER_FIRST_UNLOCK: 'AFTER_FIRST_UNLOCK',
+    AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY: 'AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY',
+    setItemAsync: jest.fn(async (key, value) => {
+      store[key] = value;
+    }),
+    getItemAsync: jest.fn(async (key) => store[key] ?? null),
+    deleteItemAsync: jest.fn(async (key) => {
+      delete store[key];
+    }),
+    __store: store,
+    __clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
+  };
+});
+
+// Mock @react-native-async-storage/async-storage
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
+// Mock react-native-gesture-handler
+jest.mock('react-native-gesture-handler', () => {
+  const View = require('react-native').View;
+  // A chainable gesture builder: every method returns the same object so
+  // `.activateAfterLongPress(150).onStart(fn).onEnd(fn)` chains resolve to a
+  // gesture stub (the drag itself is device-verified, not unit-tested).
+  const makeChainableGesture = () => {
+    const gesture = new Proxy({}, { get: () => () => gesture });
+    return gesture;
+  };
+  return {
+    GestureHandlerRootView: View,
+    GestureDetector: ({ children }) => children,
+    Gesture: {
+      Pan: makeChainableGesture,
+      Tap: makeChainableGesture,
+      LongPress: makeChainableGesture,
+      Fling: makeChainableGesture,
+      Pinch: makeChainableGesture,
+      Rotation: makeChainableGesture,
+      Race: makeChainableGesture,
+      Simultaneous: makeChainableGesture,
+      Exclusive: makeChainableGesture,
+      Native: makeChainableGesture,
+    },
+    Swipeable: View,
+    TouchableOpacity: View,
+    DrawerLayout: View,
+    State: {},
+    ScrollView: View,
+    Slider: View,
+    Switch: View,
+    TextInput: View,
+    ToolbarAndroid: View,
+    ViewPagerAndroid: View,
+    DrawerLayoutAndroid: View,
+    WebView: View,
+    NativeViewGestureHandler: View,
+    TapGestureHandler: View,
+    FlingGestureHandler: View,
+    ForceTouchGestureHandler: View,
+    LongPressGestureHandler: View,
+    PanGestureHandler: View,
+    PinchGestureHandler: View,
+    RotationGestureHandler: View,
+    RawButton: View,
+    BaseButton: View,
+    RectButton: View,
+    BorderlessButton: View,
+    FlatList: View,
+    gestureHandlerRootHOC: jest.fn((component) => component),
+    Directions: {},
+  };
+});
+
+// Mock react-native-gesture-handler/ReanimatedSwipeable
+jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: React.forwardRef(
+      ({ children, renderRightActions, ...props }, ref) => {
+        React.useImperativeHandle(ref, () => ({
+          close: jest.fn(),
+          reset: jest.fn(),
+        }));
+        return React.createElement(
+          View,
+          { testID: 'reanimated-swipeable', ...props },
+          children,
+          renderRightActions
+            ? React.createElement(
+                View,
+                { testID: 'swipeable-right-actions' },
+                renderRightActions()
+              )
+            : null
+        );
+      }
+    ),
+  };
+});
+
+// Mock react-native-reanimated
+jest.mock('react-native-reanimated', () => {
+  const React = require('react');
+  const { View, ScrollView } = require('react-native');
+  const createAnimationMock = () => {
+    const chain = {};
+    for (const method of [
+      'duration',
+      'delay',
+      'springify',
+      'easing',
+      'withInitialValues',
+      'withCallback',
+    ]) {
+      chain[method] = () => chain;
+    }
+    return chain;
+  };
+  return {
+    __esModule: true,
+    default: {
+      View,
+      ScrollView,
+      createAnimatedComponent: (Component) => Component,
+    },
+    useSharedValue: (init) => React.useRef({ value: init }).current,
+    useAnimatedStyle: (fn) => fn(),
+    useDerivedValue: (fn) => ({ value: fn() }),
+    // Linear map between the first and last stops, clamped — enough for the
+    // synchronous worklet the useAnimatedStyle mock runs.
+    interpolate: (value, input, output) => {
+      const inMin = input[0];
+      const inMax = input[input.length - 1];
+      const outMin = output[0];
+      const outMax = output[output.length - 1];
+      if (inMax === inMin) return outMin;
+      const t = Math.max(0, Math.min(1, (value - inMin) / (inMax - inMin)));
+      return outMin + t * (outMax - outMin);
+    },
+    Extrapolation: { CLAMP: 'clamp', EXTEND: 'extend', IDENTITY: 'identity' },
+    withTiming: (toValue) => toValue,
+    withSpring: (toValue) => toValue,
+    withSequence: (...args) => args[args.length - 1],
+    withRepeat: (animation) => animation,
+    withDelay: (_delayMs, animation) => animation,
+    cancelAnimation: jest.fn(),
+    useReducedMotion: () => false,
+    useAnimatedReaction: jest.fn(),
+    // Drag-reorder worklet plumbing — runOnJS returns the fn so callers can
+    // invoke it synchronously; the scroll/frame helpers are inert stubs.
+    runOnJS: (fn) => fn,
+    useAnimatedRef: () => React.useRef(null),
+    useAnimatedScrollHandler: (handler) => handler,
+    useFrameCallback: () => ({ setActive: jest.fn() }),
+    scrollTo: jest.fn(),
+    measure: jest.fn(() => null),
+    Easing: {
+      linear: jest.fn(),
+      ease: jest.fn(),
+      bezier: jest.fn(() => jest.fn()),
+      in: jest.fn(() => jest.fn()),
+      out: jest.fn(() => jest.fn()),
+      inOut: jest.fn(() => jest.fn()),
+      cubic: jest.fn(),
+      quad: jest.fn(),
+      sin: jest.fn(),
+      exp: jest.fn(),
+    },
+    FadeIn: createAnimationMock(),
+    FadeInDown: createAnimationMock(),
+    FadeOut: createAnimationMock(),
+    FadeOutUp: createAnimationMock(),
+    ZoomIn: createAnimationMock(),
+    LinearTransition: createAnimationMock(),
+  };
+});
+
+// Mock react-native-keyboard-controller
+jest.mock('react-native-keyboard-controller', () => {
+  const React = require('react');
+  const { ScrollView, View } = require('react-native');
+
+  return {
+    KeyboardProvider: ({ children }) =>
+      React.createElement(React.Fragment, null, children),
+    KeyboardAvoidingView: React.forwardRef(
+      ({ children, behavior: _behavior, ...props }, ref) =>
+        React.createElement(View, { ...props, ref }, children)
+    ),
+    KeyboardAwareScrollView: React.forwardRef(({ children, ...props }, ref) =>
+      React.createElement(ScrollView, { ...props, ref }, children)
+    ),
+    // `offset` stays on the host View so tests can assert where a sticky view
+    // parks while the keyboard is closed.
+    KeyboardStickyView: React.forwardRef(
+      ({ children, enabled: _enabled, ...props }, ref) =>
+        React.createElement(View, { ...props, ref }, children)
+    ),
+    // Keyboard-closed shared values.
+    useReanimatedKeyboardAnimation: () => ({
+      height: { value: 0 },
+      progress: { value: 0 },
+    }),
+    // Reports the keyboard up, like KeyboardController.isVisible below, so a
+    // focused set's sticky bar is reachable; a test that needs the keyboard
+    // down swaps the implementation and restores it afterwards.
+    useKeyboardState: jest.fn((selector) => {
+      const state = {
+        isVisible: true,
+        height: 300,
+        duration: 250,
+        timestamp: 0,
+        target: -1,
+        type: 'default',
+        appearance: 'light',
+      };
+      return selector ? selector(state) : state;
+    }),
+    // isVisible defaults to true so the Android IME-retry path in
+    // focusSetCellInput stays quiet unless a test opts in.
+    KeyboardController: {
+      setDefaultMode: jest.fn(),
+      setInputMode: jest.fn(),
+      preload: jest.fn(),
+      dismiss: jest.fn(),
+      setFocusTo: jest.fn(),
+      isVisible: jest.fn(() => true),
+      state: jest.fn(() => ({})),
+    },
+    // Subscriptions are inert; tests drive a listener by pulling the callback
+    // out of addListener.mock.calls.
+    KeyboardEvents: {
+      addListener: jest.fn(() => ({ remove: jest.fn() })),
+    },
+  };
+});
+
+// Mock expo-glass-effect. Availability is false so iOS tests exercise the
+// classic native-header path (useNativeIOSHeadersActive() → true) instead of
+// the Liquid Glass fallback; tests that need glass-on mock
+// src/utils/liquidGlass locally.
+jest.mock('expo-glass-effect', () => {
+  const { View } = require('react-native');
+  return {
+    GlassView: View,
+    GlassContainer: View,
+    isLiquidGlassAvailable: () => false,
+    isGlassEffectAPIAvailable: () => false,
+  };
+});
+
+// Mock expo-web-browser
+jest.mock('expo-web-browser', () => ({
+  openBrowserAsync: jest.fn(),
+}));
+
+// Mock expo-application
+jest.mock('expo-application', () => ({
+  nativeApplicationVersion: '1.0.0',
+}));
+
+// Mock expo-constants
+jest.mock('expo-constants', () => ({
+  default: {
+    expoConfig: {
+      version: '1.0.0',
+    },
+  },
+}));
+
+// Mock @react-native-clipboard/clipboard
+jest.mock('@react-native-clipboard/clipboard', () => ({
+  setString: jest.fn(),
+  getString: jest.fn().mockResolvedValue(''),
+}));
+
+// Mock expo-device
+jest.mock('expo-device', () => ({
+  modelName: 'iPhone 15 Pro',
+  manufacturer: 'Apple',
+  osVersion: '18.3',
+}));
+
+// Mock expo-file-system
+jest.mock('expo-file-system', () => {
+  const MockFile = jest.fn().mockImplementation(() => ({
+    uri: 'file:///mock-cache/mock-file.json',
+    create: jest.fn(),
+    write: jest.fn(),
+    delete: jest.fn(),
+  }));
+  return {
+    File: MockFile,
+    Paths: { cache: { uri: 'file:///mock-cache/' } },
+  };
+});
+
+// Mock expo-sharing
+jest.mock('expo-sharing', () => ({
+  shareAsync: jest.fn().mockResolvedValue(undefined),
+}));
+
+// Mock @shopify/react-native-skia
+jest.mock('@shopify/react-native-skia', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    Canvas: ({ children, style }) =>
+      React.createElement(View, { style, testID: 'skia-canvas' }, children),
+    Circle: () => null,
+    Rect: () => null,
+    RoundedRect: () => null,
+    Path: () => null,
+    Line: () => null,
+    DashPathEffect: () => null,
+    Group: ({ children }) => children,
+    Skia: {
+      Path: {
+        Make: () => ({
+          addArc: jest.fn().mockReturnThis(),
+          moveTo: jest.fn().mockReturnThis(),
+          lineTo: jest.fn().mockReturnThis(),
+          close: jest.fn().mockReturnThis(),
+        }),
+        Rect: jest.fn((rect) => rect),
+      },
+      XYWHRect: jest.fn((x, y, width, height) => ({ x, y, width, height })),
+      PathBuilder: {
+        Make: () => ({
+          addArc: jest.fn().mockReturnThis(),
+          moveTo: jest.fn().mockReturnThis(),
+          lineTo: jest.fn().mockReturnThis(),
+          cubicTo: jest.fn().mockReturnThis(),
+          close: jest.fn().mockReturnThis(),
+          build: jest.fn().mockReturnValue(null),
+        }),
+      },
+    },
+    rect: jest.fn((x, y, width, height) => ({ x, y, width, height })),
+    rrect: jest.fn((r, rx, ry) => ({ rect: r, rx, ry })),
+    matchFont: jest.fn(() => null),
+  };
+});
+
+// Mock victory-native
+jest.mock('victory-native', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    CartesianChart: ({ children, ...props }) =>
+      React.createElement(View, { testID: 'cartesian-chart', ...props }),
+    Bar: () => null,
+    useChartPressState: jest.fn(() => ({
+      state: {
+        isActive: { value: false },
+        matchedIndex: { value: -1 },
+        x: { value: { value: '' }, position: { value: 0 } },
+        y: { steps: { value: { value: 0 }, position: { value: 0 } } },
+        yIndex: { value: 0 },
+      },
+      isActive: false,
+    })),
+  };
+});
+
+// Mock react-native-ui-datepicker
+jest.mock('react-native-ui-datepicker', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: (props) =>
+      React.createElement(View, { testID: 'date-picker', ...props }),
+  };
+});
+
+// Mock uniwind
+jest.mock('uniwind', () => ({
+  useCSSVariable: jest.fn((vars) =>
+    Array.isArray(vars) ? vars.map(() => '#888888') : '#888888'
+  ),
+  useUniwind: jest.fn(() => ({ theme: 'light', hasAdaptiveThemes: false })),
+  Uniwind: {
+    setTheme: jest.fn(),
+  },
+}));
+
+// Mock react-native-enriched-markdown (native md4c renderer). Render the
+// markdown prop as plain Text so chat tests can assert content without the
+// native component; `remend` runs for real (it's plain JS).
+jest.mock('react-native-enriched-markdown', () => {
+  const React = require('react');
+  const { Text } = require('react-native');
+  const Markdown = ({
+    markdown,
+    onLinkPress,
+    selectable,
+    streamingAnimation,
+  }) =>
+    React.createElement(
+      Text,
+      {
+        testID: 'enriched-markdown',
+        onLinkPress,
+        selectable,
+        streamingAnimation,
+      },
+      markdown
+    );
+  return {
+    __esModule: true,
+    EnrichedMarkdownText: Markdown,
+    default: Markdown,
+  };
+});
+
+// Mock react-native-toast-message
+jest.mock('react-native-toast-message', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const MockToast = (props) =>
+    React.createElement(View, { testID: 'toast', ...props });
+  MockToast.show = jest.fn();
+  MockToast.hide = jest.fn();
+  return { __esModule: true, default: MockToast };
+});
+
+// Mock react-native-pager-view. The imperative handle is exposed on the component itself so
+// suites can assert programmatic page changes (`PagerView.setPageWithoutAnimation`).
+jest.mock('react-native-pager-view', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const setPage = jest.fn();
+  const setPageWithoutAnimation = jest.fn();
+  const MockPagerView = React.forwardRef(({ children, ...props }, ref) => {
+    React.useImperativeHandle(ref, () => ({
+      setPage,
+      setPageWithoutAnimation,
+    }));
+    return React.createElement(
+      View,
+      { testID: 'pager-view', ...props },
+      children
+    );
+  });
+  MockPagerView.setPage = setPage;
+  MockPagerView.setPageWithoutAnimation = setPageWithoutAnimation;
+  return { __esModule: true, default: MockPagerView };
+});
+
+// Mock react-native-maps. Its package ships untranspiled native specs, and the
+// map is native-only anyway. Each piece renders a View carrying its props so
+// suites can assert what was drawn (`map-view`, `map-polyline`, `map-marker`).
+jest.mock('react-native-maps', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const piece = (testID) => {
+    const Piece = ({ children, ...props }) =>
+      React.createElement(View, { testID, ...props }, children);
+    Piece.displayName = testID;
+    return Piece;
+  };
+  return {
+    __esModule: true,
+    default: React.forwardRef(({ children, ...props }, ref) => {
+      // The camera methods screens call through a ref.
+      React.useImperativeHandle(ref, () => ({
+        animateToRegion: jest.fn(),
+        fitToCoordinates: jest.fn(),
+      }));
+      return React.createElement(
+        View,
+        { testID: 'map-view', ...props },
+        children
+      );
+    }),
+    Polyline: piece('map-polyline'),
+    Marker: piece('map-marker'),
+  };
+});
+
+// Mock @gorhom/bottom-sheet
+jest.mock('@gorhom/bottom-sheet', () => {
+  const React = require('react');
+  const { View, ScrollView } = require('react-native');
+  return {
+    BottomSheetModal: React.forwardRef(({ children }, ref) => {
+      React.useImperativeHandle(ref, () => ({
+        present: jest.fn(),
+        dismiss: jest.fn(),
+      }));
+      return React.createElement(View, null, children);
+    }),
+    BottomSheetModalProvider: ({ children }) =>
+      React.createElement(View, null, children),
+    BottomSheetView: ({ children, style }) =>
+      React.createElement(View, { style }, children),
+    BottomSheetScrollView: ({ children, contentContainerStyle }) =>
+      React.createElement(ScrollView, { contentContainerStyle }, children),
+    BottomSheetBackdrop: () => null,
+  };
+});
+
+// Provide the production i18n instance to components rendered in isolation.
+// Screen/component suites may omit the app bootstrap, but localized UI should
+// still resolve its explicit English defaults instead of warning or returning
+// raw keys.
+const { initReactI18next } = require('react-i18next');
+const testI18n = require('./src/localization/i18n').default;
+if (!testI18n.isInitialized) {
+  testI18n.use(initReactI18next).init({
+    resources: { en: { translation: {} }, pl: { translation: {} } },
+    lng: 'en',
+    fallbackLng: 'en',
+    initImmediate: false,
+    interpolation: { escapeValue: false },
+  });
+}
+
+// Jest's expo-crypto stand-in has no AES implementation. Mock the module
+// instead of loading the native AES build, which pulls in ExpoModulesCore
+// and breaks other suites.
+jest.mock('expo-crypto', () => {
+  const { webcrypto } = require('crypto');
+  const { Buffer } = require('node:buffer');
+
+  class WatchTelemetryTestKey {
+    constructor(bytes) {
+      this.bytesValue = bytes;
+    }
+
+    static async generate() {
+      const bytes = new Uint8Array(32);
+      webcrypto.getRandomValues(bytes);
+      return new WatchTelemetryTestKey(bytes);
+    }
+
+    static async import(input, encoding) {
+      const bytes =
+        encoding === 'base64'
+          ? new Uint8Array(Buffer.from(input, 'base64'))
+          : input;
+      return new WatchTelemetryTestKey(bytes);
+    }
+
+    async encoded() {
+      return Buffer.from(this.bytesValue).toString('base64');
+    }
+  }
+
+  class WatchTelemetryTestSealed {
+    constructor(iv, ciphertext) {
+      this.ivBytes = iv;
+      this.ciphertextBytes = ciphertext;
+    }
+
+    static fromCombined(combined) {
+      const bytes = Buffer.from(combined, 'base64');
+      return new WatchTelemetryTestSealed(
+        new Uint8Array(bytes.subarray(0, 12)),
+        new Uint8Array(bytes.subarray(12))
+      );
+    }
+
+    async combined() {
+      return Buffer.concat([
+        Buffer.from(this.ivBytes),
+        Buffer.from(this.ciphertextBytes),
+      ]).toString('base64');
+    }
+  }
+
+  async function importKey(raw, usages) {
+    return webcrypto.subtle.importKey('raw', raw, 'AES-GCM', false, usages);
+  }
+
+  return {
+    __esModule: true,
+    randomUUID: () => webcrypto.randomUUID(),
+    AESEncryptionKey: WatchTelemetryTestKey,
+    AESSealedData: WatchTelemetryTestSealed,
+    aesEncryptAsync: async (plaintext, key) => {
+      const iv = webcrypto.getRandomValues(new Uint8Array(12));
+      const cryptoKey = await importKey(key.bytesValue, ['encrypt']);
+      const ciphertext = new Uint8Array(
+        await webcrypto.subtle.encrypt(
+          { name: 'AES-GCM', iv },
+          cryptoKey,
+          plaintext
+        )
+      );
+      return new WatchTelemetryTestSealed(iv, ciphertext);
+    },
+    aesDecryptAsync: async (sealed, key) => {
+      const cryptoKey = await importKey(key.bytesValue, ['decrypt']);
+      return new Uint8Array(
+        await webcrypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: sealed.ivBytes },
+          cryptoKey,
+          sealed.ciphertextBytes
+        )
+      );
+    },
+  };
+});
+
+// Rows render AllergenBadges, which reads the user's tracked allergens through
+// React Query. Most suites render rows without a QueryClientProvider, so default
+// to "no tracked allergens"; allergen suites mock this module themselves.
+jest.mock('./src/hooks/useAllergenPreferences', () => ({
+  useAllergenPreferences: () => ({
+    preferences: [],
+    isLoading: false,
+    isError: false,
+    refetch: jest.fn(),
+  }),
+  useAllergenPreferenceMutations: jest.fn(),
+}));
+
+jest.mock('expo-image-manipulator', () => ({
+  manipulateAsync: jest.fn(async (uri, _actions = [], options = {}) => ({
+    uri: uri + '-manipulated.jpg',
+    width: 1600,
+    height: 1200,
+    base64: options.base64 ? 'AAAA-manipulated-base64' : undefined,
+  })),
+  SaveFormat: {
+    JPEG: 'jpeg',
+    PNG: 'png',
+    WEBP: 'webp',
+  },
+}));

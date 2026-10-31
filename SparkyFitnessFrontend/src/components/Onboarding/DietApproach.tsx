@@ -1,0 +1,320 @@
+import { Input } from '@/components/ui/input';
+import { ChevronLeft, Utensils, Lock, Unlock } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
+import { DIET_TEMPLATES, getDietTemplate } from '@/constants/dietTemplates';
+import { useTranslation } from 'react-i18next';
+
+export interface DietApproachProps {
+  customPercentages: { carbs: number; protein: number; fat: number };
+  handleMacroValueChange: (
+    changedMacro: 'carbs' | 'protein' | 'fat',
+    newValue: number
+  ) => void;
+  localSelectedDiet: string;
+  lockedMacros: { carbs: boolean; protein: boolean; fat: boolean };
+  setCustomPercentages: React.Dispatch<
+    React.SetStateAction<{ carbs: number; protein: number; fat: number }>
+  >;
+  setLocalSelectedDiet: (newDiet: string) => void;
+  setLockedMacros: React.Dispatch<
+    React.SetStateAction<{ carbs: boolean; protein: boolean; fat: boolean }>
+  >;
+  setShowDietApproach: React.Dispatch<React.SetStateAction<boolean>>;
+  showDietApproach: boolean;
+}
+
+export const DietApproach = ({
+  customPercentages,
+  handleMacroValueChange,
+  localSelectedDiet,
+  lockedMacros,
+  setCustomPercentages,
+  setLocalSelectedDiet,
+  setLockedMacros,
+  setShowDietApproach,
+  showDietApproach,
+}: DietApproachProps) => {
+  const { t } = useTranslation();
+  return (
+    <div className="bg-card rounded-2xl border border-border mb-6">
+      <button
+        onClick={() => setShowDietApproach(!showDietApproach)}
+        className="w-full p-4 flex items-center justify-between hover:bg-muted transition-colors rounded-2xl"
+      >
+        <div className="flex items-center gap-2">
+          <Utensils className="h-5 w-5 text-green-500" />
+          <span className="text-foreground font-semibold">
+            {t('onboarding.diet.title', 'Diet Approach')}
+          </span>
+        </div>
+        <ChevronLeft
+          className={`h-5 w-5 text-muted-foreground transition-transform ${showDietApproach ? '-rotate-90' : 'rotate-180'}`}
+        />
+      </button>
+
+      {showDietApproach && (
+        <div className="px-4 pb-4 space-y-4 border-t border-border pt-4">
+          <p className="text-muted-foreground text-sm mb-4">
+            {t(
+              'onboarding.diet.description',
+              'Choose a preset diet or customize your macro split'
+            )}
+          </p>
+
+          <Select
+            value={localSelectedDiet}
+            onValueChange={(value) => {
+              setLocalSelectedDiet(value);
+              if (value !== 'custom') {
+                const template = getDietTemplate(value);
+                if (template) {
+                  setCustomPercentages({
+                    carbs: template.carbsPercentage,
+                    protein: template.proteinPercentage,
+                    fat: template.fatPercentage,
+                  });
+                }
+              }
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DIET_TEMPLATES.map((diet) => (
+                <SelectItem key={diet.id} value={diet.id}>
+                  <div>
+                    <div className="font-semibold">
+                      {t(
+                        `onboarding.diet.templates.${diet.id}.name`,
+                        diet.name
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {t(
+                        'onboarding.diet.macroSplit',
+                        '{{carbs}}% Carbs / {{protein}}% Protein / {{fat}}% Fat',
+                        {
+                          carbs: diet.carbsPercentage,
+                          protein: diet.proteinPercentage,
+                          fat: diet.fatPercentage,
+                        }
+                      )}
+                    </div>
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="mt-3 p-3 bg-muted rounded-lg">
+            <p className="text-sm text-foreground">
+              {(() => {
+                const selectedDiet = getDietTemplate(localSelectedDiet);
+                return selectedDiet
+                  ? t(
+                      `onboarding.diet.templates.${selectedDiet.id}.description`,
+                      selectedDiet.description
+                    )
+                  : null;
+              })()}
+            </p>
+          </div>
+
+          {localSelectedDiet === 'custom' && (
+            <div className="mt-6 space-y-6 p-4 bg-muted rounded-lg border border-border">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-sm font-semibold text-foreground">
+                  {t('onboarding.diet.customMacroSplit', 'Custom Macro Split')}
+                </h4>
+                <span
+                  className={`text-sm font-mono ${
+                    Math.round(customPercentages.carbs) +
+                      Math.round(customPercentages.protein) +
+                      Math.round(customPercentages.fat) ===
+                    100
+                      ? 'text-green-500'
+                      : 'text-yellow-500'
+                  }`}
+                >
+                  {t('onboarding.diet.total', 'Total:')}{' '}
+                  {Math.round(customPercentages.carbs) +
+                    Math.round(customPercentages.protein) +
+                    Math.round(customPercentages.fat)}
+                  %
+                </span>
+              </div>
+
+              {/* Carbs */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() =>
+                        setLockedMacros((p) => ({ ...p, carbs: !p.carbs }))
+                      }
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      {lockedMacros.carbs ? (
+                        <Lock size={16} />
+                      ) : (
+                        <Unlock size={16} />
+                      )}
+                    </button>
+                    <label className="text-sm font-medium text-foreground">
+                      {t('onboarding.diet.carbohydrates', 'Carbohydrates')}
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      step={1}
+                      value={Math.round(customPercentages.carbs).toFixed(0)}
+                      onChange={(e) =>
+                        handleMacroValueChange(
+                          'carbs',
+                          parseInt(e.target.value, 10) || 0
+                        )
+                      }
+                      className="w-20 text-right bg-transparent h-8 text-sm"
+                      disabled={lockedMacros.carbs}
+                    />
+                    <span className="text-sm font-mono text-foreground">%</span>
+                  </div>
+                </div>
+                <Slider
+                  value={[customPercentages.carbs]}
+                  onValueChange={([value]) =>
+                    handleMacroValueChange('carbs', value || 0)
+                  }
+                  min={5}
+                  max={80}
+                  step={1}
+                  className="cursor-pointer"
+                  disabled={lockedMacros.carbs}
+                />
+              </div>
+
+              {/* Protein */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() =>
+                        setLockedMacros((p) => ({
+                          ...p,
+                          protein: !p.protein,
+                        }))
+                      }
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      {lockedMacros.protein ? (
+                        <Lock size={16} />
+                      ) : (
+                        <Unlock size={16} />
+                      )}
+                    </button>
+                    <label className="text-sm font-medium text-foreground">
+                      {t('onboarding.diet.protein', 'Protein')}
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      step={1}
+                      value={Math.round(customPercentages.protein).toFixed(0)}
+                      onChange={(e) =>
+                        handleMacroValueChange(
+                          'protein',
+                          parseInt(e.target.value, 10) || 0
+                        )
+                      }
+                      className="w-20 text-right bg-transparent h-8 text-sm"
+                      disabled={lockedMacros.protein}
+                    />
+                    <span className="text-sm font-mono text-foreground">%</span>
+                  </div>
+                </div>
+                <Slider
+                  value={[customPercentages.protein]}
+                  onValueChange={([value]) =>
+                    handleMacroValueChange('protein', value || 0)
+                  }
+                  min={10}
+                  max={50}
+                  step={1}
+                  className="cursor-pointer"
+                  disabled={lockedMacros.protein}
+                />
+              </div>
+
+              {/* Fat */}
+              <div>
+                <div className="flex justify-between items-center mb-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() =>
+                        setLockedMacros((p) => ({ ...p, fat: !p.fat }))
+                      }
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      {lockedMacros.fat ? (
+                        <Lock size={16} />
+                      ) : (
+                        <Unlock size={16} />
+                      )}
+                    </button>
+                    <label className="text-sm font-medium text-foreground">
+                      {t('onboarding.diet.fat', 'Fat')}
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      step={1}
+                      value={Math.round(customPercentages.fat).toFixed(0)}
+                      onChange={(e) =>
+                        handleMacroValueChange(
+                          'fat',
+                          parseInt(e.target.value, 10) || 0
+                        )
+                      }
+                      className="w-20 text-right bg-transparent h-8 text-sm"
+                      disabled={lockedMacros.fat}
+                    />
+                    <span className="text-sm font-mono text-foreground">%</span>
+                  </div>
+                </div>
+                <Slider
+                  value={[customPercentages.fat]}
+                  onValueChange={([value]) =>
+                    handleMacroValueChange('fat', value || 0)
+                  }
+                  min={10}
+                  max={75}
+                  step={1}
+                  className="cursor-pointer"
+                  disabled={lockedMacros.fat}
+                />
+              </div>
+
+              <p className="text-xs text-muted-foreground mt-2">
+                {t(
+                  'onboarding.diet.adjustHint',
+                  'Adjust or type in a value. Unlocked macros will auto-adjust to maintain 100% total.'
+                )}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};

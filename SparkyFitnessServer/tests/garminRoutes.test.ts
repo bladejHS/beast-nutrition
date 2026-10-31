@@ -1,0 +1,220 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+// @ts-expect-error TS(7016): Could not find a declaration file for module 'supertest'
+import request from 'supertest';
+import express from 'express';
+import garminRoutes, {
+  MFA_ATTEMPT_MAX,
+  mfaAttemptLimiter,
+} from '../routes/garminRoutes.js';
+import garminConnectService from '../integrations/garminconnect/garminConnectService.js';
+import garminService from '../services/garminService.js';
+import externalProviderRepository from '../models/externalProviderRepository.js';
+
+// Toggle used by the mocked permission middleware so a test can assert the 403
+// path (a switched-context delegate lacking diary access). The real middleware
+// logic is covered by checkPermissionMiddleware.test.ts.
+const { permissionState } = vi.hoisted(() => ({
+  permissionState: { allow: true },
+}));
+
+vi.mock('../middleware/authMiddleware.js', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  authenticate: vi.fn((req: any, _res: any, next: any) => {
+    req.userId = 'user-123';
+    next();
+  }),
+}));
+
+vi.mock('../middleware/checkPermissionMiddleware.js', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  default: vi.fn(
+    () => (_req: any, res: any, next: any) =>
+      permissionState.allow
+        ? next()
+        : res.status(403).json({ error: 'Forbidden' })
+  ),
+}));
+
+vi.mock('../integrations/garminconnect/garminConnectService.js', () => ({
+  default: {
+    garminLogin: vi.fn(),
+    garminResumeLogin: vi.fn(),
+    handleGarminTokens: vi.fn(),
+    syncGarminHealthAndWellness: vi.fn(),
+    fetchGarminActivitiesAndWorkouts: vi.fn(),
+    fetchGarminNutritionDiary: vi.fn(),
+  },
+}));
+
+vi.mock('../models/externalProviderRepository.js', () => ({
+  default: {
+    getExternalDataProviderByUserIdAndProviderName: vi.fn(),
+    updateProviderLastSync: vi.fn(),
+  },
+}));
+
+vi.mock('../services/measurementService.js', () => ({
+  default: {
+    processHealthData: vi.fn(),
+  },
+}));
+
+vi.mock('../services/garminService.js', () => ({
+  default: {
+    processGarminHealthAndWellnessData: vi.fn(),
+    processActivitiesAndWorkouts: vi.fn(),
+    processGarminNutritionData: vi.fn(),
+    syncGarminData: vi.fn(),
+  },
+}));
+
+vi.mock('../integrations/garminconnect/garminMeasurementMapping.js', () => ({
+  default: {},
+}));
+
+vi.mock('../config/logging.js', () => ({ log: vi.fn() }));
+vi.mock('../models/globalSettingsRepository.js', () => ({
+  // The mock-data options are off unless an admin turned them on; these route
+  // tests exercise the normal path, so the options never reach the service.
+  isMockDataEnabled: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../services/providerSyncClaim.js', async (importActual) => ({
+  ...(await importActual<typeof import('../services/providerSyncClaim.js')>()),
+  startProviderSync: vi.fn(async (_target, sync) => ({ running: sync() })),
+}));
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+
+const app = express();
+app.use(express.json());
+app.use('/integrations/garmin', garminRoutes);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.use((err: any, _req: any, res: any, _next: any) => {
+  res.status(500).json({ error: err.message });
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mfaAttemptLimiter.reset();
+  permissionState.allow = true;
+  (
+    externalProviderRepository.getExternalDataProviderByUserIdAndProviderName as any
+  ).mockResolvedValue({ id: 'provider-1' });
+  (externalProviderRepository.updateProviderLastSync as any).mockResolvedValue(
+    true
+  );
+});
+
+describe('permission gating (switched-context delegate without diary access)', () => {
+  it('returns 403 from /sync and does not run the sync', async () => {
+    permissionState.allow = false;
+    const res = await request(app)
+      .post('/integrations/garmin/sync')
+      .send({ startDate: '2026-06-01', endDate: '2026-06-07' });
+    expect(res.statusCode).toBe(403);
+    expect(garminService.syncGarminData).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 from /sync/nutrition_diary and does not fetch nutrition', async () => {
+    permissionState.allow = false;
+    const res = await request(app)
+      .post('/integrations/garmin/sync/nutrition_diary')
+      .send({ startDate: '2026-06-01', endDate: '2026-06-07' });
+    expect(res.statusCode).toBe(403);
+    expect(garminService.processGarminNutritionData).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 from /unlink and does not delete the provider', async () => {
+    permissionState.allow = false;
+    const res = await request(app).post('/integrations/garmin/unlink');
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('POST /integrations/garmin/resume_login', () => {
+  it('stops forwarding codes once the attempt cap is reached', async () => {
+    vi.mocked(garminConnectService.garminResumeLogin).mockResolvedValue({
+      status: 'invalid_mfa_code',
+    });
+    const attempt = () =>
+      request(app)
+        .post('/integrations/garmin/resume_login')
+        .send({ client_state: 'sealed', mfa_code: '123456' });
+
+    for (let i = 0; i < MFA_ATTEMPT_MAX; i++) {
+      expect((await attempt()).statusCode).toBe(200);
+    }
+    const res = await attempt();
+
+    expect(res.statusCode).toBe(429);
+    expect(Number(res.headers['retry-after'])).toBeGreaterThan(0);
+    expect(garminConnectService.garminResumeLogin).toHaveBeenCalledTimes(
+      MFA_ATTEMPT_MAX
+    );
+  });
+});
+
+describe('POST /integrations/garmin/sync', () => {
+  it('answers 409 without syncing while another sync holds the account', async () => {
+    vi.mocked(startProviderSync).mockResolvedValueOnce(null);
+
+    const res = await request(app).post('/integrations/garmin/sync').send({});
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual(SYNC_ALREADY_RUNNING_RESPONSE);
+    expect(startProviderSync).toHaveBeenCalledWith(
+      { userId: 'user-123', providerType: 'garmin' },
+      expect.any(Function)
+    );
+    expect(garminService.syncGarminData).not.toHaveBeenCalled();
+  });
+
+  it('updates provider last_sync_at when all sync phases complete', async () => {
+    const result = {
+      health: { processedEntries: 1 },
+      activities: { processedEntries: 2 },
+      nutrition: { processedEntries: 3 },
+    };
+    (garminService.syncGarminData as any).mockResolvedValue(result);
+
+    const res = await request(app)
+      .post('/integrations/garmin/sync')
+      .send({ startDate: '2026-06-01', endDate: '2026-06-07' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(garminService.syncGarminData).toHaveBeenCalledWith(
+      'user-123',
+      'manual',
+      '2026-06-01',
+      '2026-06-07',
+      undefined,
+      false
+    );
+    expect(
+      externalProviderRepository.updateProviderLastSync
+    ).toHaveBeenCalledWith('provider-1', expect.any(Date));
+  });
+
+  it('does not update provider last_sync_at when a sync phase returns an error', async () => {
+    const result = {
+      health: { error: 'Garmin health API rate limited' },
+      activities: { processedEntries: 2 },
+      nutrition: { processedEntries: 3 },
+    };
+    (garminService.syncGarminData as any).mockResolvedValue(result);
+
+    const res = await request(app)
+      .post('/integrations/garmin/sync')
+      .send({ startDate: '2026-06-01', endDate: '2026-06-07' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual(result);
+    expect(
+      externalProviderRepository.updateProviderLastSync
+    ).not.toHaveBeenCalled();
+  });
+});

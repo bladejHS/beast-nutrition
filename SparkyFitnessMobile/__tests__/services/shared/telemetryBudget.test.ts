@@ -1,0 +1,200 @@
+import {
+  BACKGROUND_TELEMETRY_BUDGET,
+  FOREGROUND_TELEMETRY_BUDGET,
+  createGraceWindowClaimLimiter,
+  createTelemetryRunContext,
+} from '../../../src/services/shared/telemetryBudget';
+
+describe('BACKGROUND_TELEMETRY_BUDGET', () => {
+  it('is 3 — background runs enrich only the newest few workouts', () => {
+    expect(BACKGROUND_TELEMETRY_BUDGET).toBe(3);
+  });
+});
+
+describe('FOREGROUND_TELEMETRY_BUDGET', () => {
+  it('is finite — an unbounded foreground run is what caused #2191', () => {
+    expect(Number.isFinite(FOREGROUND_TELEMETRY_BUDGET)).toBe(true);
+  });
+
+  it('is more generous than the background budget but still capped', () => {
+    expect(FOREGROUND_TELEMETRY_BUDGET).toBeGreaterThan(
+      BACKGROUND_TELEMETRY_BUDGET
+    );
+  });
+});
+
+describe('createTelemetryRunContext', () => {
+  it('defaults to unlimited budget and interactive (the foreground shape)', () => {
+    const ctx = createTelemetryRunContext();
+    expect(ctx.interactive).toBe(true);
+    for (let i = 0; i < 50; i++) {
+      expect(ctx.claim()).toBe(true);
+    }
+  });
+
+  it('claims exactly N times once capped, then rejects', () => {
+    const ctx = createTelemetryRunContext({ budget: 3 });
+
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(false);
+    // Stays rejected — it does not wrap or replenish on its own.
+    expect(ctx.claim()).toBe(false);
+  });
+
+  it('rejects immediately when the budget is 0', () => {
+    const ctx = createTelemetryRunContext({ budget: 0 });
+    expect(ctx.claim()).toBe(false);
+  });
+
+  it('treats a negative budget the same as exhausted', () => {
+    // Defensive case: nothing in this codebase passes a negative budget today,
+    // but claim's own `remaining <= 0` guard is what makes that safe — pin the
+    // behavior so a future caller can rely on it.
+    const ctx = createTelemetryRunContext({ budget: -1 });
+    expect(ctx.claim()).toBe(false);
+  });
+
+  it('keeps budgets independent across contexts', () => {
+    // Concurrent runs each carry their own context; a capped background run
+    // draining its budget must not consume a foreground run's.
+    const capped = createTelemetryRunContext({ budget: 1, interactive: false });
+    const foreground = createTelemetryRunContext();
+
+    expect(capped.claim()).toBe(true);
+    expect(capped.claim()).toBe(false);
+    expect(foreground.claim()).toBe(true);
+    expect(foreground.interactive).toBe(true);
+    expect(capped.interactive).toBe(false);
+  });
+
+  it('exhausting the budget does not change interactivity', () => {
+    const ctx = createTelemetryRunContext({ budget: 0, interactive: true });
+    expect(ctx.claim()).toBe(false);
+    expect(ctx.interactive).toBe(true);
+  });
+});
+
+describe('collected-session staging is run-scoped (PR #2218 review)', () => {
+  it('does not leak staged keys between overlapping runs', () => {
+    // Background tasks, manual syncs and the iOS observer path are not mutually
+    // exclusive. With one shared staging area, a successful upload in run B
+    // would commit keys staged by run A — marking A's sessions collected even
+    // though the server never received their telemetry.
+    const runA = createTelemetryRunContext();
+    const runB = createTelemetryRunContext();
+
+    runA.stageCollected('session-a');
+    runB.stageCollected('session-b');
+
+    expect(runB.drainCollected()).toEqual(['session-b']);
+    expect(runA.drainCollected()).toEqual(['session-a']);
+  });
+
+  it('drains once — a second drain returns nothing', () => {
+    const ctx = createTelemetryRunContext();
+    ctx.stageCollected('session-a');
+
+    expect(ctx.drainCollected()).toEqual(['session-a']);
+    expect(ctx.drainCollected()).toEqual([]);
+  });
+
+  it('ignores sessions with no stable identity', () => {
+    const ctx = createTelemetryRunContext();
+    ctx.stageCollected(null);
+
+    expect(ctx.drainCollected()).toEqual([]);
+  });
+
+  it('an abandoned run takes its staging with it', () => {
+    // A run whose upload failed is never drained; its keys die with the
+    // context rather than being committed by someone else's success.
+    const failed = createTelemetryRunContext();
+    failed.stageCollected('never-uploaded');
+
+    const next = createTelemetryRunContext();
+    expect(next.drainCollected()).toEqual([]);
+  });
+});
+
+describe('createGraceWindowClaimLimiter', () => {
+  it('never limits sessions outside the grace window', () => {
+    const allow = createGraceWindowClaimLimiter(2);
+    for (let i = 0; i < 50; i++) expect(allow(false)).toBe(true);
+  });
+
+  it('caps grace-window claims at half the budget', () => {
+    const allow = createGraceWindowClaimLimiter(FOREGROUND_TELEMETRY_BUDGET);
+    let allowed = 0;
+    for (let i = 0; i < FOREGROUND_TELEMETRY_BUDGET; i++) {
+      if (allow(true)) allowed++;
+    }
+    expect(allowed).toBe(Math.ceil(FOREGROUND_TELEMETRY_BUDGET / 2));
+    expect(allowed).toBeLessThan(FOREGROUND_TELEMETRY_BUDGET);
+  });
+
+  it('leaves a background run a slot for the backlog', () => {
+    // The starvation case: 3 recent heart-rate-less workouts would otherwise
+    // take the whole background budget on every single run (#2191).
+    const allow = createGraceWindowClaimLimiter(BACKGROUND_TELEMETRY_BUDGET);
+    expect(allow(true)).toBe(true);
+    expect(allow(true)).toBe(true);
+    expect(allow(true)).toBe(false);
+    // The slot it preserved is still there for an older session.
+    expect(allow(false)).toBe(true);
+  });
+
+  it('keeps at least one grace-window slot even on a budget of one', () => {
+    const allow = createGraceWindowClaimLimiter(1);
+    expect(allow(true)).toBe(true);
+    expect(allow(true)).toBe(false);
+  });
+
+  it('does not cap an uncapped run', () => {
+    const allow = createGraceWindowClaimLimiter(Number.POSITIVE_INFINITY);
+    for (let i = 0; i < 500; i++) expect(allow(true)).toBe(true);
+  });
+});
+
+describe('TelemetryRunContext budget', () => {
+  it('reports the slot count the run started with', () => {
+    expect(createTelemetryRunContext({ budget: 3 }).budget).toBe(3);
+  });
+
+  it('is infinite when uncapped, so nothing reserves a share of nothing', () => {
+    expect(createTelemetryRunContext().budget).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+// Re-sending workout details is a run flag, never a cache wipe. The reuse
+// cache is not range-aware, so clearing it would invalidate every session ever
+// collected — not just the window the user picked — and later background runs
+// would grind back through that whole backlog three at a time, which is the
+// starvation the cache was added to end (#2191).
+describe('TelemetryRunContext.force', () => {
+  it('is off unless asked for, so automatic runs stay cheap', () => {
+    expect(createTelemetryRunContext().force).toBe(false);
+    expect(createTelemetryRunContext({ budget: 3 }).force).toBe(false);
+    expect(
+      createTelemetryRunContext({ budget: 3, interactive: false }).force
+    ).toBe(false);
+  });
+
+  it('is set only when the caller opts in', () => {
+    expect(createTelemetryRunContext({ force: true }).force).toBe(true);
+  });
+
+  it('does not widen the budget — a forced run is still capped', () => {
+    const ctx = createTelemetryRunContext({ budget: 2, force: true });
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(true);
+    expect(ctx.claim()).toBe(false);
+  });
+
+  it('leaves staging behaviour unchanged, so forced sessions re-cache', () => {
+    const ctx = createTelemetryRunContext({ force: true });
+    ctx.stageCollected('uuid-1:2026-09-14T20:47:50Z');
+    expect(ctx.drainCollected()).toEqual(['uuid-1:2026-09-14T20:47:50Z']);
+  });
+});

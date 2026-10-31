@@ -1,0 +1,341 @@
+import type {
+  FoodPhotoLogRequest,
+  FoodPhotoLogResponse,
+} from '@workspace/shared';
+import { apiCall } from '../api';
+import { buildImageFormData } from '../imageRequest';
+import type { MealFood } from '@/types/meal';
+import type { FoodEntryMeal } from '@/types/meal';
+import type { FoodEntry } from '@/types/food';
+import {
+  DayData,
+  FoodEntryUpdateData,
+  FoodDiaryImportRow,
+  FoodDiaryImportScope,
+  FoodDiaryImportResult,
+} from '@/types/diary';
+import { ExpandedGoals } from '@/types/goals';
+
+export interface FoodEntryCreateData {
+  user_id?: string;
+  food_id: string;
+  meal_type: string;
+  meal_type_id?: string;
+  quantity: number;
+  unit: string;
+  entry_date: string;
+  entry_time?: string | null;
+  variant_id?: string | null;
+  /** Per-occurrence markdown note; independent of the food's own `notes`. */
+  notes?: string | null;
+}
+export const updateFoodEntry = async (
+  id: string,
+  data: FoodEntryUpdateData
+): Promise<unknown> => {
+  const response = await apiCall(`/food-entries/${id}`, {
+    method: 'PUT',
+    body: data,
+  });
+  return response;
+};
+
+export const loadMiniNutritionTrendData = async (
+  userId: string,
+  startDate: string,
+  endDate: string
+): Promise<DayData[]> => {
+  const params = new URLSearchParams({
+    userId,
+    startDate,
+    endDate,
+  });
+  const data = await apiCall(
+    `/reports/mini-nutrition-trends?${params.toString()}`,
+    {
+      method: 'GET',
+      suppress404Toast: true, // Suppress toast for 404
+    }
+  );
+  return data || []; // Return empty array if 404 (no data found)
+};
+
+export const createFoodEntry = async (
+  data: FoodEntryCreateData
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries', {
+    method: 'POST',
+    body: data,
+  });
+  return response;
+};
+
+// Bulk-creates diary log entries (food_entries) from CSV rows — distinct
+// from the food-library CSV import (POST /foods/import-from-csv), which only
+// writes master-data foods and is untouched by this feature.
+export const importFoodDiaryEntriesFromCsv = async (
+  entries: FoodDiaryImportRow[],
+  scope: FoodDiaryImportScope,
+  overrideNutrition: boolean
+): Promise<FoodDiaryImportResult> => {
+  const response = await apiCall('/food-entries/import-from-csv', {
+    method: 'POST',
+    body: { entries, scope, overrideNutrition },
+  });
+  return response as FoodDiaryImportResult;
+};
+
+export const removeFoodEntry = async (id: string): Promise<void> => {
+  const response = await apiCall(`/food-entries/${id}`, {
+    method: 'DELETE',
+  });
+  return response;
+};
+
+export const loadFoodEntries = async (date: string): Promise<FoodEntry[]> => {
+  const response = await apiCall(`/food-entries/by-date/${date}`, {
+    method: 'GET',
+  });
+  return response;
+};
+
+export interface DownloadDiaryExportOptions {
+  delimiter?: string;
+  locale?: string;
+}
+
+export const downloadDiaryExport = async (
+  options?: DownloadDiaryExportOptions
+): Promise<Blob> => {
+  const params = new URLSearchParams();
+  if (options?.delimiter) params.append('delimiter', options.delimiter);
+  if (options?.locale) params.append('locale', options.locale);
+
+  const url = `/food-entries/export/csv${params.toString() ? `?${params.toString()}` : ''}`;
+  const response = await apiCall(url, {
+    method: 'GET',
+    responseType: 'blob',
+  });
+  return response;
+};
+
+export const loadDiaryGoals = async (
+  date: string,
+  adjust?: boolean
+): Promise<ExpandedGoals> => {
+  // Adjust return type as needed
+  const url = adjust
+    ? `/goals/by-date/${date}?adjust=true`
+    : `/goals/by-date/${date}`;
+  const response = await apiCall(url, {
+    method: 'GET',
+  });
+  return response;
+};
+
+export const copyFoodEntries = async (
+  sourceDate: string,
+  sourceMealType: string,
+  targetDate: string,
+  targetMealType: string
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy', {
+    method: 'POST',
+    body: { sourceDate, sourceMealType, targetDate, targetMealType },
+  });
+  return response;
+};
+
+export const copyFoodEntriesFromYesterday = async (
+  mealType: string,
+  targetDate: string
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy-yesterday', {
+    method: 'POST',
+    body: { mealType, targetDate },
+  });
+  return response;
+};
+
+export const copyAllFoodEntries = async (
+  sourceDate: string,
+  targetDate: string
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy-all', {
+    method: 'POST',
+    body: { sourceDate, targetDate },
+  });
+  return response;
+};
+
+export const copyAllFoodEntriesFromYesterday = async (
+  targetDate: string
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy-all-yesterday', {
+    method: 'POST',
+    body: { targetDate },
+  });
+  return response;
+};
+
+// New interfaces and functions for food_entry_meals
+export interface FoodEntryMealCreateData {
+  meal_template_id?: string | null;
+  meal_type: string;
+  entry_date: string;
+  entry_time?: string | null;
+  name: string;
+  description?: string;
+  notes?: string | null;
+  quantity: number;
+  unit: string;
+  entry_total_servings?: number | null;
+  foods: MealFood[];
+}
+
+export interface FoodEntryMealUpdateData {
+  name?: string;
+  description?: string;
+  notes?: string | null;
+  meal_type?: string;
+  entry_date?: string;
+  entry_time?: string | null;
+  quantity?: number;
+  unit?: string;
+  entry_total_servings?: number | null;
+  foods: MealFood[]; // Foods must be provided for update
+}
+
+export const createFoodEntryMeal = async (
+  data: FoodEntryMealCreateData
+): Promise<FoodEntryMeal> => {
+  const response = await apiCall('/food-entry-meals', {
+    method: 'POST',
+    body: data,
+  });
+  return response;
+};
+
+export const updateFoodEntryMeal = async (
+  foodEntryMealId: string,
+  data: FoodEntryMealUpdateData
+): Promise<FoodEntryMeal> => {
+  const response = await apiCall(`/food-entry-meals/${foodEntryMealId}`, {
+    method: 'PUT',
+    body: data,
+  });
+  return response;
+};
+
+export const getFoodEntryMealWithComponents = async (
+  foodEntryMealId: string
+): Promise<FoodEntryMeal> => {
+  const response = await apiCall(`/food-entry-meals/${foodEntryMealId}`, {
+    method: 'GET',
+  });
+  return response;
+};
+
+export const getFoodEntryMealsByDate = async (
+  date: string
+): Promise<FoodEntryMeal[]> => {
+  const response = await apiCall(`/food-entry-meals/by-date/${date}`, {
+    method: 'GET',
+  });
+  return response;
+};
+
+export const deleteFoodEntryMeal = async (
+  foodEntryMealId: string
+): Promise<unknown> => {
+  const response = await apiCall(`/food-entry-meals/${foodEntryMealId}`, {
+    method: 'DELETE',
+  });
+  return response;
+};
+
+export interface CopyFoodEntriesFromUserPayload {
+  familyUserId: string;
+  sourceDate: string;
+  sourceMealType: string;
+  targetDate: string;
+  targetMealType: string;
+}
+
+export interface CopyFoodEntriesToUserPayload {
+  familyUserId: string;
+  sourceDate: string;
+  sourceMealType: string;
+  targetDate: string;
+  targetMealType: string;
+}
+
+export const copyFoodEntriesFromUser = async (
+  payload: CopyFoodEntriesFromUserPayload
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy-from-user', {
+    method: 'POST',
+    body: payload,
+  });
+  return response;
+};
+
+export const copyFoodEntriesToUser = async (
+  payload: CopyFoodEntriesToUserPayload
+): Promise<unknown> => {
+  const response = await apiCall('/food-entries/copy-to-user', {
+    method: 'POST',
+    body: payload,
+  });
+  return response;
+};
+
+/**
+ * Sets the per-entry override photo for a diary entry.
+ *
+ * This applies only to the given entry — it never modifies the underlying
+ * food's or meal's own images. Entries without an override fall back to those
+ * at display time.
+ */
+export const setFoodEntryImages = async (
+  entryId: string,
+  images: string[],
+  newFiles: File[]
+): Promise<FoodEntry> => {
+  return await apiCall(`/food-entries/${entryId}/image`, {
+    method: 'POST',
+    body: buildImageFormData(images, newFiles),
+    isFormData: true,
+  });
+};
+
+/**
+ * Sets the per-entry override photo for a logged meal.
+ *
+ * Applies to this diary entry only — the meal template's own images are never
+ * modified. Entries without an override fall back to those.
+ */
+export const setFoodEntryMealImages = async (
+  entryId: string,
+  images: string[],
+  newFiles: File[]
+): Promise<FoodEntryMeal> => {
+  return await apiCall(`/food-entry-meals/${entryId}/image`, {
+    method: 'POST',
+    body: buildImageFormData(images, newFiles),
+    isFormData: true,
+  });
+};
+
+/**
+ * Logs a reviewed AI photo estimate in one transactional request.
+ * `apiCall` already attaches `X-Meal-Model-Version`.
+ */
+export const createPhotoLoggedMeal = async (
+  payload: FoodPhotoLogRequest
+): Promise<FoodPhotoLogResponse> => {
+  return apiCall('/food-entry-meals/from-photo-estimate', {
+    method: 'POST',
+    body: payload,
+  });
+};

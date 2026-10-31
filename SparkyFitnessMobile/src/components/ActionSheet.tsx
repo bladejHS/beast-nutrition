@@ -1,0 +1,358 @@
+import React, {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
+import { BottomSheetModal, BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import { useCSSVariable } from 'uniwind';
+import Icon, { type IconName } from './Icon';
+import {
+  sheetContainer,
+  useSheetBackdrop,
+  useSheetHardwareBack,
+} from './ui/sheetChrome';
+
+export interface ActionSheetItem {
+  key: string;
+  label: string;
+  icon?: IconName;
+  /**
+   * Secondary line under the label, for actions whose difference cannot be
+   * carried by a short label alone. Optional: an item without one renders
+   * exactly as before.
+   */
+  description?: string;
+  /**
+   * Consecutive items sharing a group render as one block, separated from
+   * adjacent blocks by a spacer band. Ungrouped items chunk together.
+   */
+  group?: string;
+  /** Danger tint on the label. */
+  destructive?: boolean;
+  /**
+   * Default true. False keeps the sheet presented so the item can swap the
+   * content in place (e.g. a main menu → pick-list stage).
+   */
+  dismissOnPress?: boolean;
+  onPress: () => void;
+}
+
+export interface ActionSheetRef {
+  present: () => void;
+  dismiss: () => void;
+}
+
+interface ActionSheetProps {
+  title: string;
+  items: ActionSheetItem[];
+  layout?: 'list' | 'grid';
+  /** Renders a back chevron left of the title (content-swap flows). */
+  onBack?: () => void;
+  onDismiss?: () => void;
+}
+
+/**
+ * A menu-style bottom sheet: a titled list of one-shot actions. Selection
+ * state belongs to BottomSheetPicker; this is for overflow/context menus.
+ *
+ * Owners must set the state that drives `title`/`items` BEFORE calling
+ * `present()`. When a present lands while the sheet is still animating
+ * closed, it is queued and the interrupted dismissal's `onDismiss` is
+ * swallowed — correct only because the queued present's state has already
+ * overwritten the old.
+ */
+const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
+  ({ title, items, layout = 'list', onBack, onDismiss }, ref) => {
+    const { t } = useTranslation();
+    const modalRef = useRef<BottomSheetModal>(null);
+    const isDismissingRef = useRef(false);
+    const isOpenRef = useRef(false);
+    const isPresentingRef = useRef(false);
+    const pendingPresentRef = useRef(false);
+    const presentFrameRef = useRef<number | null>(null);
+    // Mirrors the modal's open state for the Android hardware-back listener.
+    // Cleared in onDismiss (the terminal signal), not at dismissal start, so a
+    // Back press during the close animation is still swallowed by the sheet.
+    const [isOpen, setIsOpen] = useState(false);
+    const { height: windowHeight } = useWindowDimensions();
+
+    const [surfaceBg, textMuted, accentPrimary] = useCSSVariable([
+      '--color-surface',
+      '--color-text-muted',
+      '--color-accent-primary',
+    ]) as [string, string, string];
+
+    const clearScheduledPresent = useCallback(() => {
+      if (presentFrameRef.current != null) {
+        cancelAnimationFrame(presentFrameRef.current);
+        presentFrameRef.current = null;
+      }
+    }, []);
+
+    const schedulePresent = useCallback(() => {
+      clearScheduledPresent();
+      isPresentingRef.current = true;
+      presentFrameRef.current = requestAnimationFrame(() => {
+        presentFrameRef.current = null;
+        modalRef.current?.present();
+      });
+    }, [clearScheduledPresent]);
+
+    const presentSheet = useCallback(() => {
+      if (isDismissingRef.current) {
+        pendingPresentRef.current = true;
+        return;
+      }
+      if (isOpenRef.current || isPresentingRef.current) {
+        return;
+      }
+      pendingPresentRef.current = false;
+      schedulePresent();
+    }, [schedulePresent]);
+
+    const dismissSheet = useCallback(() => {
+      pendingPresentRef.current = false;
+      isPresentingRef.current = false;
+      isDismissingRef.current = true;
+      clearScheduledPresent();
+      modalRef.current?.dismiss();
+    }, [clearScheduledPresent]);
+
+    useImperativeHandle(
+      ref,
+      () => ({ present: presentSheet, dismiss: dismissSheet }),
+      [presentSheet, dismissSheet]
+    );
+
+    useEffect(() => {
+      const modal = modalRef.current;
+      return () => {
+        clearScheduledPresent();
+        modal?.dismiss();
+      };
+    }, [clearScheduledPresent]);
+
+    useSheetHardwareBack(isOpen, dismissSheet);
+
+    // The sheet is opening or open. Called from onAnimate and from onChange:
+    // when the open finishes before onAnimate reaches JS (Android's "Remove
+    // animations", or a busy JS thread), the library drops onAnimate, and
+    // onChange is the only signal that arrives.
+    const markOpen = useCallback(() => {
+      isDismissingRef.current = false;
+      isOpenRef.current = true;
+      isPresentingRef.current = false;
+      pendingPresentRef.current = false;
+      clearScheduledPresent();
+      setIsOpen(true);
+    }, [clearScheduledPresent]);
+
+    const handleAnimate = useCallback(
+      (fromIndex: number, toIndex: number) => {
+        if (fromIndex >= 0 && toIndex === -1) {
+          isDismissingRef.current = true;
+          isOpenRef.current = false;
+          isPresentingRef.current = false;
+          return;
+        }
+
+        if (toIndex >= 0) {
+          markOpen();
+        }
+      },
+      [markOpen]
+    );
+
+    const handleChange = useCallback(
+      (index: number) => {
+        if (index >= 0) {
+          markOpen();
+        }
+      },
+      [markOpen]
+    );
+
+    const handleDismiss = useCallback(() => {
+      isDismissingRef.current = false;
+      isOpenRef.current = false;
+      setIsOpen(false);
+      if (pendingPresentRef.current) {
+        // A newer present interrupted this dismissal. Run it and swallow the
+        // owner's onDismiss so the stale close can't clear the newer state.
+        pendingPresentRef.current = false;
+        schedulePresent();
+        return;
+      }
+      isPresentingRef.current = false;
+      onDismiss?.();
+    }, [onDismiss, schedulePresent]);
+
+    const renderBackdrop = useSheetBackdrop();
+
+    const handleItemPress = (item: ActionSheetItem) => {
+      if (item.dismissOnPress === false) {
+        item.onPress();
+        return;
+      }
+      dismissSheet();
+      item.onPress();
+    };
+
+    const sections: ActionSheetItem[][] = [];
+    for (const item of items) {
+      const current = sections[sections.length - 1];
+      if (current && current[0].group === item.group) {
+        current.push(item);
+      } else {
+        sections.push([item]);
+      }
+    }
+
+    return (
+      <BottomSheetModal
+        ref={modalRef}
+        enableDynamicSizing
+        maxDynamicContentSize={windowHeight * 0.8}
+        backdropComponent={renderBackdrop}
+        containerComponent={sheetContainer}
+        backgroundStyle={{
+          backgroundColor: surfaceBg,
+          ...(layout === 'grid'
+            ? { borderTopLeftRadius: 28, borderTopRightRadius: 28 }
+            : {}),
+        }}
+        handleIndicatorStyle={{ backgroundColor: textMuted }}
+        onAnimate={handleAnimate}
+        onChange={handleChange}
+        onDismiss={handleDismiss}
+      >
+        <BottomSheetScrollView contentContainerClassName="pb-safe-or-5">
+          <View
+            className={
+              layout === 'grid'
+                ? 'px-5 pt-2 pb-4'
+                : 'px-4 py-4 border-b border-border-subtle'
+            }
+          >
+            <Text
+              numberOfLines={1}
+              accessibilityRole="header"
+              className={
+                layout === 'grid'
+                  ? 'text-xl font-semibold text-text-primary pr-12'
+                  : 'text-lg font-semibold text-center text-text-primary px-8'
+              }
+            >
+              {title}
+            </Text>
+            {layout === 'grid' && (
+              <Pressable
+                onPress={dismissSheet}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.close', {
+                  defaultValue: 'Close',
+                })}
+                className="absolute right-4 top-0 w-11 h-11 items-center justify-center rounded-full bg-raised"
+              >
+                <Icon name="close" size={20} color={textMuted} />
+              </Pressable>
+            )}
+            {onBack && (
+              <Pressable
+                onPress={onBack}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.back', { defaultValue: 'Back' })}
+                className="absolute left-2 top-0 bottom-0 justify-center px-2"
+              >
+                <Icon name="chevron-back" size={20} color={accentPrimary} />
+              </Pressable>
+            )}
+          </View>
+          {sections.map((section, sectionIndex) => (
+            <React.Fragment key={section[0].key}>
+              {sectionIndex > 0 && (
+                <View
+                  testID="action-sheet-group-spacer"
+                  className="h-3 bg-background"
+                />
+              )}
+              <View
+                className={
+                  layout === 'grid'
+                    ? 'flex-row flex-wrap gap-3 px-4 pt-2 pb-4'
+                    : undefined
+                }
+              >
+                {section.map((item) => (
+                  <Pressable
+                    key={item.key}
+                    testID={`action-sheet-item-${item.key}`}
+                    onPress={() => handleItemPress(item)}
+                    className={
+                      layout === 'grid'
+                        ? 'flex-1 items-center rounded-2xl bg-raised p-5'
+                        : 'px-4 py-3.5 border-b border-border-subtle'
+                    }
+                    style={({ pressed }) => ({
+                      ...(layout === 'grid'
+                        ? { flexBasis: '40%' }
+                        : { borderBottomWidth: StyleSheet.hairlineWidth }),
+                      opacity: pressed ? 0.65 : 1,
+                    })}
+                    accessibilityRole="button"
+                    // Screen readers announce the description with the label, so
+                    // the distinction is not sighted-only.
+                    accessibilityLabel={
+                      item.description
+                        ? `${item.label}. ${item.description}`
+                        : item.label
+                    }
+                  >
+                    {item.icon && (
+                      <View className="mb-3" accessible={false}>
+                        <Icon
+                          name={item.icon}
+                          size={layout === 'grid' ? 44 : 28}
+                          color={accentPrimary}
+                        />
+                      </View>
+                    )}
+                    <Text
+                      className={`${layout === 'grid' ? 'text-sm text-center' : 'text-base'} font-medium ${
+                        item.destructive
+                          ? 'text-text-danger-subtle'
+                          : 'text-text-primary'
+                      }`}
+                    >
+                      {item.label}
+                    </Text>
+                    {item.description ? (
+                      <Text className="text-sm text-text-muted mt-0.5">
+                        {item.description}
+                      </Text>
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+            </React.Fragment>
+          ))}
+        </BottomSheetScrollView>
+      </BottomSheetModal>
+    );
+  }
+);
+
+ActionSheet.displayName = 'ActionSheet';
+
+export default ActionSheet;

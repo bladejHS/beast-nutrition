@@ -1,0 +1,1959 @@
+import AllergenWarning from '../components/AllergenWarning';
+import BarcodeSources from '../components/BarcodeSources';
+import React, {
+  useState,
+  useRef,
+  useMemo,
+  useEffect,
+  useCallback,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import { formatLocalizedNumber } from '../localization';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import Toast from 'react-native-toast-message';
+import { StackActions } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCSSVariable } from 'uniwind';
+import { useQuery } from '@tanstack/react-query';
+import Icon from '../components/Icon';
+import StepperInput from '../components/StepperInput';
+import MarkdownNotesField from '../components/MarkdownNotesField';
+import { NoteMarkdown } from '../components/NoteMarkdown';
+import { usableFoodImages } from '../utils/foodImages';
+import BottomSheetPicker from '../components/BottomSheetPicker';
+import {
+  FoodNutritionHeader,
+  FoodNutrientBreakdown,
+} from '../components/FoodNutritionSummary';
+import { fetchDailyGoals } from '../services/api/goalsApi';
+import { setPendingMealIngredientSelection } from '../services/mealBuilderSelection';
+import {
+  buildMealPlanFoodAssignment,
+  buildMealPlanMealAssignment,
+  setPendingMealPlanSelection,
+} from '../services/mealPlanSelection';
+import { setPendingContainerLinkSelection } from '../services/waterContainerLinkSelection';
+import { CreateFoodEntryPayload } from '../services/api/foodEntriesApi';
+import { addDays, getTodayDate, getDeviceTimezone } from '../utils/dateUtils';
+import { useDiaryDateStore } from '../stores/diaryDateStore';
+import { prefillEntryTime, userHourMinute } from '@workspace/shared';
+import TimeSheet, { type TimeSheetRef } from '../components/TimeSheet';
+import { formatTimeLabel } from '../utils/entryTimeDisplay';
+import { getMealTypeDisplayLabel } from '../utils/mealNutrition';
+import { goalsQueryKey } from '../hooks/queryKeys';
+import {
+  useFavorites,
+  useMealTypes,
+  usePreferences,
+  useServerConnection,
+  useToggleFavorite,
+} from '../hooks';
+import type { FoodItem } from '../types/foods';
+import { useScreenHeader } from '../hooks/useScreenHeader';
+import { getNetCarbsValue } from '../utils/nutrientUtils';
+import {
+  useCreateFoodVariant,
+  useFoodVariants,
+} from '../hooks/useFoodVariants';
+import { useSaveFood } from '../hooks/useSaveFood';
+import { useAddFoodEntry } from '../hooks/useAddFoodEntry';
+import { useAddFoodEntryMeal } from '../hooks/useAddFoodEntryMeal';
+import type { FoodEntryMealCreateData } from '../types/foodEntryMeals';
+import CalendarSheet, {
+  type CalendarSheetRef,
+} from '../components/CalendarSheet';
+import DateSelectRow from '../components/DateSelectRow';
+import { FooterSaveBar } from '../components/FormScreenChrome';
+import type { FoodFormData } from '../components/FoodForm';
+import type { Meal, MealIngredientDraft } from '../types/meals';
+import type {
+  EquivalentUnit,
+  FoodUnitSelectionResult,
+  FoodUnitVariant,
+} from '../types/foodUnitVariants';
+import {
+  createFoodVariant,
+  type CreateFoodVariantPayload,
+} from '../services/api/foodsApi';
+import {
+  type FoodInfoItem,
+  foodItemToFoodInfo,
+  toFormString,
+  parseOptional,
+} from '../types/foodInfo';
+import type { RootStackScreenProps } from '../types/navigation';
+import {
+  buildCreateFoodVariantInput,
+  buildCreateFoodVariantPayload,
+  buildExternalUnitVariants,
+  buildExternalVariantOptions,
+  buildLocalUnitVariants,
+  buildLocalVariantOptions,
+  convertEquivalentVariantQuantity,
+  foodInfoToUnitVariant,
+  formatQuantityUnitLabel,
+  formatServingSizeDisplay,
+  formatVariantLabel,
+  formatVariantServingLabel,
+  resolveFoodDisplayValues,
+  resolveLocalPickerVariantId,
+  toPersistedServingUnit,
+  unitVariantToDisplayValues,
+  type FoodDisplayValues,
+  nextQuantity,
+} from '../utils/foodDetails';
+import { buildMealIngredientDraft } from '../utils/mealBuilderDraft';
+import { persistExternalVariants } from '../utils/persistExternalVariants';
+import { DECIMAL_INPUT_REGEX, parseDecimalInput } from '../utils/numericInput';
+
+type FoodEntryAddScreenProps = RootStackScreenProps<'FoodEntryAdd'>;
+const EXTERNAL_DRAFT_VARIANT_ID = '__draft-external-unit__';
+// Sentinel written by FoodForm for AI-converted draft units; never a real DB ID.
+const FORM_DRAFT_UNIT_ID = '__food-form-draft-unit__';
+
+const NUTRITION_FIELDS = [
+  'fiber',
+  'saturatedFat',
+  'sodium',
+  'sugars',
+  'transFat',
+  'potassium',
+  'calcium',
+  'iron',
+  'caffeineMg',
+  'waterMl',
+  'alcoholG',
+  'cholesterol',
+  'vitaminA',
+  'vitaminC',
+] as const;
+
+function toFiniteNumber(value: unknown, fallback: number): number {
+  const numericValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function toOptionalFiniteNumber(
+  value: unknown,
+  fallback: number | undefined
+): number | undefined {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const numericValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function toNonEmptyString(value: unknown, fallback: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed ? trimmed : fallback;
+}
+
+function mergeVariantDisplayValues(
+  variant: Partial<FoodUnitVariant> | null | undefined,
+  fallback: FoodDisplayValues
+): FoodDisplayValues {
+  const mergedValues: FoodDisplayValues = {
+    servingSize: toFiniteNumber(variant?.serving_size, fallback.servingSize),
+    servingUnit: toNonEmptyString(variant?.serving_unit, fallback.servingUnit),
+    calories: toFiniteNumber(variant?.calories, fallback.calories),
+    protein: toFiniteNumber(variant?.protein, fallback.protein),
+    carbs: toFiniteNumber(variant?.carbs, fallback.carbs),
+    fat: toFiniteNumber(variant?.fat, fallback.fat),
+  };
+
+  for (const field of NUTRITION_FIELDS) {
+    const variantFieldKey =
+      field === 'fiber'
+        ? 'dietary_fiber'
+        : field === 'saturatedFat'
+          ? 'saturated_fat'
+          : field === 'transFat'
+            ? 'trans_fat'
+            : field === 'vitaminA'
+              ? 'vitamin_a'
+              : field === 'vitaminC'
+                ? 'vitamin_c'
+                : field;
+
+    mergedValues[field] = toOptionalFiniteNumber(
+      variant?.[variantFieldKey as keyof FoodUnitVariant],
+      fallback[field]
+    );
+  }
+
+  return mergedValues;
+}
+
+const FoodEntryAddScreen: React.FC<FoodEntryAddScreenProps> = ({
+  navigation,
+  route,
+}) => {
+  const { item, date: initialDate } = route.params;
+  const { t } = useTranslation();
+  const pickerMode = route.params?.pickerMode ?? 'log-entry';
+  const returnDepth = route.params?.returnDepth ?? 1;
+  const ingredientIndex = route.params?.ingredientIndex;
+  const isMealBuilderMode = pickerMode === 'meal-builder';
+  const isMealPlanMode = pickerMode === 'meal-plan';
+  const isContainerLinkMode = pickerMode === 'container-link';
+  const isSelectionMode =
+    isMealBuilderMode || isMealPlanMode || isContainerLinkMode;
+  const mealPlanTarget = route.params?.mealPlanTarget;
+  const [selectedDate, setSelectedDateState] = useState(
+    initialDate ?? useDiaryDateStore.getState().selectedDate
+  );
+  // Logging always targets the Dashboard/Diary date; changing it here should
+  // carry back so the other views stay on the same day, not just inherit it.
+  const setSelectedDate = useCallback((date: string) => {
+    setSelectedDateState(date);
+    useDiaryDateStore.getState().setSelectedDate(date);
+  }, []);
+  const calendarRef = useRef<CalendarSheetRef>(null);
+  const timeSheetRef = useRef<TimeSheetRef>(null);
+  const { mealTypes, defaultMealTypeId } = useMealTypes();
+  const { isConnected } = useServerConnection();
+  const { preferences } = usePreferences({ enabled: isConnected });
+  const showNetCarbs = preferences?.show_net_carbs === true;
+  const [selectedMealId, setSelectedMealId] = useState<string | undefined>(
+    route.params?.mealTypeId
+  );
+  // When editing an existing meal ingredient, pre-populate adjustedValues from
+  // the ingredient's stored nutrition snapshot so the form shows the actual
+  // saved values, not the API variant which may differ.
+  const [adjustedValues, setAdjustedValues] = useState<FoodFormData | null>(
+    () => {
+      if (ingredientIndex === undefined) return null;
+      return {
+        name: item.name,
+        brand: item.brand ?? '',
+        // A meal ingredient carries a nutrition snapshot, not a note; the note
+        // belongs to the food and to the diary entry, not to this row.
+        notes: '',
+        servingSize: item.servingSize != null ? String(item.servingSize) : '',
+        servingUnit: item.servingUnit,
+        calories: item.calories != null ? String(item.calories) : '',
+        protein: item.protein != null ? String(item.protein) : '',
+        carbs: item.carbs != null ? String(item.carbs) : '',
+        fat: item.fat != null ? String(item.fat) : '',
+        fiber: toFormString(item.fiber),
+        saturatedFat: toFormString(item.saturatedFat),
+        transFat: toFormString(item.transFat),
+        sodium: toFormString(item.sodium),
+        sugars: toFormString(item.sugars),
+        potassium: toFormString(item.potassium),
+        cholesterol: toFormString(item.cholesterol),
+        calcium: toFormString(item.calcium),
+        iron: toFormString(item.iron),
+        vitaminA: toFormString(item.vitaminA),
+        vitaminC: toFormString(item.vitaminC),
+        caffeineMg: toFormString(item.caffeineMg),
+        waterMl: toFormString(item.waterMl),
+        alcoholG: toFormString(item.alcoholG),
+      };
+    }
+  );
+  // Custom-nutrient overrides returned from the adjust screen. `undefined`
+  // means "not adjusted" (fall back to the variant/item snapshot).
+  const [adjustedCustomNutrients, setAdjustedCustomNutrients] = useState<
+    Record<string, string | number> | null | undefined
+  >(undefined);
+  const [savedFoodOverride, setSavedFoodOverride] =
+    useState<FoodInfoItem | null>(null);
+  const [selectedVariantOverride, setSelectedVariantOverride] =
+    useState<FoodUnitVariant | null>(
+      route.params?.selectedVariantOverride ?? null
+    );
+  const activeItem = savedFoodOverride ?? item;
+  const effectiveMealId = selectedMealId ?? defaultMealTypeId;
+  const selectedMealType = mealTypes.find((mt) => mt.id === effectiveMealId);
+
+  const [entryTime, setEntryTime] = useState(route.params.entryTime ?? '');
+  // The note for THIS diary entry. The food's own note is shown read-only
+  // beside it and is never copied in.
+  const [entryNotes, setEntryNotes] = useState(route.params.entryNotes ?? '');
+  const entryTimeTouched = useRef(route.params.entryTime !== undefined);
+  useEffect(() => {
+    if (entryTimeTouched.current) return;
+    setEntryTime(
+      prefillEntryTime({
+        defaultTime: selectedMealType?.default_time,
+        isToday: selectedDate === getTodayDate(),
+        tz: getDeviceTimezone(),
+      })
+    );
+  }, [selectedDate, selectedMealType?.default_time]);
+  const handleSelectEntryTime = (time: string) => {
+    entryTimeTouched.current = true;
+    setEntryTime(time);
+  };
+  const handleSetEntryTimeNow = () => {
+    const { hour, minute } = userHourMinute(getDeviceTimezone());
+    handleSelectEntryTime(
+      `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    );
+  };
+
+  const isLocalFood = activeItem.source === 'local';
+  const hasExternalVariants = !!(
+    activeItem.externalVariants && activeItem.externalVariants.length >= 1
+  );
+  const [selectedVariantId, setSelectedVariantId] = useState<
+    string | undefined
+  >(hasExternalVariants ? (item.variantId ?? 'ext-0') : item.variantId);
+
+  const { variants } = useFoodVariants(activeItem.id, { enabled: isLocalFood });
+  const { createVariant, isPending: isCreateVariantPending } =
+    useCreateFoodVariant();
+
+  const localVariantOptions = useMemo(
+    () => buildLocalVariantOptions(variants),
+    [variants]
+  );
+  const localUnitVariants = useMemo(
+    () => buildLocalUnitVariants(variants),
+    [variants]
+  );
+  const resolvedLocalPickerVariantId = useMemo(
+    () =>
+      isLocalFood && !selectedVariantOverride
+        ? resolveLocalPickerVariantId(variants, selectedVariantId)
+        : undefined,
+    [isLocalFood, selectedVariantId, selectedVariantOverride, variants]
+  );
+  const externalVariantOptions = useMemo(
+    () => buildExternalVariantOptions(activeItem.externalVariants),
+    [activeItem.externalVariants]
+  );
+  const externalUnitVariants = useMemo(
+    () => buildExternalUnitVariants(activeItem.externalVariants),
+    [activeItem.externalVariants]
+  );
+  const activeItemVariant = useMemo(
+    () => foodInfoToUnitVariant(activeItem),
+    [activeItem]
+  );
+
+  const selectorVariants = useMemo(() => {
+    if (isLocalFood) {
+      const currentVariant =
+        selectedVariantId &&
+        !localUnitVariants.some((variant) => variant.id === selectedVariantId)
+          ? {
+              ...activeItemVariant,
+              id: selectedVariantId,
+            }
+          : null;
+      const loadedVariants =
+        selectedVariantOverride?.id &&
+        !localUnitVariants.some(
+          (variant) => variant.id === selectedVariantOverride.id
+        )
+          ? [selectedVariantOverride, ...localUnitVariants]
+          : currentVariant
+            ? [currentVariant, ...localUnitVariants]
+            : localUnitVariants;
+
+      return loadedVariants.length > 0 ? loadedVariants : [activeItemVariant];
+    }
+
+    const loadedVariants =
+      selectedVariantOverride &&
+      !externalUnitVariants.some(
+        (variant) => variant.id === selectedVariantOverride.id
+      )
+        ? [selectedVariantOverride, ...externalUnitVariants]
+        : externalUnitVariants;
+
+    return loadedVariants.length > 0 ? loadedVariants : [activeItemVariant];
+  }, [
+    activeItemVariant,
+    externalUnitVariants,
+    isLocalFood,
+    localUnitVariants,
+    selectedVariantId,
+    selectedVariantOverride,
+  ]);
+
+  const variantPickerOptions = useMemo(() => {
+    const effectiveId =
+      isLocalFood && !selectedVariantOverride
+        ? (resolvedLocalPickerVariantId ?? selectedVariantId)
+        : selectedVariantId;
+    const baseOptions = isLocalFood
+      ? localVariantOptions
+      : externalVariantOptions;
+    if (
+      effectiveId &&
+      !baseOptions.some((variant) => variant.id === effectiveId)
+    ) {
+      const fallbackVariant: FoodDisplayValues =
+        selectedVariantOverride &&
+        selectedVariantOverride.id === selectedVariantId
+          ? unitVariantToDisplayValues(selectedVariantOverride)
+          : unitVariantToDisplayValues(activeItemVariant);
+
+      return [
+        {
+          id: selectedVariantId,
+          label: formatVariantLabel(fallbackVariant),
+          quantityUnitLabel: formatQuantityUnitLabel(fallbackVariant),
+          perServingLabel: formatVariantServingLabel(fallbackVariant),
+          ...fallbackVariant,
+        },
+        ...baseOptions,
+      ];
+    }
+
+    if (
+      !selectedVariantOverride?.id ||
+      selectedVariantOverride.id === EXTERNAL_DRAFT_VARIANT_ID
+    ) {
+      return baseOptions;
+    }
+
+    if (
+      baseOptions.some((variant) => variant.id === selectedVariantOverride.id)
+    ) {
+      return baseOptions;
+    }
+
+    return [
+      {
+        id: selectedVariantOverride.id,
+        label: formatVariantLabel(
+          unitVariantToDisplayValues(selectedVariantOverride)
+        ),
+        quantityUnitLabel: formatQuantityUnitLabel(
+          unitVariantToDisplayValues(selectedVariantOverride)
+        ),
+        perServingLabel: formatVariantServingLabel(
+          unitVariantToDisplayValues(selectedVariantOverride)
+        ),
+        ...unitVariantToDisplayValues(selectedVariantOverride),
+      },
+      ...baseOptions,
+    ];
+  }, [
+    activeItemVariant,
+    externalVariantOptions,
+    isLocalFood,
+    localVariantOptions,
+    resolvedLocalPickerVariantId,
+    selectedVariantId,
+    selectedVariantOverride,
+  ]);
+
+  const selectedUnitSelection = useMemo<
+    FoodUnitSelectionResult | undefined
+  >(() => {
+    if (selectedVariantOverride) {
+      return {
+        kind:
+          !selectedVariantOverride.id ||
+          selectedVariantOverride.id === EXTERNAL_DRAFT_VARIANT_ID ||
+          selectedVariantOverride.id === FORM_DRAFT_UNIT_ID
+            ? 'draft'
+            : 'existing',
+        variant: selectedVariantOverride,
+      };
+    }
+
+    const selectedVariant =
+      selectorVariants.find((variant) => variant.id === selectedVariantId) ??
+      null;
+    return selectedVariant
+      ? { kind: 'existing', variant: selectedVariant }
+      : undefined;
+  }, [selectedVariantId, selectedVariantOverride, selectorVariants]);
+
+  const selectedBaseVariant = useMemo(
+    () =>
+      resolveFoodDisplayValues({
+        item: activeItem,
+        selectedVariantId,
+        localVariantOptions,
+        externalVariantOptions,
+      }),
+    [activeItem, selectedVariantId, localVariantOptions, externalVariantOptions]
+  );
+
+  const activeVariant = useMemo(
+    () =>
+      selectedVariantOverride
+        ? unitVariantToDisplayValues(selectedVariantOverride)
+        : selectedBaseVariant,
+    [selectedBaseVariant, selectedVariantOverride]
+  );
+
+  const selectedCustomNutrients = useMemo(() => {
+    // Edits from the adjust screen take priority over the stored snapshot.
+    if (adjustedCustomNutrients !== undefined) {
+      return adjustedCustomNutrients;
+    }
+
+    if (selectedVariantOverride) {
+      return selectedVariantOverride.custom_nutrients ?? null;
+    }
+
+    if (isLocalFood && variants && selectedVariantId) {
+      const selectedVariant = variants.find(
+        (variant) => variant.id === selectedVariantId
+      );
+      if (selectedVariant) {
+        return selectedVariant.custom_nutrients ?? null;
+      }
+    }
+
+    if ((selectedVariantId ?? null) === (activeItem.variantId ?? null)) {
+      return activeItem.customNutrients ?? null;
+    }
+
+    return undefined;
+  }, [
+    adjustedCustomNutrients,
+    activeItem.customNutrients,
+    activeItem.variantId,
+    isLocalFood,
+    selectedVariantId,
+    selectedVariantOverride,
+    variants,
+  ]);
+
+  const displayValues = useMemo(() => {
+    if (!adjustedValues) return activeVariant;
+    return {
+      servingSize:
+        parseDecimalInput(adjustedValues.servingSize) ||
+        activeVariant.servingSize,
+      servingUnit: adjustedValues.servingUnit || activeVariant.servingUnit,
+      calories: parseDecimalInput(adjustedValues.calories) || 0,
+      protein: parseDecimalInput(adjustedValues.protein) || 0,
+      carbs: parseDecimalInput(adjustedValues.carbs) || 0,
+      fat: parseDecimalInput(adjustedValues.fat) || 0,
+      fiber: parseOptional(adjustedValues.fiber),
+      saturatedFat: parseOptional(adjustedValues.saturatedFat),
+      sodium: parseOptional(adjustedValues.sodium),
+      sugars: parseOptional(adjustedValues.sugars),
+      transFat: parseOptional(adjustedValues.transFat),
+      potassium: parseOptional(adjustedValues.potassium),
+      calcium: parseOptional(adjustedValues.calcium),
+      iron: parseOptional(adjustedValues.iron),
+      caffeineMg: parseOptional(adjustedValues.caffeineMg),
+      waterMl: parseOptional(adjustedValues.waterMl),
+      alcoholG: parseOptional(adjustedValues.alcoholG),
+      cholesterol: parseOptional(adjustedValues.cholesterol),
+      vitaminA: parseOptional(adjustedValues.vitaminA),
+      vitaminC: parseOptional(adjustedValues.vitaminC),
+    };
+  }, [adjustedValues, activeVariant]);
+
+  const labelLookupId = selectedVariantOverride
+    ? selectedVariantOverride.id
+    : selectedVariantId;
+  const matchedLabelOption = variantPickerOptions.find(
+    (option) => option.id === labelLookupId
+  );
+  const quantityUnitLabel =
+    matchedLabelOption?.quantityUnitLabel ??
+    formatQuantityUnitLabel(displayValues);
+  const perServingLabel =
+    matchedLabelOption?.perServingLabel ??
+    formatVariantServingLabel(displayValues);
+
+  const pendingVariantToPersist = useMemo<FoodUnitVariant | null>(() => {
+    if (!selectedVariantOverride) return null;
+
+    return {
+      ...selectedVariantOverride,
+      serving_size: displayValues.servingSize,
+      serving_unit: displayValues.servingUnit,
+      calories: displayValues.calories,
+      protein: displayValues.protein,
+      carbs: displayValues.carbs,
+      fat: displayValues.fat,
+      saturated_fat: displayValues.saturatedFat,
+      trans_fat: displayValues.transFat,
+      cholesterol: displayValues.cholesterol,
+      sodium: displayValues.sodium,
+      potassium: displayValues.potassium,
+      dietary_fiber: displayValues.fiber,
+      sugars: displayValues.sugars,
+      vitamin_a: displayValues.vitaminA,
+      vitamin_c: displayValues.vitaminC,
+      calcium: displayValues.calcium,
+      iron: displayValues.iron,
+      caffeine_mg: displayValues.caffeineMg,
+      water_ml: displayValues.waterMl,
+      alcohol_g: displayValues.alcoholG,
+    };
+  }, [displayValues, selectedVariantOverride]);
+
+  const saveFoodSourceValues = useMemo(() => {
+    if (activeItem.source === 'external' && pendingVariantToPersist) {
+      return selectedBaseVariant;
+    }
+    return displayValues;
+  }, [
+    activeItem.source,
+    displayValues,
+    pendingVariantToPersist,
+    selectedBaseVariant,
+  ]);
+
+  const initialQuantity = useMemo(() => {
+    if (
+      activeItem.source === 'local' &&
+      'quantity' in activeItem.originalItem &&
+      activeItem.originalItem.quantity != null
+    ) {
+      const originalQuantity = parseDecimalInput(
+        String(activeItem.originalItem.quantity)
+      );
+      if (originalQuantity && originalQuantity > 0) {
+        return originalQuantity;
+      }
+    }
+    return activeVariant.servingSize;
+  }, [activeItem, activeVariant.servingSize]);
+
+  const [quantityText, setQuantityText] = useState(String(initialQuantity));
+  const quantity = parseDecimalInput(quantityText) || 0;
+  const servings =
+    displayValues.servingSize > 0 ? quantity / displayValues.servingSize : 0;
+  const servingSizeRef = useRef(displayValues.servingSize);
+  const pendingEquivalentsRef = useRef<EquivalentUnit[] | null>(null);
+
+  const adjustedFromNav = route.params?.adjustedValues;
+  const adjustedUnitSelectionFromNav = route.params?.adjustedUnitSelection;
+  const adjustedCustomNutrientsFromNav = route.params?.adjustedCustomNutrients;
+  const pendingEquivalentsFromNav = route.params?.pendingEquivalents;
+  useEffect(() => {
+    servingSizeRef.current = displayValues.servingSize;
+  }, [displayValues.servingSize]);
+
+  useEffect(() => {
+    if (
+      !adjustedFromNav &&
+      !adjustedUnitSelectionFromNav &&
+      adjustedCustomNutrientsFromNav === undefined
+    ) {
+      return;
+    }
+
+    const previousServingSize = servingSizeRef.current;
+    const nextServingSize =
+      parseDecimalInput(adjustedFromNav?.servingSize ?? '') ||
+      adjustedUnitSelectionFromNav?.variant.serving_size ||
+      previousServingSize;
+
+    if (adjustedUnitSelectionFromNav) {
+      if (adjustedUnitSelectionFromNav.kind === 'draft') {
+        const draftVariant = {
+          ...adjustedUnitSelectionFromNav.variant,
+          id:
+            adjustedUnitSelectionFromNav.variant.id ??
+            EXTERNAL_DRAFT_VARIANT_ID,
+        };
+        setSelectedVariantOverride(draftVariant);
+        // selectedUnitSelection prefers selectedVariantOverride for UI/re-entry
+        // consistency. For local foods, preserve the real persisted
+        // selectedVariantId so save payloads use the real variant_id, not a
+        // draft ID that was never written to the database.
+        if (!isLocalFood) {
+          setSelectedVariantId(draftVariant.id);
+        }
+      } else {
+        const knownVariants = isLocalFood
+          ? localUnitVariants
+          : externalUnitVariants;
+        const isKnownVariant = knownVariants.some(
+          (variant) => variant.id === adjustedUnitSelectionFromNav.variant.id
+        );
+        setSelectedVariantOverride(
+          isKnownVariant ? null : adjustedUnitSelectionFromNav.variant
+        );
+        // For local foods, guard against draft sentinel IDs that were classified
+        // as 'existing' by the selectedUnitSelection memo (e.g. FORM_DRAFT_UNIT_ID
+        // from AI-converted units, which isn't EXTERNAL_DRAFT_VARIANT_ID so the
+        // memo assigns kind:'existing' even though it's never a real DB ID).
+        const isDraftSentinel =
+          adjustedUnitSelectionFromNav.variant.id ===
+            EXTERNAL_DRAFT_VARIANT_ID ||
+          adjustedUnitSelectionFromNav.variant.id === FORM_DRAFT_UNIT_ID;
+        if (
+          adjustedUnitSelectionFromNav.variant.id &&
+          !(isLocalFood && isDraftSentinel)
+        ) {
+          setSelectedVariantId(adjustedUnitSelectionFromNav.variant.id);
+        }
+      }
+    }
+
+    if (adjustedFromNav) {
+      setAdjustedValues(adjustedFromNav);
+    }
+
+    if (adjustedCustomNutrientsFromNav !== undefined) {
+      setAdjustedCustomNutrients(adjustedCustomNutrientsFromNav);
+    }
+
+    if (nextServingSize !== previousServingSize) {
+      setQuantityText(String(nextServingSize));
+    }
+
+    navigation.setParams({
+      adjustedValues: undefined,
+      adjustedUnitSelection: undefined,
+      adjustedCustomNutrients: undefined,
+    });
+  }, [
+    adjustedFromNav,
+    adjustedUnitSelectionFromNav,
+    adjustedCustomNutrientsFromNav,
+    externalUnitVariants,
+    isLocalFood,
+    localUnitVariants,
+    navigation,
+  ]);
+
+  useEffect(() => {
+    if (!pendingEquivalentsFromNav) return;
+    pendingEquivalentsRef.current = pendingEquivalentsFromNav;
+    navigation.setParams({ pendingEquivalents: undefined });
+  }, [pendingEquivalentsFromNav, navigation]);
+
+  useEffect(() => {
+    if (
+      resolvedLocalPickerVariantId &&
+      resolvedLocalPickerVariantId !== selectedVariantId
+    ) {
+      const selectedVariant = selectorVariants.find(
+        (variant) => variant.id === selectedVariantId
+      );
+      const resolvedVariant = localVariantOptions.find(
+        (variant) => variant.id === resolvedLocalPickerVariantId
+      );
+      const convertedQuantity = convertEquivalentVariantQuantity(
+        quantity,
+        selectedVariant?.serving_size,
+        resolvedVariant?.servingSize
+      );
+      setSelectedVariantId(resolvedLocalPickerVariantId);
+      if (convertedQuantity !== undefined) {
+        setQuantityText(formatServingSizeDisplay(convertedQuantity));
+      }
+      return;
+    }
+
+    if (!selectedVariantId) {
+      const firstVariant =
+        localVariantOptions[0] ?? externalVariantOptions[0] ?? null;
+      if (firstVariant) {
+        setSelectedVariantId(firstVariant.id);
+        setQuantityText(String(firstVariant.servingSize));
+      }
+    }
+  }, [
+    externalVariantOptions,
+    localVariantOptions,
+    quantity,
+    resolvedLocalPickerVariantId,
+    selectedVariantId,
+    selectorVariants,
+  ]);
+
+  const handleVariantChange = useCallback(
+    (variantId: string) => {
+      setSelectedVariantId(variantId);
+      setSelectedVariantOverride(null);
+      setAdjustedValues(null);
+
+      const localVariant = localVariantOptions.find(
+        (variant) => variant.id === variantId
+      );
+      if (localVariant) {
+        setQuantityText(String(localVariant.servingSize));
+        return;
+      }
+
+      const externalVariant = externalVariantOptions.find(
+        (variant) => variant.id === variantId
+      );
+      if (externalVariant) {
+        setQuantityText(String(externalVariant.servingSize));
+      }
+    },
+    [externalVariantOptions, localVariantOptions]
+  );
+
+  const updateQuantityText = (text: string) => {
+    if (DECIMAL_INPUT_REGEX.test(text)) {
+      setQuantityText(text);
+    }
+  };
+
+  const clampQuantity = () => {
+    if (quantity <= 0) {
+      const minQuantity = displayValues.servingSize * 0.5 || 1;
+      setQuantityText(String(minQuantity));
+    }
+  };
+
+  const adjustQuantity = (delta: number) => {
+    setQuantityText(
+      String(nextQuantity(quantity, delta, displayValues.servingSize))
+    );
+  };
+
+  const scaled = (value: number) => value * servings;
+
+  const insets = useSafeAreaInsets();
+  const [accentColor, textPrimary] = useCSSVariable([
+    '--color-accent-primary',
+    '--color-text-primary',
+  ]) as [string, string];
+
+  const buildSaveFoodPayload = useCallback(() => {
+    return {
+      name: adjustedValues?.name || activeItem.name,
+      brand: adjustedValues?.brand ?? activeItem.brand ?? null,
+      barcode: activeItem.barcode ?? null,
+      provider_type: activeItem.provider_type ?? null,
+      provider_external_id: activeItem.provider_external_id ?? null,
+      provider_verified: activeItem.provider_verified === true,
+      is_custom: activeItem.is_custom ?? true,
+      serving_size: saveFoodSourceValues.servingSize,
+      serving_unit: toPersistedServingUnit({
+        serving_size: saveFoodSourceValues.servingSize,
+        serving_unit: saveFoodSourceValues.servingUnit,
+        serving_description: saveFoodSourceValues.servingDescription,
+      }),
+      calories: saveFoodSourceValues.calories,
+      protein: saveFoodSourceValues.protein,
+      carbs: saveFoodSourceValues.carbs,
+      fat: saveFoodSourceValues.fat,
+      dietary_fiber: saveFoodSourceValues.fiber,
+      saturated_fat: saveFoodSourceValues.saturatedFat,
+      sodium: saveFoodSourceValues.sodium,
+      sugars: saveFoodSourceValues.sugars,
+      trans_fat: saveFoodSourceValues.transFat,
+      potassium: saveFoodSourceValues.potassium,
+      calcium: saveFoodSourceValues.calcium,
+      iron: saveFoodSourceValues.iron,
+      caffeine_mg: saveFoodSourceValues.caffeineMg,
+      water_ml: saveFoodSourceValues.waterMl,
+      alcohol_g: saveFoodSourceValues.alcoholG,
+      cholesterol: saveFoodSourceValues.cholesterol,
+      vitamin_a: saveFoodSourceValues.vitaminA,
+      vitamin_c: saveFoodSourceValues.vitaminC,
+      // Carry the provider photo through import. The server localizes remote
+      // URLs into /uploads after COMMIT; dropping these here is the exact
+      // hand-enumerated-payload trap called out in the food-provider-images
+      // developer doc.
+      images: activeItem.images ?? undefined,
+      image_url: activeItem.image_url ?? null,
+      image_source_url: activeItem.image_source_url ?? null,
+    };
+  }, [
+    activeItem.barcode,
+    activeItem.brand,
+    activeItem.is_custom,
+    activeItem.name,
+    activeItem.provider_external_id,
+    activeItem.provider_type,
+    activeItem.provider_verified,
+    activeItem.images,
+    activeItem.image_url,
+    activeItem.image_source_url,
+    adjustedValues,
+    saveFoodSourceValues,
+  ]);
+
+  const { saveFoodAsync, isPending: isSavePending } = useSaveFood();
+
+  const buildFoodEntryPayload = (): CreateFoodEntryPayload => {
+    const base = {
+      meal_type_id: effectiveMealId!,
+      quantity,
+      unit: displayValues.servingUnit,
+      entry_date: selectedDate,
+      entry_time: entryTime || null,
+      notes: entryNotes.trim() || null,
+    };
+
+    switch (activeItem.source) {
+      case 'local':
+        if (!selectedVariantId)
+          throw new Error('Missing variant ID for local food');
+        if (adjustedValues) {
+          return {
+            ...base,
+            food_id: activeItem.id,
+            variant_id: selectedVariantId,
+            food_name: adjustedValues.name || activeItem.name,
+            brand_name: adjustedValues.brand ?? activeItem.brand,
+            serving_size: displayValues.servingSize,
+            serving_unit: displayValues.servingUnit,
+            calories: displayValues.calories,
+            protein: displayValues.protein,
+            carbs: displayValues.carbs,
+            fat: displayValues.fat,
+            dietary_fiber: displayValues.fiber,
+            saturated_fat: displayValues.saturatedFat,
+            sodium: displayValues.sodium,
+            sugars: displayValues.sugars,
+            trans_fat: displayValues.transFat,
+            potassium: displayValues.potassium,
+            calcium: displayValues.calcium,
+            iron: displayValues.iron,
+            caffeine_mg: displayValues.caffeineMg,
+            water_ml: displayValues.waterMl,
+            alcohol_g: displayValues.alcoholG,
+            cholesterol: displayValues.cholesterol,
+            vitamin_a: displayValues.vitaminA,
+            vitamin_c: displayValues.vitaminC,
+            ...(selectedCustomNutrients !== undefined
+              ? { custom_nutrients: selectedCustomNutrients }
+              : {}),
+          };
+        }
+        return {
+          ...base,
+          food_id: activeItem.id,
+          variant_id: selectedVariantId,
+        };
+      case 'external':
+        return base;
+      case 'meal':
+        // Meal entries are dispatched via useAddFoodEntryMeal, not addEntry.
+        throw new Error('Meal entries must use buildFoodEntryMealPayload');
+    }
+  };
+
+  const buildFoodEntryMealPayload = (): FoodEntryMealCreateData => {
+    if (item.source !== 'meal') {
+      throw new Error('buildFoodEntryMealPayload called for non-meal item');
+    }
+    const mealTypeName = selectedMealType?.name ?? '';
+    return {
+      meal_template_id: item.id,
+      meal_type: mealTypeName,
+      meal_type_id: effectiveMealId ?? undefined,
+      entry_date: selectedDate,
+      entry_time: entryTime || null,
+      name: item.name,
+      // The note field is shown for meals too, so it has to travel with the
+      // meal payload — this builder is used instead of buildFoodEntryPayload
+      // when the item is a meal.
+      notes: entryNotes.trim() || null,
+      quantity,
+      unit: displayValues.servingUnit,
+    };
+  };
+
+  const {
+    addEntry,
+    addEntryAsync,
+    isPending: isAddPending,
+    invalidateCache,
+  } = useAddFoodEntry({
+    onSuccess: async (entry) => {
+      if (entry.food_id && pendingEquivalentsRef.current) {
+        const equivalents = pendingEquivalentsRef.current;
+        pendingEquivalentsRef.current = null;
+        try {
+          await Promise.all(
+            equivalents.map((eq) =>
+              createFoodVariant({
+                food_id: entry.food_id!,
+                serving_size: eq.serving_size,
+                serving_unit: eq.serving_unit,
+                calories: displayValues.calories,
+                protein: displayValues.protein,
+                carbs: displayValues.carbs,
+                fat: displayValues.fat,
+                dietary_fiber: displayValues.fiber,
+                saturated_fat: displayValues.saturatedFat,
+                sodium: displayValues.sodium,
+                sugars: displayValues.sugars,
+                trans_fat: displayValues.transFat,
+                potassium: displayValues.potassium,
+                calcium: displayValues.calcium,
+                iron: displayValues.iron,
+                caffeine_mg: displayValues.caffeineMg,
+                water_ml: displayValues.waterMl,
+                alcohol_g: displayValues.alcoholG,
+                cholesterol: displayValues.cholesterol,
+                vitamin_a: displayValues.vitaminA,
+                vitamin_c: displayValues.vitaminC,
+              } as CreateFoodVariantPayload)
+            )
+          );
+        } catch {
+          Toast.show({
+            type: 'error',
+            text1: t('foodEntryAdd.errors.equivalentsNotSaved', {
+              defaultValue: 'Some equivalent units could not be saved',
+            }),
+          });
+        }
+      }
+      invalidateCache(selectedDate);
+      // Log-entry adds normally return to the diary root. A returnDepth
+      // param (set when launched with a food-search basket in progress)
+      // pops back that many screens so the basket survives. Read the param
+      // directly — the `returnDepth` local above defaults to 1 for the
+      // picker-mode flows, and using it here would turn every plain add
+      // into a one-screen pop.
+      const logEntryReturnDepth = route.params?.returnDepth;
+      navigation.dispatch(
+        logEntryReturnDepth
+          ? StackActions.pop(logEntryReturnDepth)
+          : StackActions.popToTop()
+      );
+    },
+  });
+
+  const {
+    addMeal,
+    isPending: isAddMealPending,
+    invalidateCache: invalidateMealCache,
+  } = useAddFoodEntryMeal({
+    onSuccess: () => {
+      invalidateMealCache(selectedDate);
+      const mealReturnDepth = route.params?.returnDepth;
+      navigation.dispatch(
+        mealReturnDepth
+          ? StackActions.pop(mealReturnDepth)
+          : StackActions.popToTop()
+      );
+    },
+  });
+
+  const buildDraftFromCurrentValues = (
+    foodId: string,
+    variantId: string,
+    foodName: string,
+    brand?: string | null
+  ): MealIngredientDraft =>
+    buildMealIngredientDraft({
+      foodId,
+      variantId,
+      quantity,
+      unit: displayValues.servingUnit,
+      foodName,
+      brand,
+      values: displayValues,
+    });
+
+  const finishFoodSelection = (ingredient: MealIngredientDraft) => {
+    if (isContainerLinkMode) {
+      if (ingredient.food_id && ingredient.variant_id) {
+        setPendingContainerLinkSelection({
+          foodId: ingredient.food_id,
+          variantId: ingredient.variant_id,
+          foodName: ingredient.food_name ?? '',
+          // The quantity picked here is what one press of the container logs,
+          // so it has to travel back with the food rather than reset to 1.
+          quantity: ingredient.quantity,
+        });
+      }
+      navigation.dispatch(StackActions.pop(returnDepth));
+      return;
+    }
+    if (isMealPlanMode && mealPlanTarget) {
+      setPendingMealPlanSelection({
+        ...(mealPlanTarget.assignmentIndex === undefined
+          ? {}
+          : { assignmentIndex: mealPlanTarget.assignmentIndex }),
+        assignment: buildMealPlanFoodAssignment(
+          ingredient,
+          mealPlanTarget,
+          quantityText
+        ),
+      });
+    } else {
+      setPendingMealIngredientSelection({
+        ingredient,
+        ingredientIndex,
+      });
+    }
+    navigation.dispatch(StackActions.pop(returnDepth));
+  };
+
+  const handleSelectionAdd = async () => {
+    if (quantity <= 0) {
+      Toast.show({
+        type: 'error',
+        text1: t('foodEntryAdd.errors.invalidAmount', {
+          defaultValue: 'Invalid amount',
+        }),
+        text2: t('foodEntryAdd.errors.amountGreaterThanZero', {
+          defaultValue: 'Amount must be greater than zero.',
+        }),
+      });
+      return;
+    }
+    if (isMealPlanMode && !mealPlanTarget) {
+      Toast.show({
+        type: 'error',
+        text1: t('foodEntryAdd.errors.failedToAddFood', {
+          defaultValue: 'Failed to add food',
+        }),
+        text2: t('foodEntryAdd.errors.tryAgain', {
+          defaultValue: 'Please try again.',
+        }),
+      });
+      return;
+    }
+
+    switch (activeItem.source) {
+      case 'local': {
+        try {
+          const variantId = selectedVariantId ?? activeItem.variantId;
+          if (!variantId) {
+            throw new Error('Missing variant ID for local food');
+          }
+
+          finishFoodSelection(
+            buildDraftFromCurrentValues(
+              activeItem.id,
+              variantId,
+              adjustedValues?.name || activeItem.name,
+              adjustedValues?.brand ?? activeItem.brand
+            )
+          );
+        } catch {
+          Toast.show({
+            type: 'error',
+            text1: t('foodEntryAdd.errors.failedToAddFood', {
+              defaultValue: 'Failed to add food',
+            }),
+            text2: t('foodEntryAdd.errors.tryAgain', {
+              defaultValue: 'Please try again.',
+            }),
+          });
+        }
+        return;
+      }
+      case 'external': {
+        let savedFood;
+        try {
+          savedFood = await saveFoodAsync(buildSaveFoodPayload());
+        } catch {
+          return;
+        }
+
+        try {
+          if (pendingVariantToPersist) {
+            const createdVariant = await createVariant(
+              buildCreateFoodVariantPayload(
+                savedFood.id,
+                pendingVariantToPersist
+              )
+            );
+            const createdVariantValues = mergeVariantDisplayValues(
+              createdVariant,
+              unitVariantToDisplayValues(pendingVariantToPersist)
+            );
+            const createdVariantId = toNonEmptyString(createdVariant.id, '');
+
+            if (!createdVariantId) {
+              throw new Error('Server did not return a created variant ID');
+            }
+
+            await persistExternalVariants(
+              savedFood,
+              activeItem.externalVariants
+            );
+
+            finishFoodSelection(
+              buildMealIngredientDraft({
+                foodId: savedFood.id,
+                variantId: createdVariantId,
+                quantity,
+                unit: createdVariantValues.servingUnit,
+                foodName: adjustedValues?.name || activeItem.name,
+                brand: adjustedValues?.brand ?? activeItem.brand,
+                values: createdVariantValues,
+              })
+            );
+            return;
+          }
+
+          if (!savedFood.default_variant?.id) {
+            throw new Error(
+              'Server did not return a variant ID for the saved food'
+            );
+          }
+
+          await persistExternalVariants(savedFood, activeItem.externalVariants);
+
+          finishFoodSelection(
+            buildMealIngredientDraft({
+              foodId: savedFood.id,
+              variantId: savedFood.default_variant.id,
+              quantity,
+              unit: displayValues.servingUnit,
+              foodName: adjustedValues?.name || activeItem.name,
+              brand: adjustedValues?.brand ?? activeItem.brand,
+              values: displayValues,
+            })
+          );
+        } catch {
+          Toast.show({
+            type: 'error',
+            text1: t('foodEntryAdd.errors.failedToAddFood', {
+              defaultValue: 'Failed to add food',
+            }),
+            text2: t('foodEntryAdd.errors.tryAgain', {
+              defaultValue: 'Please try again.',
+            }),
+          });
+        }
+        return;
+      }
+      case 'meal':
+        if (isMealPlanMode && mealPlanTarget) {
+          setPendingMealPlanSelection({
+            ...(mealPlanTarget.assignmentIndex === undefined
+              ? {}
+              : { assignmentIndex: mealPlanTarget.assignmentIndex }),
+            assignment: buildMealPlanMealAssignment(
+              {
+                ...activeItem,
+                name: adjustedValues?.name || activeItem.name,
+                servingSize: displayValues.servingSize,
+                servingUnit: displayValues.servingUnit,
+                calories: displayValues.calories,
+                protein: displayValues.protein,
+                carbs: displayValues.carbs,
+                fat: displayValues.fat,
+              },
+              mealPlanTarget,
+              quantity,
+              quantityText
+            ),
+          });
+          navigation.dispatch(StackActions.pop(returnDepth));
+          return;
+        }
+        Toast.show({
+          type: 'error',
+          text1: t('foodEntryAdd.errors.mealsNotSupported', {
+            defaultValue: 'Meals not supported here',
+          }),
+          text2: t('foodEntryAdd.errors.selectFoodInstead', {
+            defaultValue: 'Select a food instead of another meal.',
+          }),
+        });
+        return;
+    }
+  };
+
+  const handleSaveExternalFood = async () => {
+    try {
+      const savedFood = await saveFoodAsync(buildSaveFoodPayload());
+      const savedFoodInfo = foodItemToFoodInfo(savedFood);
+      let nextVariantId = savedFoodInfo.variantId;
+      let nextVariantOverride: FoodUnitVariant | null = null;
+
+      if (pendingVariantToPersist) {
+        try {
+          const createdVariant = await createVariant(
+            buildCreateFoodVariantPayload(savedFood.id, pendingVariantToPersist)
+          );
+          nextVariantId = createdVariant.id;
+          nextVariantOverride = createdVariant;
+        } catch {
+          Toast.show({
+            type: 'error',
+            text1: t('foodEntryAdd.errors.savedFoodUnitFailed', {
+              defaultValue: 'Saved food, but not the new unit',
+            }),
+            text2: t('foodEntryAdd.errors.savedFoodUnitFailedDetails', {
+              defaultValue:
+                'You can still add the food, then try saving that unit again.',
+            }),
+          });
+        }
+      }
+
+      // Persist all external (Yazio) variants after initial save
+      await persistExternalVariants(savedFood, activeItem.externalVariants);
+
+      setSavedFoodOverride(savedFoodInfo);
+      setSelectedVariantOverride(nextVariantOverride);
+      setSelectedVariantId(nextVariantId);
+      setAdjustedValues(null);
+      setQuantityText(
+        String(nextVariantOverride?.serving_size ?? savedFoodInfo.servingSize)
+      );
+    } catch {
+      return;
+    }
+  };
+
+  const { data: goals, isLoading: isGoalsLoading } = useQuery({
+    queryKey: goalsQueryKey(selectedDate),
+    queryFn: () => fetchDailyGoals(selectedDate),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const goalPercent = (value: number, goalValue: number | undefined) => {
+    if (!goalValue || goalValue === 0) return null;
+    return Math.round((value / goalValue) * 100);
+  };
+
+  const carbsForGoal =
+    showNetCarbs && displayValues.fiber !== undefined
+      ? getNetCarbsValue(displayValues.carbs, displayValues.fiber)
+      : displayValues.carbs;
+  const calorieGoalPct = goalPercent(
+    scaled(displayValues.calories),
+    goals?.calories
+  );
+  const proteinGoalPct = goalPercent(
+    scaled(displayValues.protein),
+    goals?.protein
+  );
+  const carbsGoalPct = goalPercent(scaled(carbsForGoal), goals?.carbs);
+  const fatGoalPct = goalPercent(scaled(displayValues.fat), goals?.fat);
+
+  const mealPickerOptions = mealTypes.map((mealType) => ({
+    label: getMealTypeDisplayLabel(mealType, t),
+    value: mealType.id,
+  }));
+
+  const isActionPending =
+    isAddPending || isAddMealPending || isSavePending || isCreateVariantPending;
+
+  // Navigate to FoodForm in adjust-nutrition mode. Shared by the inline header
+  // edit button (Android) and the native header Edit item (iOS).
+  const handleAdjustNutrition = useCallback(() => {
+    // Build selectedUnitSelection from displayValues so FoodForm's
+    // variant-sync effect uses the current displayed nutrition rather
+    // than overwriting initialValues with DB variant defaults.
+    // Spread the existing variant's metadata (source, ai_confidence,
+    // custom_nutrients, etc.) then override only the nutrition fields
+    // with displayValues so FoodForm's variant-sync effect uses the
+    // current displayed nutrition, not DB variant defaults.
+    const displayVariant: FoodUnitVariant = {
+      ...(selectedUnitSelection?.variant ?? {}),
+      id: selectedUnitSelection?.variant.id,
+      serving_size: displayValues.servingSize,
+      serving_unit: displayValues.servingUnit,
+      calories: displayValues.calories,
+      protein: displayValues.protein,
+      carbs: displayValues.carbs,
+      fat: displayValues.fat,
+      dietary_fiber: displayValues.fiber,
+      saturated_fat: displayValues.saturatedFat,
+      sodium: displayValues.sodium,
+      sugars: displayValues.sugars,
+      trans_fat: displayValues.transFat,
+      potassium: displayValues.potassium,
+      calcium: displayValues.calcium,
+      iron: displayValues.iron,
+      caffeine_mg: displayValues.caffeineMg,
+      water_ml: displayValues.waterMl,
+      alcohol_g: displayValues.alcoholG,
+      cholesterol: displayValues.cholesterol,
+      vitamin_a: displayValues.vitaminA,
+      vitamin_c: displayValues.vitaminC,
+    };
+    const displayUnitSelection: FoodUnitSelectionResult | undefined =
+      selectedUnitSelection
+        ? { kind: selectedUnitSelection.kind, variant: displayVariant }
+        : undefined;
+    navigation.navigate('FoodForm', {
+      mode: 'adjust-entry-nutrition',
+      returnTo: 'FoodEntryAdd',
+      returnKey: route.key,
+      foodId: isLocalFood ? activeItem.id : undefined,
+      variantId: isLocalFood ? selectedVariantId : undefined,
+      customNutrients: isLocalFood
+        ? (selectedCustomNutrients ?? null)
+        : undefined,
+      availableUnitVariants: selectorVariants,
+      selectedUnitSelection: displayUnitSelection,
+      initialValues: {
+        name: adjustedValues?.name || activeItem.name,
+        brand: adjustedValues?.brand ?? activeItem.brand ?? '',
+        servingSize: String(displayValues.servingSize),
+        servingUnit: displayValues.servingUnit,
+        calories: String(displayValues.calories),
+        protein: String(displayValues.protein),
+        carbs: String(displayValues.carbs),
+        fat: String(displayValues.fat),
+        fiber: toFormString(displayValues.fiber),
+        saturatedFat: toFormString(displayValues.saturatedFat),
+        sodium: toFormString(displayValues.sodium),
+        sugars: toFormString(displayValues.sugars),
+        transFat: toFormString(displayValues.transFat),
+        potassium: toFormString(displayValues.potassium),
+        calcium: toFormString(displayValues.calcium),
+        iron: toFormString(displayValues.iron),
+        caffeineMg: toFormString(displayValues.caffeineMg),
+        waterMl: toFormString(displayValues.waterMl),
+        alcoholG: toFormString(displayValues.alcoholG),
+        cholesterol: toFormString(displayValues.cholesterol),
+        vitaminA: toFormString(displayValues.vitaminA),
+        vitaminC: toFormString(displayValues.vitaminC),
+      },
+    });
+  }, [
+    navigation,
+    route.key,
+    isLocalFood,
+    activeItem.id,
+    activeItem.name,
+    activeItem.brand,
+    selectedVariantId,
+    selectedCustomNutrients,
+    selectorVariants,
+    selectedUnitSelection,
+    adjustedValues,
+    displayValues,
+  ]);
+
+  const showHeaderActions = activeItem.source !== 'meal';
+  const showSaveExternalAction = activeItem.source === 'external';
+
+  // Favorites: persisted local foods and saved meals can be starred. External
+  // (unsaved) foods must be saved to the library first (via the bookmark
+  // action) before they gain a stable id to favorite.
+  const isMealItem = activeItem.source === 'meal';
+  const canFavorite = isLocalFood || isMealItem;
+  const { favoriteFoods, favoriteMeals } = useFavorites({
+    enabled: isConnected && canFavorite,
+  });
+  const isFavorite = useMemo(
+    () =>
+      isMealItem
+        ? favoriteMeals.some((m) => m.id === activeItem.id)
+        : favoriteFoods.some((f) => f.id === activeItem.id),
+    [isMealItem, favoriteMeals, favoriteFoods, activeItem.id]
+  );
+  const { toggleFavorite, isPending: isFavoritePending } = useToggleFavorite();
+  const handleToggleFavorite = useCallback(() => {
+    // originalItem is the source FoodItem/Meal, used for the optimistic insert.
+    if (isMealItem) {
+      toggleFavorite({
+        type: 'meal',
+        id: activeItem.id,
+        isFavorite,
+        meal: activeItem.originalItem as Meal,
+      });
+    } else {
+      toggleFavorite({
+        type: 'food',
+        id: activeItem.id,
+        isFavorite,
+        food: activeItem.originalItem as FoodItem,
+      });
+    }
+  }, [
+    isMealItem,
+    toggleFavorite,
+    activeItem.id,
+    activeItem.originalItem,
+    isFavorite,
+  ]);
+
+  // The food name lives in the body's nutrition summary, so the header title
+  // stays blank. The favorite star is accent-tinted (role:'primary') so it
+  // reads as a button; edit/save stay neutral. The sticky footer "Add Food"/
+  // "Add Meal" button remains this screen's main accent action.
+  const header = useScreenHeader({
+    nativeTitle: '',
+    left: {
+      kind: 'dismiss',
+      onPress: () => navigation.goBack(),
+      disabled: isActionPending,
+      identifier: 'food-entry-add-cancel',
+    },
+    // The star renders for any favoritable item (incl. meals, which suppress the
+    // edit/save actions); edit + save only render when showHeaderActions is true.
+    right:
+      canFavorite || showHeaderActions
+        ? [
+            ...(canFavorite
+              ? [
+                  {
+                    kind: 'icon',
+                    sfSymbol: isFavorite ? 'star.fill' : 'star',
+                    ionicon: isFavorite ? 'star' : 'star-outline',
+                    // Accent-tinted (role:'primary') so the star reads as a
+                    // tappable button rather than a neutral glyph.
+                    role: 'primary',
+                    // Also gated on the toggle's own mutation: onMutate flips the
+                    // cache optimistically, so a second tap before the first
+                    // settles sends the OPPOSITE operation. Two in-flight writes
+                    // can then land out of order and leave the server in the
+                    // state opposite the user's last tap.
+                    // Also disabled offline: the favorites query is gated on
+                    // isConnected, so a tap offline would fire a guaranteed-fail
+                    // request and surface an error toast.
+                    disabled:
+                      isActionPending || isFavoritePending || !isConnected,
+                    onPress: handleToggleFavorite,
+                    accessibilityLabel: isFavorite
+                      ? t('foodEntryAdd.actions.removeFavorite', {
+                          defaultValue: 'Remove from favorites',
+                        })
+                      : t('foodEntryAdd.actions.addFavorite', {
+                          defaultValue: 'Add to favorites',
+                        }),
+                    identifier: 'food-entry-add-favorite',
+                  } as const,
+                ]
+              : []),
+            ...(showHeaderActions
+              ? [
+                  {
+                    kind: 'icon',
+                    sfSymbol: 'pencil',
+                    ionicon: 'create-outline',
+                    role: 'secondary',
+                    disabled: isActionPending,
+                    onPress: handleAdjustNutrition,
+                    accessibilityLabel: t(
+                      'foodEntryAdd.actions.adjustNutrition',
+                      { defaultValue: 'Adjust nutrition' }
+                    ),
+                    identifier: 'food-entry-add-edit',
+                  } as const,
+                  ...(showSaveExternalAction
+                    ? [
+                        {
+                          kind: 'icon',
+                          sfSymbol: 'bookmark',
+                          ionicon: 'bookmark-outline',
+                          role: 'secondary',
+                          busy: isSavePending || isCreateVariantPending,
+                          disabled: isActionPending,
+                          onPress: () => void handleSaveExternalFood(),
+                          accessibilityLabel: t(
+                            'foodEntryAdd.actions.saveFood',
+                            { defaultValue: 'Save Food' }
+                          ),
+                          identifier: 'food-entry-add-save',
+                        } as const,
+                      ]
+                    : []),
+                ]
+              : []),
+          ]
+        : null,
+  });
+
+  return (
+    <View
+      className="flex-1 bg-background"
+      style={Platform.OS === 'android' ? { paddingTop: insets.top } : undefined}
+    >
+      {header}
+
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="px-4 pt-4 pb-4 gap-4"
+      >
+        <AllergenWarning
+          allergens={activeItem.allergens}
+          traces={activeItem.traces}
+        />
+
+        <FoodNutritionHeader
+          name={adjustedValues?.name || activeItem.name}
+          brand={adjustedValues?.brand ?? activeItem.brand}
+          values={displayValues}
+          servings={servings}
+          goalPercentages={{
+            calories: calorieGoalPct,
+            protein: proteinGoalPct,
+            carbs: carbsGoalPct,
+            fat: fatGoalPct,
+          }}
+          goalsLoading={isGoalsLoading}
+          showNetCarbs={showNetCarbs}
+          provider_verified={activeItem.provider_verified}
+        />
+
+        {route.params.barcodeLookup && (
+          <BarcodeSources
+            context={route.params.barcodeLookup}
+            disabled={isActionPending}
+            onSelect={(nextItem, barcodeLookup) => {
+              // A fresh route clears serving overrides and saved import identity.
+              // Keep the diary/selection destination and the user's entry fields.
+              navigation.replace('FoodEntryAdd', {
+                item: nextItem,
+                barcodeLookup,
+                date: selectedDate,
+                mealTypeId: effectiveMealId ?? undefined,
+                pickerMode: route.params.pickerMode,
+                returnDepth: route.params.returnDepth,
+                mealPlanTarget,
+                entryNotes,
+                entryTime: entryTimeTouched.current ? entryTime : undefined,
+              });
+            }}
+          />
+        )}
+
+        <View className="mt-2">
+          <View className="flex-row items-center">
+            <StepperInput
+              value={quantityText}
+              onChangeText={updateQuantityText}
+              onBlur={clampQuantity}
+              onDecrement={() => adjustQuantity(-1)}
+              onIncrement={() => adjustQuantity(1)}
+            />
+            {variantPickerOptions.length > 1 ? (
+              <BottomSheetPicker
+                value={selectedVariantId ?? variantPickerOptions[0]?.id ?? ''}
+                options={variantPickerOptions.map((variant) => ({
+                  label: variant.label,
+                  value: variant.id ?? '',
+                }))}
+                onSelect={handleVariantChange}
+                title={t('foodEntryAdd.pickers.selectServing', {
+                  defaultValue: 'Select Serving',
+                })}
+                renderTrigger={({ onPress }) => (
+                  <TouchableOpacity
+                    onPress={onPress}
+                    accessibilityRole="button"
+                    accessibilityLabel={t(
+                      'foodEntryAdd.pickers.selectServing',
+                      { defaultValue: 'Select Serving' }
+                    )}
+                    disabled={isCreateVariantPending}
+                    className="flex-1 flex-row items-center justify-between bg-raised border border-border-subtle rounded-lg px-3 py-3 ml-2 gap-2"
+                  >
+                    <Text className="text-text-primary text-base font-medium flex-1">
+                      {quantityUnitLabel}
+                    </Text>
+                    {isCreateVariantPending ? (
+                      <ActivityIndicator size="small" color={accentColor} />
+                    ) : (
+                      <Icon
+                        name="chevron-down"
+                        size={16}
+                        color={textPrimary}
+                        weight="medium"
+                      />
+                    )}
+                  </TouchableOpacity>
+                )}
+              />
+            ) : (
+              <Text className="text-text-primary text-base font-medium ml-2">
+                {quantityUnitLabel}
+              </Text>
+            )}
+          </View>
+          <View className="flex-row items-center mt-2">
+            <Text className="text-text-secondary text-sm">
+              {formatLocalizedNumber(servings, { maximumFractionDigits: 1 })}{' '}
+              {t('foodEntryAdd.labels.serving', {
+                defaultValue: 'servings',
+                defaultValue_one: 'serving',
+                defaultValue_other: 'servings',
+                count: servings,
+              })}
+            </Text>
+            {/* Suppress the redundant "X serving per serving" suffix when the
+                unit is already 'serving' \u2014 that would just say e.g.
+                "1 serving \u00b7 1 serving per serving". Keep it for ml/g/etc.
+                where "X ml per serving" is meaningful info. */}
+            {displayValues.servingUnit !== 'serving' &&
+              !displayValues.servingDescription
+                ?.toLowerCase()
+                .includes('serving') && (
+                <Text className="text-text-secondary text-sm">
+                  {' · '}
+                  {perServingLabel}{' '}
+                  {t('foodEntryAdd.labels.perServing', {
+                    defaultValue: 'per serving',
+                  })}
+                </Text>
+              )}
+            {/* Serving-unit meals: surface the meal's yield count as a
+                substitute for the suppressed "per serving" suffix above.
+                Singular meals (total_servings <= 1) don't need this \u2014 there's
+                no yield context to convey. */}
+            {displayValues.servingUnit === 'serving' &&
+              item.source === 'meal' &&
+              (item.mealTotalServings ?? 1) > 1 && (
+                <Text className="text-text-secondary text-sm">
+                  {' \u00b7 '}
+                  {t('foodEntryAdd.labels.mealMakes', {
+                    defaultValue: 'meal makes {{formattedCount}} servings',
+                    defaultValue_one: 'meal makes {{formattedCount}} serving',
+                    defaultValue_other:
+                      'meal makes {{formattedCount}} servings',
+                    count: item.mealTotalServings ?? 1,
+                    formattedCount: formatLocalizedNumber(
+                      item.mealTotalServings ?? 1,
+                      { maximumFractionDigits: 1 }
+                    ),
+                  })}
+                </Text>
+              )}
+          </View>
+        </View>
+
+        {!isSelectionMode ? (
+          <>
+            <View className="flex-row items-center mt-2">
+              <DateSelectRow
+                date={selectedDate}
+                onPress={() => calendarRef.current?.present()}
+              />
+
+              {selectedDate === getTodayDate() ? (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  className="flex-row items-center mx-4"
+                  onPress={() => setSelectedDate(addDays(getTodayDate(), -1))}
+                >
+                  <Text className="text-text-link text-sm font-medium mx-1.5">
+                    {t('foodEntryAdd.actions.useYesterday', {
+                      defaultValue: 'Use Yesterday',
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  className="flex-row items-center mx-4"
+                  onPress={() => setSelectedDate(getTodayDate())}
+                >
+                  <Text className="text-text-link text-sm font-medium mx-1.5">
+                    {t('foodEntryAdd.actions.useToday', {
+                      defaultValue: 'Use Today',
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            <View className="flex-row items-center mt-2">
+              <TouchableOpacity
+                onPress={() => timeSheetRef.current?.present()}
+                activeOpacity={0.7}
+                className="flex-row items-center"
+              >
+                <Text className="text-text-secondary text-base">
+                  {t('foodEntryAdd.labels.time', { defaultValue: 'Time' })}
+                </Text>
+                <Text className="text-text-primary text-base font-medium mx-1.5">
+                  {formatTimeLabel(entryTime, preferences?.time_format) ??
+                    t('foodEntryAdd.labels.none', { defaultValue: 'None' })}
+                </Text>
+                <Icon
+                  name="chevron-down"
+                  size={12}
+                  color={textPrimary}
+                  weight="medium"
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.7}
+                className="flex-row items-center mx-4"
+                onPress={handleSetEntryTimeNow}
+              >
+                <Text className="text-text-link text-sm font-medium mx-1.5">
+                  {t('foodEntryAdd.actions.now', { defaultValue: 'Now' })}
+                </Text>
+              </TouchableOpacity>
+
+              {entryTime !== '' && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  className="flex-row items-center"
+                  onPress={() => handleSelectEntryTime('')}
+                >
+                  <Text className="text-text-link text-sm font-medium mx-1.5">
+                    {t('foodEntryAdd.actions.clear', { defaultValue: 'Clear' })}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {selectedMealType ? (
+              <View className="flex-row items-center mt-2">
+                <Text className="text-text-secondary text-base">
+                  {t('foodEntryAdd.labels.meal', { defaultValue: 'Meal' })}
+                </Text>
+                <BottomSheetPicker
+                  value={effectiveMealId!}
+                  options={mealPickerOptions}
+                  onSelect={setSelectedMealId}
+                  title={t('foodEntryAdd.pickers.selectMeal', {
+                    defaultValue: 'Select Meal',
+                  })}
+                  renderTrigger={({ onPress }) => (
+                    <TouchableOpacity
+                      onPress={onPress}
+                      activeOpacity={0.7}
+                      className="flex-row items-center"
+                    >
+                      <Text className="text-text-primary text-base font-medium mx-1.5">
+                        {getMealTypeDisplayLabel(selectedMealType, t)}
+                      </Text>
+                      <Icon
+                        name="chevron-down"
+                        size={12}
+                        color={textPrimary}
+                        weight="medium"
+                      />
+                    </TouchableOpacity>
+                  )}
+                />
+              </View>
+            ) : null}
+          </>
+        ) : null}
+
+        <FoodNutrientBreakdown
+          values={displayValues}
+          servings={servings}
+          showNetCarbs={showNetCarbs}
+          customNutrients={selectedCustomNutrients}
+        />
+
+        {/*
+          Notes sit below the nutrient breakdown on purpose: the numbers are
+          what this screen is opened to check, and a long recipe above them
+          would push them off-screen.
+        */}
+        {!isSelectionMode ? (
+          <>
+            {activeItem.notes ? (
+              <View className="mt-3">
+                <Text className="text-xs font-semibold uppercase text-text-muted mb-1">
+                  {t('foodEntryAdd.labels.aboutThisFood', {
+                    defaultValue: 'About this food',
+                  })}
+                </Text>
+                <View className="rounded-lg border border-border-subtle bg-raised px-3 py-2">
+                  <NoteMarkdown
+                    text={activeItem.notes}
+                    fontSize={14}
+                    images={usableFoodImages(activeItem.images)}
+                  />
+                </View>
+              </View>
+            ) : null}
+
+            <View className="mt-3">
+              <MarkdownNotesField
+                images={usableFoodImages(activeItem.images)}
+                value={entryNotes}
+                onCommit={setEntryNotes}
+                label={t('foodEntryAdd.labels.entryNotes', {
+                  defaultValue: 'Note for this entry',
+                })}
+                placeholder={t('foodEntryAdd.labels.entryNotesPlaceholder', {
+                  defaultValue: 'Anything specific about this time you ate it',
+                })}
+              />
+            </View>
+          </>
+        ) : null}
+      </ScrollView>
+
+      {/* Sticky footer */}
+      <FooterSaveBar
+        label={
+          activeItem.source === 'meal'
+            ? t('foodEntryAdd.actions.addMeal', { defaultValue: 'Add Meal' })
+            : t('foodEntryAdd.actions.addFood', { defaultValue: 'Add Food' })
+        }
+        busy={isActionPending}
+        disabled={
+          isActionPending ||
+          (!isSelectionMode && !effectiveMealId) ||
+          quantity <= 0
+        }
+        onPress={() => {
+          if (isSelectionMode) {
+            void handleSelectionAdd();
+            return;
+          }
+
+          if (!effectiveMealId) return;
+
+          if (activeItem.source === 'meal') {
+            addMeal(buildFoodEntryMealPayload());
+            return;
+          }
+          if (activeItem.source === 'external' && pendingVariantToPersist) {
+            void addEntryAsync({
+              saveFoodPayload: buildSaveFoodPayload(),
+              saveThenCreateVariantPayload: buildCreateFoodVariantInput(
+                pendingVariantToPersist
+              ),
+              ...(activeItem.externalVariants
+                ? { externalVariants: activeItem.externalVariants }
+                : {}),
+              createEntryPayload: buildFoodEntryPayload(),
+            }).catch(() => undefined);
+            return;
+          }
+
+          const saveFoodPayload =
+            activeItem.source === 'external'
+              ? buildSaveFoodPayload()
+              : undefined;
+          addEntry({
+            saveFoodPayload,
+            ...(activeItem.source === 'external'
+              ? { externalVariants: activeItem.externalVariants }
+              : {}),
+            createEntryPayload: buildFoodEntryPayload(),
+          });
+        }}
+      />
+
+      <CalendarSheet
+        ref={calendarRef}
+        selectedDate={selectedDate}
+        onSelectDate={setSelectedDate}
+      />
+      <TimeSheet
+        ref={timeSheetRef}
+        value={entryTime}
+        onSelectTime={handleSelectEntryTime}
+      />
+    </View>
+  );
+};
+
+export default FoodEntryAddScreen;

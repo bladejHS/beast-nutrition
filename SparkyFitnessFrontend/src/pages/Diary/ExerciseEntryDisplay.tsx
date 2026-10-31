@@ -1,0 +1,499 @@
+import type React from 'react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import { Edit, Trash2, Settings, Play, Link2 } from 'lucide-react';
+import { formatWeight } from '@/utils/numberFormatting';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import {
+  carryDistanceFromKm,
+  carryDistanceUnitLabel,
+  isAppLoggedWorkoutSource,
+} from '@workspace/shared';
+import { formatMinutesToHHMM } from '@/utils/timeFormatters';
+import { ExerciseEntry, Exercise } from '@/types/exercises';
+import {
+  resolveExerciseImageSrc,
+  filterValidExerciseImages,
+} from '@/utils/exercises';
+import {
+  EXERCISE_CATEGORY_META,
+  ExerciseCategory,
+} from '@/constants/exercises';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  entryCaloriesCounted,
+  resolveExerciseModality,
+  setsDurationMinutes,
+} from '@workspace/shared';
+import { formatTimeOfDayString } from '@/utils/timeFormatters';
+import { exerciseDisplayLabel } from '@/utils/exerciseDisplayLabels';
+import { localizeMuscle, localizeEquipment } from '@/utils/exerciseTaxonomy';
+
+import i18n from 'i18next';
+interface ExerciseEntryDisplayProps {
+  exerciseEntry: ExerciseEntry;
+  currentUserId: string | undefined;
+  handleEdit: (entry: ExerciseEntry) => void;
+  handleDelete: (entryId: string) => void;
+  handleEditExerciseDatabase: (exerciseId: string) => void;
+  /** Opens the dialog that links this workout to a synced one; omitted when the diary is read-only. */
+  onLink?: (entryId: string) => void;
+  setExerciseToPlay: (exercise: Exercise | null) => void;
+  setIsPlaybackModalOpen: (isOpen: boolean) => void;
+  energyUnit: 'kcal' | 'kJ';
+  convertEnergy: (
+    value: number,
+    fromUnit: 'kcal' | 'kJ',
+    toUnit: 'kcal' | 'kJ'
+  ) => number;
+  getEnergyUnitString: (unit: 'kcal' | 'kJ') => string;
+}
+
+// Source badge config
+const SOURCE_BADGES: Record<string, { label: string; className: string }> = {
+  wger: {
+    get label() {
+      return i18n.t('diary.exerciseEntryDisplay.wger', 'Wger');
+    },
+    className:
+      'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300',
+  },
+  'free-exercise-db': {
+    get label() {
+      return i18n.t('diary.exerciseEntryDisplay.freeDB', 'Free DB');
+    },
+    className:
+      'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300',
+  },
+  nutritionix: {
+    label: 'Nutritionix',
+    className:
+      'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
+  },
+};
+
+const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
+  exerciseEntry,
+  currentUserId,
+  handleEdit,
+  handleDelete,
+  handleEditExerciseDatabase,
+  onLink,
+  setExerciseToPlay,
+  setIsPlaybackModalOpen,
+  energyUnit,
+  convertEnergy,
+  getEnergyUnitString,
+}) => {
+  const { t } = useTranslation();
+  const { weightUnit, distanceUnit, convertDistance, timeFormat } =
+    usePreferences();
+  const snapshot = exerciseEntry.exercise_snapshot;
+
+  // Distances are stored in km; render in the user's display unit.
+  const formatDistance = (km: number) =>
+    `${convertDistance(km, 'km', distanceUnit).toFixed(2)} ${distanceUnit}`;
+
+  const [imageError, setImageError] = useState(false);
+  const sourceBadge = snapshot?.source
+    ? SOURCE_BADGES[snapshot.source]
+    : snapshot?.is_custom
+      ? {
+          label: t('exerciseCard.customSource', 'Custom'),
+          className:
+            'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300',
+        }
+      : null;
+
+  const isActiveCalories = snapshot?.name === 'Active Calories';
+  const entryModality = resolveExerciseModality(
+    snapshot?.modality,
+    snapshot?.category
+  );
+  const isTimed = entryModality === 'duration';
+
+  const formatSetDistance = (km: number) =>
+    entryModality === 'weight_distance'
+      ? `${Number(carryDistanceFromKm(km, distanceUnit).toFixed(1))} ${carryDistanceUnitLabel(distanceUnit)}`
+      : formatDistance(km);
+  // A bodyweight set's weight is added (+) or assisting (−).
+  const isBodyweight = entryModality === 'bodyweight_reps';
+
+  const setsDuration = setsDurationMinutes(exerciseEntry.sets);
+  // Sets carry their own timers (planks, holds, rest). When those sum to 0
+  // (e.g. pure rep-based sets synced from Hevy), fall back to the entry-level
+  // duration_minutes so the workout's session time still surfaces.
+  const durationDisplay = formatMinutesToHHMM(
+    setsDuration > 0 ? setsDuration : exerciseEntry.duration_minutes || 0
+  );
+
+  const caloriesDisplay = `${Math.round(convertEnergy(entryCaloriesCounted(exerciseEntry), 'kcal', energyUnit))} ${getEnergyUnitString(energyUnit)}`;
+
+  const hasSets =
+    exerciseEntry.sets &&
+    Array.isArray(exerciseEntry.sets) &&
+    exerciseEntry.sets.length > 0;
+
+  // resolveExerciseImageSrc (not an `exerciseEntry.source` branch) because the
+  // stored shape depends on the importer, not on whether a source is set — the
+  // old branch prefixed sourced entries that were already server-rooted and
+  // left bare relative paths from source-less entries unprefixed.
+  const snapshotImage = filterValidExerciseImages(snapshot?.images)[0];
+  // Trimmed rather than passed through resolveExerciseImageSrc: image_url is a
+  // user-set column that already holds a complete src, so resolving it would
+  // prefix a relative value that previously rendered as-is. Trimming only stops
+  // a whitespace-only value from counting as present and suppressing the
+  // snapshot fallback.
+  const entryImageUrl = exerciseEntry.image_url?.trim();
+  const imageUrl = entryImageUrl
+    ? entryImageUrl
+    : resolveExerciseImageSrc(snapshotImage) || null;
+
+  const metaPills: string[] = [];
+  if (snapshot?.level) metaPills.push(snapshot.level);
+  if (snapshot?.force) metaPills.push(snapshot.force);
+  if (snapshot?.mechanic) metaPills.push(snapshot.mechanic);
+  const meta =
+    EXERCISE_CATEGORY_META[snapshot?.category as ExerciseCategory] ??
+    EXERCISE_CATEGORY_META['general'];
+  const CategoryIcon = meta.icon;
+  return (
+    <div className="group flex gap-3 p-3 rounded-lg bg-white dark:bg-gray-800/80 border border-gray-100 dark:border-gray-700/60 hover:border-blue-200 dark:hover:border-blue-800 hover:shadow-sm transition-all duration-150">
+      {/* Optional thumbnail */}
+      {imageUrl && !imageError ? (
+        <Dialog>
+          <DialogTrigger asChild>
+            <button className="flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden cursor-pointer ring-1 ring-gray-200 dark:ring-gray-700 hover:ring-blue-400 transition-all">
+              <img
+                src={imageUrl}
+                alt={
+                  snapshot?.name
+                    ? exerciseDisplayLabel(
+                        snapshot.name,
+                        t,
+                        !snapshot.is_custom
+                      )
+                    : t('exerciseCard.title', 'Exercise')
+                }
+                onError={() => setImageError(true)}
+                className="w-full h-full object-cover"
+              />
+            </button>
+          </DialogTrigger>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>
+                {snapshot?.name
+                  ? exerciseDisplayLabel(snapshot.name, t, !snapshot.is_custom)
+                  : t('exerciseCard.exerciseImage', 'Exercise Image')}
+              </DialogTitle>
+              <DialogDescription>
+                {t(
+                  'exerciseCard.previewExerciseImage',
+                  'Preview of the exercise image.'
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <img
+              src={imageUrl}
+              alt={
+                snapshot?.name
+                  ? exerciseDisplayLabel(snapshot.name, t, !snapshot.is_custom)
+                  : t('exerciseCard.title', 'Exercise')
+              }
+              onError={() => setImageError(true)}
+              className="w-full h-auto object-contain"
+            />
+          </DialogContent>
+        </Dialog>
+      ) : (
+        <div
+          className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${meta.bg}`}
+        >
+          <CategoryIcon className={`w-4 h-4 ${meta.color}`} />
+        </div>
+      )}
+
+      {/* Main content */}
+      <div className="flex-1 min-w-0">
+        {/* Name row */}
+        <div className="flex items-center gap-1.5 flex-wrap mb-1">
+          <span className="font-semibold text-sm text-gray-800 dark:text-gray-100 leading-tight">
+            {snapshot?.name
+              ? exerciseDisplayLabel(snapshot.name, t, !snapshot.is_custom)
+              : t('exerciseCard.unknownExercise', 'Unknown Exercise')}
+          </span>
+          {exerciseEntry.entry_time && (
+            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full dark:bg-blue-900/30 dark:text-blue-300 font-medium">
+              {formatTimeOfDayString(exerciseEntry.entry_time, timeFormat)}
+            </span>
+          )}
+          {sourceBadge && (
+            <span
+              className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${sourceBadge.className}`}
+            >
+              {sourceBadge.label}
+            </span>
+          )}
+        </div>
+
+        {/* Stats row */}
+        <div className="flex items-center gap-2 flex-wrap text-xs text-gray-500 dark:text-gray-400 mb-1">
+          {isActiveCalories ? (
+            <span className="font-medium text-orange-600 dark:text-orange-400">
+              {t('exerciseCard.activeCaloriesValue', {
+                defaultValue: '{{calories}} active',
+                calories: caloriesDisplay,
+              })}
+            </span>
+          ) : (
+            <>
+              <span>{durationDisplay}</span>
+              {exerciseEntry.distance != null && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span>{formatDistance(exerciseEntry.distance)}</span>
+                </>
+              )}
+              {exerciseEntry.workout_effort != null && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span>
+                    {t('exerciseCard.effortValue', {
+                      defaultValue: 'Effort {{rating}}/10',
+                      rating: exerciseEntry.workout_effort,
+                    })}
+                  </span>
+                </>
+              )}
+              <span className="text-gray-300 dark:text-gray-600">·</span>
+              <span className="text-orange-600 dark:text-orange-400 font-medium">
+                {caloriesDisplay}
+              </span>
+              {hasSets && (
+                <>
+                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                  <span>
+                    {t('exerciseCard.setCount', {
+                      defaultValue: '{{count}} set',
+                      defaultValue_other: '{{count}} sets',
+                      count: exerciseEntry.sets!.length,
+                    })}
+                  </span>
+                </>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Sets detail chips */}
+        {hasSets && (
+          <div className="flex flex-wrap gap-1 mb-1.5">
+            {exerciseEntry.sets!.map((set, index) => {
+              const parts: string[] = [];
+              if (typeof set.reps === 'number' && Number.isFinite(set.reps))
+                parts.push(
+                  // Isometric sets predating the duration column stored their hold in `reps`.
+                  isTimed && set.duration == null
+                    ? t('exerciseCard.secondsShort', {
+                        defaultValue: '{{count}}s',
+                        count: set.reps,
+                      })
+                    : t('exerciseCard.repCount', {
+                        defaultValue: '{{count}} rep',
+                        defaultValue_other: '{{count}} reps',
+                        count: set.reps,
+                      })
+                );
+              if (set.weight && Number.isFinite(set.weight))
+                parts.push(
+                  isBodyweight && set.weight > 0
+                    ? `+${formatWeight(set.weight, weightUnit)}`
+                    : formatWeight(set.weight, weightUnit)
+                );
+              if (set.duration != null)
+                parts.push(
+                  t('exerciseCard.secondsShort', {
+                    defaultValue: '{{count}}s',
+                    count: set.duration,
+                  })
+                );
+              if (set.distance != null)
+                parts.push(formatSetDistance(set.distance));
+              if (Number.isFinite(set.rpe)) parts.push(`RPE ${set.rpe}`);
+              if (Number.isFinite(set.rir)) parts.push(`RIR ${set.rir}`);
+              if (parts.length === 0) return null;
+              return (
+                <span
+                  key={index}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 font-medium"
+                >
+                  {index + 1}: {parts.join(' · ')}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Meta pills: level / force / mechanic */}
+        {metaPills.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap mb-1">
+            {metaPills.map((pill) => (
+              <span
+                key={pill}
+                className="text-[10px] px-1.5 py-0.5 rounded-full border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 capitalize"
+              >
+                {t(`exerciseCard.meta.${pill}`, pill)}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Muscles */}
+        {snapshot?.primary_muscles && snapshot.primary_muscles.length > 0 && (
+          <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-snug">
+            <span className="font-medium text-gray-500 dark:text-gray-400">
+              {t('exerciseCard.primaryMuscles2', 'Primary Muscles:')}{' '}
+            </span>
+            {snapshot.primary_muscles
+              .map((m) => localizeMuscle(t, m))
+              .join(', ')}
+          </div>
+        )}
+        {snapshot?.secondary_muscles &&
+          snapshot.secondary_muscles.length > 0 && (
+            <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-snug">
+              <span className="font-medium text-gray-500 dark:text-gray-400">
+                {t('exerciseCard.secondaryMuscles2', 'Secondary Muscles:')}{' '}
+              </span>
+              {snapshot.secondary_muscles
+                .map((m) => localizeMuscle(t, m))
+                .join(', ')}
+            </div>
+          )}
+        {snapshot?.equipment && snapshot.equipment.length > 0 && (
+          <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-snug">
+            <span className="font-medium text-gray-500 dark:text-gray-400">
+              {t('exerciseCard.equipment2', 'Equipment:')}{' '}
+            </span>
+            {snapshot.equipment
+              .map((eq) => localizeEquipment(t, eq))
+              .join(', ')}
+          </div>
+        )}
+        {exerciseEntry.calorie_link_resolution && (
+          <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+            <Link2 className="w-3 h-3" />
+            {t('exercise.calorieLink.badge', 'Linked')}
+          </div>
+        )}
+        {exerciseEntry.notes && (
+          <div className="text-[10px] italic text-gray-400 dark:text-gray-500 mt-0.5">
+            {exerciseEntry.notes}
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons — visible on hover or always on mobile */}
+      <div className="flex-shrink-0 flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity duration-150 self-start pt-0.5">
+        {snapshot?.instructions && snapshot.instructions.length > 0 && (
+          <ActionButton
+            icon={<Play className="w-3.5 h-3.5" />}
+            label={t('exerciseCard.playInstructions', 'Play Instructions')}
+            onClick={() => {
+              setExerciseToPlay({
+                ...snapshot!,
+                // The snapshot keeps the instructions after the library
+                // exercise is deleted; the modal only uses the id to detect a
+                // change of subject, so the entry's own id identifies it.
+                id: snapshot!.id ?? exerciseEntry.id,
+              });
+              setIsPlaybackModalOpen(true);
+            }}
+            colorClass="hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50"
+          />
+        )}
+        {onLink &&
+          isAppLoggedWorkoutSource(exerciseEntry.source) &&
+          !exerciseEntry.exercise_preset_entry_id &&
+          !isActiveCalories && (
+            <ActionButton
+              icon={<Link2 className="w-3.5 h-3.5" />}
+              label={t('exercise.calorieLink.action', 'Link a synced workout')}
+              onClick={() => onLink(exerciseEntry.id)}
+              colorClass="hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50"
+            />
+          )}
+        <ActionButton
+          icon={<Edit className="w-3.5 h-3.5" />}
+          label={t('exerciseCard.editEntry', 'Edit Entry')}
+          onClick={() => handleEdit(exerciseEntry)}
+          colorClass="hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+        />
+        {/* Editing the library exercise needs a library exercise to edit. */}
+        {snapshot?.id &&
+          exerciseEntry.exercise_id &&
+          snapshot.user_id === currentUserId && (
+            <ActionButton
+              icon={<Settings className="w-3.5 h-3.5" />}
+              label={t(
+                'exerciseCard.editExerciseInDatabase',
+                'Edit Exercise in Database'
+              )}
+              onClick={() =>
+                handleEditExerciseDatabase(exerciseEntry.exercise_id!)
+              }
+              colorClass="hover:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700"
+            />
+          )}
+        <ActionButton
+          icon={<Trash2 className="w-3.5 h-3.5" />}
+          label={t('exerciseCard.deleteEntry', 'Delete Entry')}
+          onClick={() => handleDelete(exerciseEntry.id)}
+          colorClass="hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/50"
+        />
+      </div>
+    </div>
+  );
+};
+
+const ActionButton: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  colorClass: string;
+}> = ({ icon, label, onClick, colorClass }) => (
+  <TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClick}
+          className={`h-7 w-7 text-gray-400 transition-colors ${colorClass}`}
+        >
+          {icon}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{label}</p>
+      </TooltipContent>
+    </Tooltip>
+  </TooltipProvider>
+);
+
+export default ExerciseEntryDisplay;

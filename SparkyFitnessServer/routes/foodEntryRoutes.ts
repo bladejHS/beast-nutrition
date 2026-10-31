@@ -1,0 +1,1501 @@
+import express from 'express';
+import type { z } from 'zod';
+import { authenticate } from '../middleware/authMiddleware.js';
+import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import foodEntryService from '../services/foodEntryService.js';
+import { canAccessUserData } from '../utils/permissionUtils.js';
+import { clearUserTdeeCache } from '../services/AdaptiveTdeeService.js';
+import {
+  CopyReviewedFoodEntriesFromUserBodySchema,
+  CopySelectedFoodEntriesFromUserBodySchema,
+  CopyReviewedFoodEntriesToUserBodySchema,
+  CopySelectedFoodEntriesToUserBodySchema,
+  isEntryTimeString,
+} from '@workspace/shared';
+import {
+  uploadImages,
+  applyImageOrder,
+  parseImageOrder,
+  finalizeUploadedImages,
+  cleanupStagedImages,
+  removeOrphanedImages,
+  stagedFilesFrom,
+} from '../middleware/imageUpload.js';
+const router = express.Router();
+
+router.use(express.json());
+const actorScopedCopyPaths = new Set([
+  '/copy-reviewed-from-user',
+  '/copy-selected-from-user',
+  '/copy-reviewed-to-user',
+  '/copy-selected-to-user',
+]);
+const diaryPermissionMiddleware = checkPermissionMiddleware('diary');
+
+// Actor-scoped copies check the real actor's family grant and derive source and
+// target independently of an active family context. Other routes retain the
+// context-scoped diary middleware.
+router.use((req, res, next) => {
+  if (req.method === 'POST' && actorScopedCopyPaths.has(req.path)) {
+    next();
+    return;
+  }
+  diaryPermissionMiddleware(req, res, next);
+});
+
+function registerActorScopedCopyRoute<T extends { familyUserId: string }>(
+  path: string,
+  schema: z.ZodType<T>,
+  copyEntries: (actorUserId: string, body: T) => Promise<unknown>,
+  toFamily = false
+) {
+  router.post(path, authenticate, async (req, res, next) => {
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({
+        error: 'Invalid request',
+        details: parsed.error.flatten().fieldErrors,
+      });
+      return;
+    }
+    try {
+      const actorUserId =
+        req.originalUserId || req.authenticatedUserId || req.userId;
+      const copiedEntries = await copyEntries(actorUserId, parsed.data);
+      clearUserTdeeCache(toFamily ? parsed.data.familyUserId : actorUserId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      next(error);
+    }
+  });
+}
+
+/**
+ * @swagger
+ * /food-entries/export/csv:
+ *   get:
+ *     summary: Export all food entries as CSV
+ *     tags: [Nutrition & Meals]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: A CSV stream of all food entries
+ *         content:
+ *           text/csv:
+ *             schema:
+ *               type: string
+ */
+router.get(
+  '/export/csv',
+  authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res, next) => {
+    try {
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename="sparkyfitness_diary_export.csv"'
+      );
+
+      // Let the service handle the streaming to the response object
+      const delimiter =
+        typeof req.query.delimiter === 'string' ? req.query.delimiter : ';';
+      const locale =
+        typeof req.query.locale === 'string' ? req.query.locale : 'en';
+      await foodEntryService.exportAllDiaryEntriesToCSVStream(
+        req.userId,
+        res,
+        delimiter,
+        locale
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /food-entries/import-from-csv:
+ *   post:
+ *     summary: Import diary log entries from CSV
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Bulk-creates diary log entries (food_entries) from CSV rows, distinct
+ *       from /foods/import-from-csv which only imports food-library master
+ *       data. Unmatched foods are auto-created from the row's own nutrient
+ *       columns; a row with no match and no nutrients is a per-row error.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               entries:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *               scope:
+ *                 type: object
+ *                 properties:
+ *                   family:
+ *                     type: boolean
+ *                   public:
+ *                     type: boolean
+ *     responses:
+ *       200:
+ *         description: Per-row import results (processed/errors/skipped).
+ *       400:
+ *         description: Entries are required.
+ */
+router.post('/import-from-csv', authenticate, async (req, res, next) => {
+  // req.body is undefined for a non-JSON content-type; default to {} so a
+  // malformed request hits the 400 below instead of a raw destructure 500.
+  const { entries, scope, overrideNutrition } = req.body ?? {};
+  if (!entries || !Array.isArray(entries)) {
+    return res.status(400).json({ error: 'Entries are required.' });
+  }
+  try {
+    const result = await foodEntryService.importFoodDiaryEntriesInBulk(
+      req.userId,
+      req.authenticatedUserId || req.userId,
+      entries,
+      scope || {},
+      overrideNutrition === true
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * @swagger
+ * /food-entries:
+ *   post:
+ *     summary: Create a new food entry
+ *     tags: [Nutrition & Meals]
+ *     description: Adds a new food entry to the user's diary for a specific meal and date.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/FoodEntry'
+ *     responses:
+ *       201:
+ *         description: The food entry was created successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/FoodEntry'
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: User does not have permission to create a food entry.
+ */
+router.post(
+  '/',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    try {
+      // Check if creating for another user (explicitly requested)
+
+      const targetUserId = req.body.user_id || req.userId;
+
+      if (
+        req.body.entry_time !== null &&
+        req.body.entry_time !== undefined &&
+        !isEntryTimeString(req.body.entry_time)
+      ) {
+        return res.status(400).json({
+          error: 'entry_time must be in HH:MM (24h) format.',
+        });
+      }
+
+      if (req.body.user_id && req.body.user_id !== req.userId) {
+        const hasPermission = await { canAccessUserData }.canAccessUserData(
+          req.body.user_id,
+          'diary',
+
+          req.originalUserId || req.userId
+        );
+        if (!hasPermission) {
+          return res.status(403).json({
+            error:
+              'Forbidden: You do not have permission to manage diary for this user.',
+          });
+        }
+      }
+      const newEntry = await foodEntryService.createFoodEntry(
+        targetUserId,
+
+        req.originalUserId || req.userId,
+        req.body
+      );
+      clearUserTdeeCache(targetUserId);
+      res.status(201).json(newEntry);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy:
+ *   post:
+ *     summary: Copy food entries from one meal to another
+ *     tags: [Nutrition & Meals]
+ *     description: Copies all food entries from a source meal on a specific date to a target meal on another date.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - sourceDate
+ *               - sourceMealType
+ *               - targetDate
+ *               - targetMealType
+ *             properties:
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               sourceMealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: The food entries were copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: User does not have permission to copy food entries.
+ */
+router.post(
+  '/copy',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    try {
+      const { sourceDate, sourceMealType, targetDate, targetMealType } =
+        req.body;
+      if (!sourceDate || !sourceMealType || !targetDate || !targetMealType) {
+        return res.status(400).json({
+          error:
+            'sourceDate, sourceMealType, targetDate, and targetMealType are required.',
+        });
+      }
+      const copiedEntries = await foodEntryService.copyFoodEntries(
+        req.userId,
+
+        req.originalUserId || req.userId,
+        sourceDate,
+        sourceMealType,
+        targetDate,
+        targetMealType
+      );
+      clearUserTdeeCache(req.userId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy-from-user:
+ *   post:
+ *     summary: Copy food entries from a family member's diary to the active user's diary
+ *     tags: [Nutrition & Meals]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - sourceMealType
+ *               - targetDate
+ *               - targetMealType
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               sourceMealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Successfully copied entries
+ *       400:
+ *         description: Missing fields
+ *       403:
+ *         description: Forbidden
+ */
+router.post(
+  '/copy-from-user',
+  authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res, next) => {
+    try {
+      const {
+        familyUserId,
+        sourceDate,
+        sourceMealType,
+        targetDate,
+        targetMealType,
+      } = req.body;
+      if (
+        !familyUserId ||
+        !sourceDate ||
+        !sourceMealType ||
+        !targetDate ||
+        !targetMealType
+      ) {
+        return res.status(400).json({
+          error:
+            'familyUserId, sourceDate, sourceMealType, targetDate, and targetMealType are required.',
+        });
+      }
+      const copiedEntries = await foodEntryService.copyFoodEntriesFromUser(
+        req.userId,
+        req.originalUserId || req.userId,
+        familyUserId,
+        sourceDate,
+        sourceMealType,
+        targetDate,
+        targetMealType
+      );
+      clearUserTdeeCache(req.userId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy-reviewed-from-user:
+ *   post:
+ *     summary: Copy an unchanged reviewed family meal into the authenticated user's diary
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Preserves logged composite meal containers. The submitted entry IDs and
+ *       source fingerprints are an optimistic-concurrency snapshot; any added,
+ *       removed, or changed source row returns 409 and writes nothing.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             additionalProperties: false
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - sourceMealType
+ *               - targetDate
+ *               - targetMealType
+ *               - entries
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               sourceMealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *                 format: uuid
+ *               entries:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 100
+ *                 items:
+ *                   type: object
+ *                   additionalProperties: false
+ *                   required: [entryId, sourceFingerprint]
+ *                   properties:
+ *                     entryId:
+ *                       type: string
+ *                       format: uuid
+ *                     sourceFingerprint:
+ *                       type: string
+ *                       description: Exact reviewed source-row snapshot.
+ *     responses:
+ *       201:
+ *         description: The reviewed meal was copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: Forbidden.
+ *       409:
+ *         description: The reviewed source meal changed before it could be copied.
+ */
+registerActorScopedCopyRoute(
+  '/copy-reviewed-from-user',
+  CopyReviewedFoodEntriesFromUserBodySchema,
+  (actor, body) =>
+    foodEntryService.copyReviewedFoodEntriesFromUser(
+      actor,
+      actor,
+      body.familyUserId,
+      body.sourceDate,
+      body.sourceMealType,
+      body.targetDate,
+      body.targetMealType,
+      body.entries
+    )
+);
+/**
+ * @swagger
+ * /food-entries/copy-selected-from-user:
+ *   post:
+ *     summary: Copy selected food entries from a family member's diary
+ *     tags: [Nutrition & Meals]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             additionalProperties: false
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - targetDate
+ *               - targetMealType
+ *               - entries
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *                 format: uuid
+ *               entries:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 100
+ *                 items:
+ *                   type: object
+ *                   additionalProperties: false
+ *                   required: [entryId, quantity, sourceFingerprint]
+ *                   properties:
+ *                     entryId:
+ *                       type: string
+ *                       format: uuid
+ *                     quantity:
+ *                       type: number
+ *                       exclusiveMinimum: 0
+ *                     sourceFingerprint:
+ *                       type: string
+ *                       description: Exact reviewed source-row snapshot.
+ *     responses:
+ *       201:
+ *         description: The selected food entries were copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: Forbidden.
+ *       409:
+ *         description: A selected source entry changed after it was reviewed.
+ */
+registerActorScopedCopyRoute(
+  '/copy-selected-from-user',
+  CopySelectedFoodEntriesFromUserBodySchema,
+  (actor, body) =>
+    foodEntryService.copySelectedFoodEntriesFromUser(
+      actor,
+      actor,
+      body.familyUserId,
+      body.sourceDate,
+      body.targetDate,
+      body.targetMealType,
+      body.entries
+    )
+);
+/**
+ * @swagger
+ * /food-entries/copy-reviewed-to-user:
+ *   post:
+ *     summary: Copy the signed-in user's reviewed meal to a family member's diary
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Preserves logged composite meal containers. The submitted entry IDs and
+ *       source fingerprints are an optimistic-concurrency snapshot; any added,
+ *       removed, or changed source row returns 409 and writes nothing.
+ *       familyUserId selects the recipient; the source is always the actual
+ *       signed-in user, even while a different profile is active.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             additionalProperties: false
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - sourceMealType
+ *               - targetDate
+ *               - targetMealType
+ *               - entries
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               sourceMealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *                 format: uuid
+ *               entries:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 100
+ *                 items:
+ *                   type: object
+ *                   additionalProperties: false
+ *                   required: [entryId, sourceFingerprint]
+ *                   properties:
+ *                     entryId:
+ *                       type: string
+ *                       format: uuid
+ *                     sourceFingerprint:
+ *                       type: string
+ *                       description: Exact reviewed source-row snapshot.
+ *     responses:
+ *       201:
+ *         description: The reviewed meal was copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: Forbidden.
+ *       409:
+ *         description: The reviewed source meal changed before it could be copied.
+ */
+registerActorScopedCopyRoute(
+  '/copy-reviewed-to-user',
+  CopyReviewedFoodEntriesToUserBodySchema,
+  (actor, body) =>
+    foodEntryService.copyReviewedFoodEntriesToUser(
+      actor,
+      body.familyUserId,
+      body.sourceDate,
+      body.sourceMealType,
+      body.targetDate,
+      body.targetMealType,
+      body.entries
+    ),
+  true
+);
+/**
+ * @swagger
+ * /food-entries/copy-selected-to-user:
+ *   post:
+ *     summary: Copy selected food entries from the signed-in user's diary to a family member's diary
+ *     tags: [Nutrition & Meals]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             additionalProperties: false
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - targetDate
+ *               - targetMealType
+ *               - entries
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *                 format: uuid
+ *               entries:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 100
+ *                 items:
+ *                   type: object
+ *                   additionalProperties: false
+ *                   required: [entryId, quantity, sourceFingerprint]
+ *                   properties:
+ *                     entryId:
+ *                       type: string
+ *                       format: uuid
+ *                     quantity:
+ *                       type: number
+ *                       exclusiveMinimum: 0
+ *                     sourceFingerprint:
+ *                       type: string
+ *                       description: Exact reviewed source-row snapshot.
+ *     responses:
+ *       201:
+ *         description: The selected food entries were copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: Forbidden.
+ *       409:
+ *         description: A selected source entry changed after it was reviewed.
+ */
+registerActorScopedCopyRoute(
+  '/copy-selected-to-user',
+  CopySelectedFoodEntriesToUserBodySchema,
+  (actor, body) =>
+    foodEntryService.copySelectedFoodEntriesToUser(
+      actor,
+      body.familyUserId,
+      body.sourceDate,
+      body.targetDate,
+      body.targetMealType,
+      body.entries
+    ),
+  true
+);
+/**
+ * @swagger
+ * /food-entries/copy-to-user:
+ *   post:
+ *     summary: Copy food entries from the active user's diary to a family member's diary
+ *     tags: [Nutrition & Meals]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - familyUserId
+ *               - sourceDate
+ *               - sourceMealType
+ *               - targetDate
+ *               - targetMealType
+ *             properties:
+ *               familyUserId:
+ *                 type: string
+ *                 format: uuid
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               sourceMealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *               targetMealType:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Successfully copied entries
+ *       400:
+ *         description: Missing fields
+ *       403:
+ *         description: Forbidden
+ */
+router.post(
+  '/copy-to-user',
+  authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res, next) => {
+    try {
+      const {
+        familyUserId,
+        sourceDate,
+        sourceMealType,
+        targetDate,
+        targetMealType,
+      } = req.body;
+      if (
+        !familyUserId ||
+        !sourceDate ||
+        !sourceMealType ||
+        !targetDate ||
+        !targetMealType
+      ) {
+        return res.status(400).json({
+          error:
+            'familyUserId, sourceDate, sourceMealType, targetDate, and targetMealType are required.',
+        });
+      }
+      const copiedEntries = await foodEntryService.copyFoodEntriesToUser(
+        req.userId,
+        req.originalUserId || req.userId,
+        familyUserId,
+        sourceDate,
+        sourceMealType,
+        targetDate,
+        targetMealType
+      );
+      clearUserTdeeCache(familyUserId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy-yesterday:
+ *   post:
+ *     summary: Copy food entries from yesterday's meal
+ *     tags: [Nutrition & Meals]
+ *     description: Copies all food entries from a specific meal on the previous day to the same meal on a target date.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - mealType
+ *               - targetDate
+ *             properties:
+ *               mealType:
+ *                 type: string
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       201:
+ *         description: The food entries were copied successfully.
+ *       400:
+ *         description: Invalid request body.
+ *       403:
+ *         description: User does not have permission to copy food entries.
+ */
+router.post(
+  '/copy-yesterday',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    try {
+      const { mealType, targetDate } = req.body;
+      if (!mealType || !targetDate) {
+        return res
+          .status(400)
+          .json({ error: 'mealType and targetDate are required.' });
+      }
+      const copiedEntries = await foodEntryService.copyFoodEntriesFromYesterday(
+        req.userId,
+
+        req.originalUserId || req.userId,
+        mealType,
+        targetDate
+      );
+      clearUserTdeeCache(req.userId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy-all:
+ *   post:
+ *     summary: Copy all food entries from one day to another
+ *     tags: [Nutrition & Meals]
+ *     description: Copies every food entry across all meal slots from a source date to a target date.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - sourceDate
+ *               - targetDate
+ *             properties:
+ *               sourceDate:
+ *                 type: string
+ *                 format: date
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       201:
+ *         description: All food entries were copied successfully.
+ *       400:
+ *         description: sourceDate and targetDate are required.
+ *       403:
+ *         description: User does not have permission.
+ */
+router.post(
+  '/copy-all',
+  authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res, next) => {
+    try {
+      const { sourceDate, targetDate } = req.body;
+      if (!sourceDate || !targetDate) {
+        return res
+          .status(400)
+          .json({ error: 'sourceDate and targetDate are required.' });
+      }
+      const copiedEntries = await foodEntryService.copyAllFoodEntries(
+        req.userId,
+
+        req.originalUserId || req.userId,
+        sourceDate,
+        targetDate
+      );
+      clearUserTdeeCache(req.userId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/copy-all-yesterday:
+ *   post:
+ *     summary: Copy all food entries from yesterday
+ *     tags: [Nutrition & Meals]
+ *     description: Copies every food entry from the previous day to a target date.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - targetDate
+ *             properties:
+ *               targetDate:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       201:
+ *         description: All food entries were copied successfully.
+ *       400:
+ *         description: targetDate is required.
+ */
+router.post(
+  '/copy-all-yesterday',
+  authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res, next) => {
+    try {
+      const { targetDate } = req.body;
+      if (!targetDate) {
+        return res.status(400).json({ error: 'targetDate is required.' });
+      }
+      const copiedEntries =
+        await foodEntryService.copyAllFoodEntriesFromYesterday(
+          req.userId,
+
+          req.originalUserId || req.userId,
+          targetDate
+        );
+      clearUserTdeeCache(req.userId);
+      res.status(201).json(copiedEntries);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/{id}:
+ *   put:
+ *     summary: Update a food entry
+ *     tags: [Nutrition & Meals]
+ *     description: Updates an existing food entry with new information.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the food entry to update.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/FoodEntry'
+ *     responses:
+ *       200:
+ *         description: The food entry was updated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/FoodEntry'
+ *       400:
+ *         description: Invalid request body or food entry ID.
+ *       403:
+ *         description: User does not have permission to update this food entry.
+ *       404:
+ *         description: Food entry not found.
+ */
+router.put(
+  '/:id',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Food entry ID is required.' });
+    }
+    if (
+      req.body.entry_time !== null &&
+      req.body.entry_time !== undefined &&
+      !isEntryTimeString(req.body.entry_time)
+    ) {
+      return res.status(400).json({
+        error: 'entry_time must be in HH:MM (24h) format.',
+      });
+    }
+    try {
+      const updatedEntry = await foodEntryService.updateFoodEntry(
+        req.userId,
+
+        req.originalUserId || req.userId,
+        id,
+        req.body
+      );
+      clearUserTdeeCache(req.userId);
+      res.status(200).json(updatedEntry);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      if (
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        error.message.startsWith('Food entry not found')
+      ) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/{id}:
+ *   delete:
+ *     summary: Delete a food entry
+ *     tags: [Nutrition & Meals]
+ *     description: Deletes a food entry from the user's diary.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the food entry to delete.
+ *     responses:
+ *       200:
+ *         description: The food entry was deleted successfully.
+ *       400:
+ *         description: Invalid food entry ID.
+ *       403:
+ *         description: User does not have permission to delete this food entry.
+ *       404:
+ *         description: Food entry not found.
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Food entry ID is required.' });
+    }
+    try {
+      // @ts-expect-error TS(2339): Property 'userId' does not exist on type 'Request<... Remove this comment to see the full error message
+      await foodEntryService.deleteFoodEntry(req.userId, id, req.userId);
+      clearUserTdeeCache(req.userId);
+      res.status(200).json({ message: 'Food entry deleted successfully.' });
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      if (
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        error.message.startsWith('Food entry not found')
+      ) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries:
+ *   get:
+ *     summary: Get food entries by selected date
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves a list of all food entries for a specific date, passed as a query parameter.
+ *     parameters:
+ *       - in: query
+ *         name: selectedDate
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: The date to retrieve food entries for (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: A list of food entries for the specified date.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/FoodEntry'
+ *       400:
+ *         description: Selected date parameter is missing.
+ *       403:
+ *         description: User does not have permission to access this resource.
+ */
+router.get(
+  '/',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { selectedDate, userId } = req.query; // accepted userId from query
+    if (!selectedDate) {
+      return res.status(400).json({ error: 'Selected date is required.' });
+    }
+    // Determine target user
+
+    const targetUserId = userId ? String(userId) : req.userId;
+    try {
+      // Permission check if explicit userId is provided that differs from req.userId
+
+      if (userId && userId !== req.userId) {
+        const hasPermission = await { canAccessUserData }.canAccessUserData(
+          userId,
+          'diary',
+
+          req.originalUserId || req.userId
+        );
+        if (!hasPermission) return res.status(403).json({ error: 'Forbidden' });
+      }
+      const entries = await foodEntryService.getFoodEntriesByDate(
+        req.userId,
+        targetUserId,
+        String(selectedDate)
+      );
+      res.status(200).json(entries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/by-date/{date}:
+ *   get:
+ *     summary: Get all food entries for a specific date
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves a list of all food entries logged by the user for a given date.
+ *     parameters:
+ *       - in: path
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: The date to retrieve food entries for (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: A list of food entries for the specified date.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/FoodEntry'
+ *       400:
+ *         description: Date parameter is missing.
+ *       403:
+ *         description: User does not have permission to access this resource.
+ */
+router.get(
+  '/by-date/:date',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { date } = req.params;
+    const { userId } = req.query; // check query param
+    if (!date) {
+      return res.status(400).json({ error: 'Date is required.' });
+    }
+    // Determine target user
+
+    const targetUserId = userId ? String(userId) : req.userId;
+    try {
+      // Permission check if accessing another user's data
+
+      if (targetUserId !== req.userId) {
+        const hasPermission = await { canAccessUserData }.canAccessUserData(
+          targetUserId,
+          'diary',
+
+          req.originalUserId || req.userId
+        );
+        if (!hasPermission) return res.status(403).json({ error: 'Forbidden' });
+      }
+      const entries = await foodEntryService.getFoodEntriesByDate(
+        req.userId,
+        targetUserId,
+        date
+      );
+      res.status(200).json(entries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/range/{startDate}/{endDate}:
+ *   get:
+ *     summary: Get food entries within a date range
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves a list of all food entries logged by the user between a start and end date.
+ *     parameters:
+ *       - in: path
+ *         name: startDate
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: The start date of the range (YYYY-MM-DD).
+ *       - in: path
+ *         name: endDate
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: The end date of the range (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: A list of food entries for the specified date range.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/FoodEntry'
+ *       400:
+ *         description: Start or end date parameters are missing.
+ *       403:
+ *         description: User does not have permission to access this resource.
+ */
+router.get(
+  '/range/:startDate/:endDate',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { startDate, endDate } = req.params;
+    if (!startDate || !endDate) {
+      return res
+        .status(400)
+        .json({ error: 'Start date and end date are required.' });
+    }
+    try {
+      const entries = await foodEntryService.getFoodEntriesByDateRange(
+        req.userId,
+
+        req.userId,
+        startDate,
+        endDate
+      );
+      res.status(200).json(entries);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+/**
+ * @swagger
+ * /food-entries/nutrition/today:
+ *   get:
+ *     summary: Get daily nutrition summary
+ *     tags: [Nutrition & Meals]
+ *     description: Retrieves a summary of the user's nutritional intake for a specific date.
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: The date to retrieve the nutrition summary for (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: The daily nutrition summary.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/NutritionSummary'
+ *       400:
+ *         description: Date parameter is missing.
+ *       403:
+ *         description: User does not have permission to access this resource.
+ *       404:
+ *         description: Nutrition summary not found for this date.
+ */
+router.get(
+  '/nutrition/today',
+  authenticate,
+  checkPermissionMiddleware('diary'), // Add permission check
+  async (req, res, next) => {
+    const { date } = req.query;
+    if (!date) {
+      return res.status(400).json({ error: 'Date is required.' });
+    }
+    try {
+      const summary = await foodEntryService.getDailyNutritionSummary(
+        req.userId,
+        String(date)
+      );
+      res.status(200).json(summary);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message === 'Nutrition summary not found for this date.') {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(404).json({ error: error.message });
+      }
+      next(error);
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /food-entries/{id}/image:
+ *   post:
+ *     summary: Set the per-entry override photo for a diary entry
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Uploads a photo that applies only to this diary entry. It never changes
+ *       the underlying food's or meal's own images; entries without an override
+ *       fall back to those at display time.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               images:
+ *                 description: >
+ *                   Repeated file parts for newly uploaded photos, plus a JSON
+ *                   string field of the same name holding the desired final
+ *                   order. Entries in that array are either existing image
+ *                   paths being kept, or `__new__<n>` placeholders marking
+ *                   where the n-th uploaded file belongs.
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *     responses:
+ *       200:
+ *         description: The updated food entry.
+ *       400:
+ *         description: No image supplied.
+ *       403:
+ *         description: User does not have permission to manage this diary.
+ */
+router.post(
+  '/:id/image',
+  authenticate,
+  uploadImages,
+  async (req, res, next) => {
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ error: 'Food entry ID is required.' });
+    }
+    try {
+      const uploadedPaths = await finalizeUploadedImages(
+        stagedFilesFrom(req),
+        'food_entries',
+        id
+      );
+
+      // `images` is the client's desired final order, with __new__<n>
+      // placeholders marking where each uploaded file belongs, so one request
+      // can add, remove, and reorder together.
+      const requestedOrder = parseImageOrder(req.body?.images);
+      if (uploadedPaths.length === 0 && requestedOrder === undefined) {
+        return res.status(400).json({ error: 'An image file is required.' });
+      }
+      const nextImages = applyImageOrder(requestedOrder, uploadedPaths);
+
+      // updateFoodEntry unlinks any images this replaces.
+      let updatedEntry;
+      try {
+        updatedEntry = await foodEntryService.updateFoodEntry(
+          req.userId,
+          req.originalUserId || req.userId,
+          id,
+          { images: nextImages }
+        );
+      } catch (persistError) {
+        // The files are already out of staging, so cleanupStagedImages can no
+        // longer reach them; remove them here or they leak permanently.
+        await removeOrphanedImages(uploadedPaths, []);
+        throw persistError;
+      }
+
+      res.status(200).json(updatedEntry);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      if (error.message.startsWith('Forbidden')) {
+        // @ts-expect-error TS(2571): Object is of type 'unknown'.
+        return res.status(403).json({ error: error.message });
+      }
+      next(error);
+    } finally {
+      await cleanupStagedImages(req);
+    }
+  }
+);
+
+/**
+ * @swagger
+ * /food-entries/{id}/image:
+ *   delete:
+ *     summary: Clear a diary entry's override photo
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Removes the entry-specific photo so the entry falls back to the parent
+ *       food's or meal's own image. The parent is never modified.
+ *     responses:
+ *       200:
+ *         description: The updated food entry.
+ */
+router.delete('/:id/image', authenticate, async (req, res, next) => {
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'Food entry ID is required.' });
+  }
+  try {
+    // An empty array clears the column; undefined would mean "leave as is".
+    // updateFoodEntry unlinks the files that were cleared.
+    const updatedEntry = await foodEntryService.updateFoodEntry(
+      req.userId,
+      req.originalUserId || req.userId,
+      id,
+      { images: [] }
+    );
+
+    res.status(200).json(updatedEntry);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+
+export default router;

@@ -1,0 +1,326 @@
+@import 'tailwindcss';
+@import 'tw-shimmer';
+@plugin "tailwindcss-animate";
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-date-today: hsl(var(--date-today));
+  --color-date-past: hsl(var(--date-past));
+  --color-date-future: hsl(var(--date-future));
+
+  --color-sidebar: hsl(var(--sidebar-background));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-scan-line: scan-line 2s infinite linear;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+    to {
+      height: 0;
+    }
+  }
+  @keyframes scan-line {
+    0% {
+      bottom: 100%;
+    }
+    100% {
+      bottom: 0%;
+    }
+  }
+}
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. */
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 2rem;
+  @media (width >= 1400px) {
+    max-width: 1400px;
+  }
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+
+    --date-today: 160 84% 39%;
+    --date-past: 20 90% 50%;
+    --date-future: 40 90% 50%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+
+    --date-today: 158 64% 52%;
+    --date-past: 20 90% 30%;
+    --date-future: 40 90% 30%;
+
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* The customizable widget grid measures its container width and picks a
+     react-grid-layout breakpoint from it, while tile heights are measured from
+     their content. Without a reserved gutter, a scrollbar appearing/disappearing
+     as tiles auto-grow changes that width by ~15px, which can flip the
+     breakpoint, which changes the height again -> endless relayout (#2056).
+     Reserving the gutter breaks that loop at the source. */
+  html {
+    scrollbar-gutter: stable;
+  }
+
+  /* The gutter is already reserved, so react-remove-scroll's margin-right
+     compensation (Radix Select/Dialog/DropdownMenu) would shift the page left. */
+  html body[data-scroll-locked] {
+    --removed-body-scroll-bar-size: 0px !important;
+    margin-right: 0 !important;
+  }
+}
+
+/* Handling apple safe areas at the bottom bar */
+.apple-safe-area {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Mobile viewport fit. Desktop is intentionally untouched. */
+@media (max-width: 767px) {
+  html,
+  body {
+    max-width: 100%;
+    /* `clip`, not `hidden`: `hidden` turns html/body into a scroll container and
+       breaks `position: sticky` and scroll-into-view. */
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+  }
+
+  /* Caps every dialog regardless of its own `max-w-*` utility. Plain CSS declared
+     after `@import 'tailwindcss'`, so it wins on equal specificity without
+     `!important`, and tailwind-merge cannot strip it (it is not a Tailwind class). */
+  .dialog-viewport-fit {
+    width: calc(100vw - 2rem);
+    max-width: calc(100vw - 2rem);
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+  }
+
+  /* DialogContent is a grid, and grid/flex children default to `min-width: auto`,
+     so a wide child (a search result row, a nutrient grid) can still push past the
+     capped dialog. Allowing them to shrink keeps content inside the box. */
+  .dialog-viewport-fit > * {
+    min-width: 0;
+  }
+}
+
+/* BEAST NUTRITION blue theme. Greens map to blue so charts and badges match. */
+@theme {
+  --color-green-50: #eff6ff;
+  --color-green-100: #dbeafe;
+  --color-green-200: #bfdbfe;
+  --color-green-300: #93c5fd;
+  --color-green-400: #60a5fa;
+  --color-green-500: #3b82f6;
+  --color-green-600: #2563eb;
+  --color-green-700: #1d4ed8;
+  --color-green-800: #1e40af;
+  --color-green-900: #1e3a8a;
+  --color-green-950: #172554;
+  --color-emerald-50: #eff6ff;
+  --color-emerald-100: #dbeafe;
+  --color-emerald-200: #bfdbfe;
+  --color-emerald-300: #93c5fd;
+  --color-emerald-400: #60a5fa;
+  --color-emerald-500: #3b82f6;
+  --color-emerald-600: #2563eb;
+  --color-emerald-700: #1d4ed8;
+  --color-emerald-800: #1e40af;
+  --color-emerald-900: #1e3a8a;
+  --color-emerald-950: #172554;
+  --color-teal-50: #eff6ff;
+  --color-teal-100: #dbeafe;
+  --color-teal-200: #bfdbfe;
+  --color-teal-300: #93c5fd;
+  --color-teal-400: #60a5fa;
+  --color-teal-500: #3b82f6;
+  --color-teal-600: #2563eb;
+  --color-teal-700: #1d4ed8;
+  --color-teal-800: #1e40af;
+  --color-teal-900: #1e3a8a;
+  --color-teal-950: #172554;
+  --color-lime-50: #eff6ff;
+  --color-lime-100: #dbeafe;
+  --color-lime-200: #bfdbfe;
+  --color-lime-300: #93c5fd;
+  --color-lime-400: #60a5fa;
+  --color-lime-500: #3b82f6;
+  --color-lime-600: #2563eb;
+  --color-lime-700: #1d4ed8;
+  --color-lime-800: #1e40af;
+  --color-lime-900: #1e3a8a;
+  --color-lime-950: #172554;
+}
+:root {
+  --background: 214 80% 92%;
+  --foreground: 222 60% 14%;
+  --card: 210 100% 99%;
+  --card-foreground: 222 60% 14%;
+  --popover: 210 100% 99%;
+  --popover-foreground: 222 60% 14%;
+  --primary: 221 83% 45%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 214 85% 88%;
+  --secondary-foreground: 222 60% 18%;
+  --muted: 214 70% 90%;
+  --muted-foreground: 220 30% 38%;
+  --accent: 214 95% 85%;
+  --accent-foreground: 222 60% 18%;
+  --border: 214 55% 80%;
+  --input: 214 55% 80%;
+  --ring: 221 83% 45%;
+  --sidebar-primary: 221 83% 45%;
+}
+.dark {
+  --background: 222 70% 10%;
+  --foreground: 213 90% 94%;
+  --card: 222 62% 15%;
+  --card-foreground: 213 90% 94%;
+  --popover: 222 62% 15%;
+  --popover-foreground: 213 90% 94%;
+  --primary: 213 94% 62%;
+  --primary-foreground: 222 70% 10%;
+  --secondary: 221 55% 22%;
+  --secondary-foreground: 213 90% 94%;
+  --muted: 221 50% 20%;
+  --muted-foreground: 214 45% 72%;
+  --accent: 221 60% 26%;
+  --accent-foreground: 213 90% 94%;
+  --border: 221 45% 27%;
+  --input: 221 45% 27%;
+  --ring: 213 94% 62%;
+  --sidebar-primary: 213 94% 62%;
+}

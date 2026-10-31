@@ -1,0 +1,339 @@
+import { resolveMockDataOptions } from '../utils/mockDataOptions.js';
+import express from 'express';
+import polarIntegrationService from '../integrations/polar/polarService.js';
+import polarService from '../services/polarService.js';
+import { log } from '../config/logging.js';
+import requireSelfActor from '../middleware/requireSelfMiddleware.js';
+import { OAuthStateError } from '../utils/oauthState.js';
+import authMiddleware from '../middleware/authMiddleware.js';
+import checkPermissionMiddleware from '../middleware/checkPermissionMiddleware.js';
+import {
+  SYNC_ALREADY_RUNNING_RESPONSE,
+  syncClaimTarget,
+  startProviderSync,
+} from '../services/providerSyncClaim.js';
+import { publicErrorMessage } from '../utils/errors.js';
+const router = express.Router();
+/**
+ * @swagger
+ * /integrations/polar/authorize:
+ *   get:
+ *     summary: Initiate Polar OAuth flow
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     responses:
+ *       200:
+ *         description: Successfully generated authorization URL.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 authUrl:
+ *                   type: string
+ *                   description: The Polar authorization URL.
+ *       401:
+ *         description: Unauthorized.
+ *       500:
+ *         description: Error initiating Polar authorization.
+ */
+router.get(
+  '/authorize',
+  authMiddleware.authenticate,
+  // Self-only: on GET the diary gate resolves to diary_read, which would hand a
+  // read-only delegate the owner's Polar client id.
+  requireSelfActor,
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      // Express parses a repeated query key into an array; only accept a
+      // single string, so a non-scalar can never reach the SQL uuid cast.
+      const rawProviderId = req.query.providerId;
+      const providerId =
+        typeof rawProviderId === 'string' && rawProviderId.length > 0
+          ? rawProviderId
+          : null;
+      const baseUrl =
+        process.env.SPARKY_FITNESS_FRONTEND_URL || 'http://localhost:8080';
+      const redirectUri = `${baseUrl}/polar/callback`;
+      const authorizationUrl =
+        await polarIntegrationService.getAuthorizationUrl(
+          userId,
+          redirectUri,
+          providerId
+        );
+      res.json({ authUrl: authorizationUrl });
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      log('error', `Error initiating Polar authorization: ${error.message}`);
+      res.status(500).json({
+        message: 'Error initiating Polar authorization',
+        error: publicErrorMessage(error),
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /integrations/polar/callback:
+ *   post:
+ *     summary: Handle Polar OAuth callback
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - code
+ *             properties:
+ *               code:
+ *                 type: string
+ *                 description: The authorization code returned by Polar.
+ *               state:
+ *                 type: string
+ *                 description: The single-use nonce issued by /integrations/polar/authorize and returned by Polar. Required.
+ *     responses:
+ *       200:
+ *         description: Polar account linked successfully.
+ *       400:
+ *         description: Authorization code not received, or the OAuth state was invalid, expired, or already used.
+ *       401:
+ *         description: Unauthorized.
+ *       403:
+ *         description: The state is not bound to the authenticated user.
+ *       500:
+ *         description: Failed to connect Polar account.
+ */
+router.post('/callback', authMiddleware.authenticate, async (req, res) => {
+  try {
+    // providerId is deliberately not read from the body any more: the claimed
+    // state row identifies the provider row.
+    const { code, state } = req.body;
+
+    const baseUrl =
+      process.env.SPARKY_FITNESS_FRONTEND_URL || 'http://localhost:8080';
+    const redirectUri = `${baseUrl}/polar/callback`;
+    if (!code) {
+      return res
+        .status(400)
+        .json({ message: 'Authorization code not received.' });
+    }
+    const actorUserId =
+      req.originalUserId || req.authenticatedUserId || req.userId;
+    const result = await polarIntegrationService.exchangeCodeForTokens(
+      state,
+      code,
+      redirectUri,
+      actorUserId
+    );
+    // Belt and braces: the claim predicate already guarantees this holds.
+    if (result.ownerUserId !== actorUserId) {
+      log(
+        'warn',
+        `Polar callback owner ${result.ownerUserId} did not match actor ${actorUserId}.`
+      );
+      return res
+        .status(403)
+        .json({ message: 'Forbidden: OAuth state is not bound to this user.' });
+    }
+    if (result.success) {
+      res.status(200).json({ message: 'Polar account linked successfully.' });
+    } else {
+      res.status(500).json({ message: 'Failed to connect Polar account.' });
+    }
+  } catch (error) {
+    // One opaque 400 for every state failure; the reason stays server-side.
+    if (error instanceof OAuthStateError) {
+      log('warn', `Polar OAuth state rejected (${error.reason}).`);
+      return res
+        .status(400)
+        .json({ message: 'Invalid or expired authorization state.' });
+    }
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    log('error', `Error handling Polar OAuth callback: ${error.message}`);
+    res.status(500).json({
+      message: 'Error handling Polar OAuth callback',
+      error: publicErrorMessage(error),
+    });
+  }
+});
+/**
+ * @swagger
+ * /integrations/polar/sync:
+ *   post:
+ *     summary: Manually trigger a Polar data sync
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               providerId:
+ *                 type: string
+ *                 description: The unique identifier of the Polar provider to sync.
+ *     responses:
+ *       200:
+ *         description: Polar data sync completed successfully.
+ *       401:
+ *         description: Unauthorized.
+ *       500:
+ *         description: Error initiating manual Polar sync.
+ */
+router.post(
+  '/sync',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      const { providerId, startDate, endDate } = req.body;
+      const { dataSource, saveMockData } = await resolveMockDataOptions(
+        req.body,
+        req.authenticatedUserId
+      );
+      log(
+        'info',
+        `[polarRoutes] Manual sync triggered for user ${userId}${startDate ? ` from ${startDate}` : ''}${endDate ? ` to ${endDate}` : ''}${dataSource ? ` (Source: ${dataSource})` : ''}`
+      );
+      const started = await startProviderSync(
+        syncClaimTarget(userId, 'polar', providerId),
+        () =>
+          polarService.syncPolarData(
+            userId,
+            'manual',
+            providerId,
+            startDate,
+            endDate,
+            dataSource,
+            saveMockData
+          )
+      );
+      if (!started) {
+        res.status(409).json(SYNC_ALREADY_RUNNING_RESPONSE);
+        return;
+      }
+      await started.running;
+      res
+        .status(200)
+        .json({ message: 'Polar data sync completed successfully.' });
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      log('error', `Error initiating manual Polar sync: ${error.message}`);
+      res.status(500).json({
+        message: 'Error initiating manual Polar sync',
+        error: publicErrorMessage(error),
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /integrations/polar/disconnect:
+ *   post:
+ *     summary: Disconnect a Polar account
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               providerId:
+ *                 type: string
+ *                 description: The unique identifier of the Polar provider to disconnect.
+ *     responses:
+ *       200:
+ *         description: Polar account disconnected successfully.
+ *       401:
+ *         description: Unauthorized.
+ *       500:
+ *         description: Error disconnecting Polar account.
+ */
+router.post(
+  '/disconnect',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      const { providerId } = req.body;
+      await polarService.disconnectPolar(userId, providerId);
+      res
+        .status(200)
+        .json({ message: 'Polar account disconnected successfully.' });
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      log('error', `Error disconnecting Polar account: ${error.message}`);
+      res.status(500).json({
+        message: 'Error disconnecting Polar account',
+        error: publicErrorMessage(error),
+      });
+    }
+  }
+);
+/**
+ * @swagger
+ * /integrations/polar/status:
+ *   get:
+ *     summary: Get Polar connection status
+ *     tags: [External Integrations]
+ *     security:
+ *       - cookieAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: providerId
+ *         schema:
+ *           type: string
+ *         description: The unique identifier of the Polar provider.
+ *     responses:
+ *       200:
+ *         description: Polar connection status retrieved successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 isConnected:
+ *                   type: boolean
+ *                 lastSyncAt:
+ *                   type: string
+ *                   format: date-time
+ *                 tokenExpiresAt:
+ *                   type: string
+ *                   format: date-time
+ *       401:
+ *         description: Unauthorized.
+ *       500:
+ *         description: Error getting Polar status.
+ */
+router.get(
+  '/status',
+  authMiddleware.authenticate,
+  checkPermissionMiddleware('diary'),
+  async (req, res) => {
+    try {
+      const userId = req.userId;
+      const { providerId } = req.query;
+      const status = await polarService.getStatus(userId, providerId);
+      res.status(200).json(status);
+    } catch (error) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      log('error', `Error getting Polar status: ${error.message}`);
+      res.status(500).json({
+        message: 'Error getting Polar status',
+        error: publicErrorMessage(error),
+      });
+    }
+  }
+);
+export default router;

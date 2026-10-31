@@ -1,0 +1,121 @@
+export { queryClient } from './queryClient';
+export {
+  serverConnectionQueryKey,
+  serverConfigsQueryKey,
+  fastingRootQueryKey,
+  chatHistoryQueryKey,
+  medicationsRootQueryKey,
+  caffeineActiveRootQueryKey,
+} from './queryKeys';
+export { useServerConnection } from './useServerConnection';
+export { useServerConfigs } from './useServerConfigs';
+export { useSyncHealthData } from './useSyncHealthData';
+export { useDailySummary } from './useDailySummary';
+export { useFamilyUsers, useFamilyDailySummary } from './useFamilyDiary';
+export { useMeasurements } from './useMeasurements';
+
+// Only `useWatchCheckInBridge`/`useWatchWorkoutBridge`/`useWatchSetTargetsSync`/`useWatchPlanSync`
+// are re-exported here:
+// App.tsx mounts them through this barrel. `useUpsertCheckIn` and
+// `useWatchConnectivity` are imported by their own paths at every call site,
+// so adding them here created exports nothing consumes — which `knip` fails
+// the build over.
+export { useWatchCheckInBridge } from './useWatchCheckInBridge';
+export { useWatchWorkoutBridge } from './useWatchWorkoutBridge';
+export { useWatchSetTargetsSync } from './useWatchSetTargetsSync';
+export { useWatchRecordingBridge } from './useWatchRecordingBridge';
+export { useWatchRunBridge } from './useWatchRunBridge';
+export { useWatchRouteBridge } from './useWatchRouteBridge';
+export { useWatchPlanSync } from './useWatchPlanSync';
+export { useWatchWorkoutEdit } from './useWatchWorkoutEdit';
+export { useWatchFastingBridge } from './useWatchFastingBridge';
+export {
+  drainQuickActionNavigation,
+  useControlRouteHandoff,
+  useQuickActions,
+} from './useQuickActions';
+
+export { usePreferences } from './usePreferences';
+export { useRefetchOnFocus } from './useRefetchOnFocus';
+export { useWaterIntakeMutation } from './useWaterIntakeMutation';
+export { useFoods } from './useFoods';
+export { useFavorites } from './useFavorites';
+export { useToggleFavorite } from './useToggleFavorite';
+export { useDebounce } from './useDebounce';
+export { useFoodSearch } from './useFoodSearch';
+export { useFoodsLibrary } from './useFoodsLibrary';
+export {
+  useMeals,
+  useRecentMeals,
+  useTopMeals,
+  useMeal,
+  useCreateMeal,
+  useUpdateMeal,
+  useDeleteMeal,
+} from './useMeals';
+export {
+  useMealPlans,
+  useCreateMealPlan,
+  useUpdateMealPlan,
+  useDuplicateMealPlan,
+  useDeleteMealPlan,
+} from './useMealPlans';
+export { useMealPlanNutrition } from './useMealPlanNutrition';
+export {
+  useWorkoutPlans,
+  useCreateWorkoutPlan,
+  useUpdateWorkoutPlan,
+  useDeleteWorkoutPlan,
+} from './useWorkoutPlans';
+export { useMealSearch } from './useMealSearch';
+export {
+  useWaterContainersQuery,
+  useDrinkPresetCatalogQuery,
+  useCreateWaterContainerMutation,
+  useUpdateWaterContainerMutation,
+  useDeleteWaterContainerMutation,
+  useSetPrimaryWaterContainerMutation,
+  useReorderWaterContainersMutation,
+  useAddDrinkPresetMutation,
+} from './useWaterContainers';
+export { useExternalProviders } from './useExternalProviders';
+export { useExternalFoodSearch } from './useExternalFoodSearch';
+export { useAllProvidersSearch } from './useAllProvidersSearch';
+export type { ProviderSearchResult } from './useAllProvidersSearch';
+export { useMealTypes } from './useMealTypes';
+export { useDeleteFood } from './useDeleteFood';
+export { useCaffeineKinetics } from './useCaffeineKinetics';
+export { useFoodVariants } from './useFoodVariants';
+export type { StepsDataPoint, WeightDataPoint } from './useMeasurementsRange';
+export { useHealthTrends } from './useHealthTrends';
+export { useSuggestedExercises } from './useSuggestedExercises';
+export { useExerciseSearch } from './useExerciseSearch';
+export { useExercisesLibrary } from './useExercisesLibrary';
+export {
+  useCreateExercise,
+  useUpdateExercise,
+  useDeleteExerciseLibrary,
+} from './useExerciseMutations';
+export { useWorkoutPresets } from './useWorkoutPresets';
+export { useWorkoutPresetSearch } from './useWorkoutPresetSearch';
+export { useWorkoutPresetsLibrary } from './useWorkoutPresetsLibrary';
+export {
+  useCreateWorkoutPreset,
+  useUpdateWorkoutPreset,
+  useDeleteWorkoutPreset,
+} from './useWorkoutPresetMutations';
+export { useWidgetSync } from './useWidgetSync';
+export { useProfile } from './useProfile';
+export { useActiveAiServiceSetting } from './useActiveAiServiceSetting';
+export { useCustomNutrients } from './useCustomNutrients';
+export type { UserCustomNutrient } from './useCustomNutrients';
+export { useNutrientDisplayPreferences } from './useNutrientDisplayPreferences';
+export { useChatHistory } from './useChatHistory';
+export { useCycleMode } from './useCycleMode';
+export { useMedications } from './useMedications';
+export {
+  useSetFoodEntryImages,
+  useClearFoodEntryImage,
+  useSetFoodEntryMealImages,
+  useClearFoodEntryMealImage,
+} from './useEntryImages';

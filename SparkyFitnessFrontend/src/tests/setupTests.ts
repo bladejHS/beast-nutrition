@@ -1,0 +1,107 @@
+import { TextEncoder, TextDecoder } from 'util';
+import i18n from 'i18next';
+import { initReactI18next } from 'react-i18next';
+
+// Hooks and helpers call i18n.t() directly; initialise the shared instance so
+// they return their English default text in tests.
+void i18n.use(initReactI18next).init({
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: {},
+  initAsync: false,
+  interpolation: { escapeValue: false },
+});
+
+// Polyfill for TextEncoder/TextDecoder in jsdom
+if (typeof globalThis.TextEncoder === 'undefined') {
+  globalThis.TextEncoder = TextEncoder;
+  globalThis.TextDecoder = TextDecoder as any;
+}
+
+// needed for useisMobile hook
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: (query: any) => ({
+    matches: false,
+    media: query,
+    onchange: null as unknown,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => {},
+  }),
+});
+
+// Polyfill ResizeObserver
+class ResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+window.ResizeObserver = ResizeObserver;
+
+// Polyfill PointerEvent
+if (!global.PointerEvent) {
+  class PointerEvent extends MouseEvent {
+    public height: number;
+    public isPrimary: boolean;
+    public pointerId: number;
+    public pointerType: string;
+    public pressure: number;
+    public tangentialPressure: number;
+    public tiltX: number;
+    public tiltY: number;
+    public twist: number;
+    public width: number;
+
+    constructor(type: string, params: PointerEventInit = {}) {
+      super(type, params);
+      this.pointerId = params.pointerId || 0;
+      this.width = params.width || 0;
+      this.height = params.height || 0;
+      this.pressure = params.pressure || 0;
+      this.tangentialPressure = params.tangentialPressure || 0;
+      this.tiltX = params.tiltX || 0;
+      this.tiltY = params.tiltY || 0;
+      this.pointerType = params.pointerType || 'mouse';
+      this.isPrimary = params.isPrimary || false;
+      this.twist = params.twist || 0;
+    }
+  }
+
+  global.PointerEvent = PointerEvent as any;
+}
+
+// Mock pointer capture methods
+
+(HTMLElement.prototype as any).setPointerCapture = jest.fn();
+
+(HTMLElement.prototype as any).releasePointerCapture = jest.fn();
+
+(HTMLElement.prototype as any).hasPointerCapture = jest
+  .fn()
+  .mockReturnValue(false);
+
+// Mock scrollIntoView
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = jest.fn();
+}
+
+import React from 'react';
+
+// Mock react-leaflet and leaflet for Jest test environment
+jest.mock('react-leaflet', () => ({
+  MapContainer: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { 'data-testid': 'map-container' }, children),
+  TileLayer: () => React.createElement('div', { 'data-testid': 'tile-layer' }),
+  Polyline: () => React.createElement('div', { 'data-testid': 'polyline' }),
+  Marker: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { 'data-testid': 'marker' }, children),
+  Popup: ({ children }: { children?: React.ReactNode }) =>
+    React.createElement('div', { 'data-testid': 'popup' }, children),
+}));
+
+jest.mock('leaflet', () => ({
+  divIcon: jest.fn(() => ({})),
+}));

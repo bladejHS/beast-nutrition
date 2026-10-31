@@ -1,0 +1,296 @@
+import { MealTotals } from '@/types/meal';
+import { BUILTIN_MAXIMUM_GOAL_NUTRIENTS } from '@workspace/shared';
+
+export type NutrientGoalType = 'minimum' | 'maximum' | 'target';
+
+export interface NutrientMetadata {
+  id: string;
+  label: string;
+  defaultLabel: string;
+  unit: string;
+  color: string; // Tailwind class for UI text
+  chartColor: string; // Hex color for chart rendering
+  decimals: number;
+  group: 'macros' | 'fats' | 'minerals' | 'custom';
+  // Built-in goal direction when the user has no explicit override saved via
+  // the Nutrient Goal Direction settings screen. Omitted = 'minimum'. Set
+  // below from BUILTIN_MAXIMUM_GOAL_NUTRIENTS (shared/), the single source of
+  // truth also consumed by
+  // SparkyFitnessServer/services/nutrientGoalPreferenceService.ts.
+  defaultGoalType?: NutrientGoalType;
+}
+
+export const PREDEFINED_NUTRIENT_KEYS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'saturated_fat',
+  'polyunsaturated_fat',
+  'monounsaturated_fat',
+  'trans_fat',
+  'cholesterol',
+  'sodium',
+  'potassium',
+  'dietary_fiber',
+  'sugars',
+  'vitamin_a',
+  'vitamin_c',
+  'calcium',
+  'iron',
+  'caffeine_mg',
+  'water_ml',
+  'alcohol_g',
+];
+
+export const CENTRAL_NUTRIENT_CONFIG: Record<string, NutrientMetadata> = {
+  calories: {
+    id: 'calories',
+    label: 'nutrition.calories',
+    defaultLabel: 'Calories',
+    unit: 'kcal',
+    color: 'text-gray-900 dark:text-gray-100',
+    chartColor: '#22c55e', // green-500
+    decimals: 0,
+    group: 'macros',
+  },
+  protein: {
+    id: 'protein',
+    label: 'nutrition.protein',
+    defaultLabel: 'Protein',
+    unit: 'g',
+    color: 'text-blue-600',
+    chartColor: '#3b82f6', // blue-600
+    decimals: 1,
+    group: 'macros',
+  },
+  carbs: {
+    id: 'carbs',
+    label: 'nutrition.carbohydrates',
+    defaultLabel: 'Carbohydrates',
+    unit: 'g',
+    color: 'text-orange-600',
+    chartColor: '#f97316', // orange-600
+    decimals: 1,
+    group: 'macros',
+  },
+  fat: {
+    id: 'fat',
+    label: 'nutrition.fat',
+    defaultLabel: 'Fat',
+    unit: 'g',
+    color: 'text-yellow-600',
+    chartColor: '#eab308', // yellow-600
+    decimals: 1,
+    group: 'macros',
+  },
+  saturated_fat: {
+    id: 'saturated_fat',
+    label: 'nutrition.saturatedFat',
+    defaultLabel: 'Saturated Fat',
+    unit: 'g',
+    color: 'text-red-500',
+    chartColor: '#ef4444', // red-500
+    decimals: 1,
+    group: 'fats',
+  },
+  polyunsaturated_fat: {
+    id: 'polyunsaturated_fat',
+    label: 'nutrition.polyunsaturatedFat',
+    defaultLabel: 'Polyunsaturated Fat',
+    unit: 'g',
+    color: 'text-lime-500',
+    chartColor: '#84cc16', // lime-500
+    decimals: 1,
+    group: 'fats',
+  },
+  monounsaturated_fat: {
+    id: 'monounsaturated_fat',
+    label: 'nutrition.monounsaturatedFat',
+    defaultLabel: 'Monounsaturated Fat',
+    unit: 'g',
+    color: 'text-emerald-500',
+    chartColor: '#10b981', // emerald-500
+    decimals: 1,
+    group: 'fats',
+  },
+  trans_fat: {
+    id: 'trans_fat',
+    label: 'nutrition.transFat',
+    defaultLabel: 'Trans Fat',
+    unit: 'g',
+    color: 'text-red-700',
+    chartColor: '#b91c1c', // red-700
+    decimals: 1,
+    group: 'fats',
+  },
+  cholesterol: {
+    id: 'cholesterol',
+    label: 'nutrition.cholesterol',
+    defaultLabel: 'Cholesterol',
+    unit: 'mg',
+    color: 'text-indigo-500',
+    chartColor: '#6366f1', // indigo-500
+    decimals: 1,
+    group: 'minerals',
+  },
+  sodium: {
+    id: 'sodium',
+    label: 'nutrition.sodium',
+    defaultLabel: 'Sodium',
+    unit: 'mg',
+    color: 'text-purple-500',
+    chartColor: '#a855f7', // purple-500
+    decimals: 1,
+    group: 'minerals',
+  },
+  potassium: {
+    id: 'potassium',
+    label: 'nutrition.potassium',
+    defaultLabel: 'Potassium',
+    unit: 'mg',
+    color: 'text-teal-500',
+    chartColor: '#14b8a6', // teal-500
+    decimals: 1,
+    group: 'minerals',
+  },
+  dietary_fiber: {
+    id: 'dietary_fiber',
+    label: 'nutrition.dietaryFiber',
+    defaultLabel: 'Dietary Fiber',
+    unit: 'g',
+    color: 'text-green-600',
+    chartColor: '#16a34a', // green-600
+    decimals: 1,
+    group: 'minerals',
+  },
+  sugars: {
+    id: 'sugars',
+    label: 'nutrition.sugars',
+    defaultLabel: 'Sugars',
+    unit: 'g',
+    color: 'text-pink-500',
+    chartColor: '#ec4899', // pink-500
+    decimals: 1,
+    group: 'minerals',
+  },
+  vitamin_a: {
+    id: 'vitamin_a',
+    label: 'nutrition.vitaminA',
+    defaultLabel: 'Vitamin A',
+    unit: 'µg',
+    color: 'text-yellow-400',
+    chartColor: '#facc15', // yellow-400
+    decimals: 1,
+    group: 'minerals',
+  },
+  vitamin_c: {
+    id: 'vitamin_c',
+    label: 'nutrition.vitaminC',
+    defaultLabel: 'Vitamin C',
+    unit: 'mg',
+    color: 'text-orange-400',
+    chartColor: '#fb923c', // orange-400
+    decimals: 1,
+    group: 'minerals',
+  },
+  calcium: {
+    id: 'calcium',
+    label: 'nutrition.calcium',
+    defaultLabel: 'Calcium',
+    unit: 'mg',
+    color: 'text-blue-400',
+    chartColor: '#60a5fa', // blue-400
+    decimals: 1,
+    group: 'minerals',
+  },
+  iron: {
+    id: 'iron',
+    label: 'nutrition.iron',
+    defaultLabel: 'Iron',
+    unit: 'mg',
+    color: 'text-gray-500',
+    chartColor: '#6b7280', // gray-500
+    decimals: 1,
+    group: 'minerals',
+  },
+  caffeine_mg: {
+    id: 'caffeine_mg',
+    label: 'nutrition.caffeine',
+    defaultLabel: 'Caffeine',
+    unit: 'mg',
+    color: 'text-amber-700 dark:text-amber-500',
+    chartColor: '#b45309', // amber-700
+    decimals: 0,
+    group: 'minerals',
+  },
+  // Required so the food form / food grids can render a water-content input
+  // and readout (CENTRAL_NUTRIENT_CONFIG drives NutrientFormGrid). Summed into
+  // meal totals like any other nutrient, so a meal can state the water it
+  // holds, but NOT into calculateDayTotals: the hydration ring owns the day
+  // figure through its own arm, and a second sum there would compete with it.
+  // See constants/goals.ts for the matching exclusion from the generic
+  // per-nutrient goal system.
+  water_ml: {
+    id: 'water_ml',
+    label: 'nutrition.waterContent',
+    defaultLabel: 'Water Content',
+    unit: 'ml',
+    color: 'text-sky-600 dark:text-sky-400',
+    chartColor: '#0284c7', // sky-600
+    decimals: 0,
+    group: 'minerals',
+  },
+  alcohol_g: {
+    id: 'alcohol_g',
+    label: 'nutrition.alcohol',
+    defaultLabel: 'Alcohol',
+    unit: 'g',
+    color: 'text-purple-600 dark:text-purple-400',
+    chartColor: '#9333ea', // purple-600
+    decimals: 1,
+    group: 'macros',
+  },
+};
+
+// Apply the shared "stay under" defaults (single source of truth in
+// shared/src/constants/nutrientGoalDefaults.ts) instead of hand-annotating
+// each entry above, so this list only ever needs to change in one place.
+(BUILTIN_MAXIMUM_GOAL_NUTRIENTS ?? []).forEach((key) => {
+  if (CENTRAL_NUTRIENT_CONFIG[key]) {
+    CENTRAL_NUTRIENT_CONFIG[key].defaultGoalType = 'maximum';
+  }
+});
+
+export const EMPTY_MEAL_TOTALS: MealTotals = {
+  calories: 0,
+  protein: 0,
+  carbs: 0,
+  fat: 0,
+  dietary_fiber: 0,
+  sugars: 0,
+  sodium: 0,
+  cholesterol: 0,
+  saturated_fat: 0,
+  monounsaturated_fat: 0,
+  polyunsaturated_fat: 0,
+  trans_fat: 0,
+  potassium: 0,
+  vitamin_a: 0,
+  vitamin_c: 0,
+  iron: 0,
+  calcium: 0,
+  caffeine_mg: 0,
+  water_ml: 0,
+  alcohol_g: 0,
+  custom_nutrients: {},
+};
+
+export const DEFAULT_NUTRIENTS = [
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'dietary_fiber',
+  'sugars',
+];

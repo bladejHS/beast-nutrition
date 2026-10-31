@@ -1,0 +1,1007 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  Platform,
+  ScrollView,
+  Alert,
+} from 'react-native';
+import Toast from 'react-native-toast-message';
+import { useFocusEffect } from '@react-navigation/native';
+import { TouchableOpacity as GHTouchableOpacity } from 'react-native-gesture-handler';
+import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCSSVariable } from 'uniwind';
+import BottomSheetPicker from '../components/BottomSheetPicker';
+import Button from '../components/ui/Button';
+import FormInput from '../components/FormInput';
+import MarkdownNotesField from '../components/MarkdownNotesField';
+import { usableFoodImages } from '../utils/foodImages';
+import StatusView from '../components/StatusView';
+import { FooterSaveBar } from '../components/FormScreenChrome';
+import Icon from '../components/Icon';
+import { useCreateMeal, useMeal, useUpdateMeal } from '../hooks';
+import FoodImagePicker from '../components/FoodImagePicker';
+import {
+  pickerImagesDiffer,
+  splitPickerImages,
+  toSavedImages,
+  type PickerImage,
+} from '../utils/pickerImages';
+import { consumePendingMealIngredientSelection } from '../services/mealBuilderSelection';
+import { mealIngredientDraftToFoodInfo } from '../types/foodInfo';
+import type { MealFoodPayload, MealIngredientDraft } from '../types/meals';
+import type { FoodUnitVariant } from '../types/foodUnitVariants';
+import type { RootStackScreenProps } from '../types/navigation';
+import {
+  formatCaloriesDisplay,
+  formatMacroDisplay,
+  formatServingSizeDisplay,
+} from '../utils/foodDetails';
+import { buildMealIngredientDraftFromMealFood } from '../utils/mealBuilderDraft';
+import { MEAL_SERVING_PRECISION, MEAL_SERVING_UNITS } from '@workspace/shared';
+import {
+  DECIMAL_INPUT_REGEX,
+  parseDecimalInput,
+  toFiniteNumber,
+} from '../utils/numericInput';
+import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
+import { useScreenHeader } from '../hooks/useScreenHeader';
+
+type MealAddScreenProps = RootStackScreenProps<'MealAdd'>;
+
+const SERVING_UNIT_OPTIONS = MEAL_SERVING_UNITS.map((unit) => ({
+  label: unit,
+  value: unit,
+}));
+
+function getServingUnitLabel(
+  unit: string,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string {
+  const labels: Record<string, string> = {
+    serving: t('mealBuilder.units.serving', { defaultValue: 'serving' }),
+    g: t('mealBuilder.units.g', { defaultValue: 'g' }),
+    ml: t('mealBuilder.units.ml', { defaultValue: 'ml' }),
+    oz: t('mealBuilder.units.oz', { defaultValue: 'oz' }),
+    cup: t('mealBuilder.units.cup', { defaultValue: 'cup' }),
+    tbsp: t('mealBuilder.units.tbsp', { defaultValue: 'tbsp' }),
+    tsp: t('mealBuilder.units.tsp', { defaultValue: 'tsp' }),
+    piece: t('mealBuilder.units.piece', { defaultValue: 'piece' }),
+  };
+  return labels[unit] ?? unit;
+}
+
+interface MealTotals {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+}
+
+interface MacroStatProps {
+  color: string;
+  value: string;
+  label: string;
+}
+
+const MacroStat: React.FC<MacroStatProps> = ({ color, value, label }) => (
+  <View className="flex-1 flex-row items-start gap-1.5">
+    <View
+      style={{
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: color,
+        marginTop: 6,
+      }}
+    />
+    <Text className="flex-1 text-text-primary text-base">
+      {value}
+      {label}
+    </Text>
+  </View>
+);
+
+function toMealTotals(ingredients: MealIngredientDraft[]): MealTotals {
+  return ingredients.reduce<MealTotals>(
+    (totals, ingredient) => {
+      const servingSize = toFiniteNumber(ingredient.serving_size);
+      const quantity = toFiniteNumber(ingredient.quantity);
+      const scale = servingSize > 0 ? quantity / servingSize : 0;
+
+      totals.calories += toFiniteNumber(ingredient.calories) * scale;
+      totals.protein += toFiniteNumber(ingredient.protein) * scale;
+      totals.carbs += toFiniteNumber(ingredient.carbs) * scale;
+      totals.fat += toFiniteNumber(ingredient.fat) * scale;
+      return totals;
+    },
+    { calories: 0, protein: 0, carbs: 0, fat: 0 }
+  );
+}
+
+const mealIngredientToPayload = ({
+  brand: _brand,
+  ...ingredient
+}: MealIngredientDraft): MealFoodPayload => ingredient;
+
+const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
+  const { t } = useTranslation();
+  const localizedServingUnitOptions = useMemo(
+    () =>
+      SERVING_UNIT_OPTIONS.map((option) => ({
+        ...option,
+        label: getServingUnitLabel(option.value, t),
+      })),
+    [t]
+  );
+  const isEditMode = route.params?.mode === 'edit';
+  const editMealId = isEditMode ? route.params.mealId : undefined;
+  const insets = useSafeAreaInsets();
+  const usesNativeHeader = useNativeIOSHeadersActive();
+  const [accentColor, textMuted, proteinColor, carbsColor, fatColor] =
+    useCSSVariable([
+      '--color-accent-primary',
+      '--color-text-muted',
+      '--color-macro-protein',
+      '--color-macro-carbs',
+      '--color-macro-fat',
+    ]) as [string, string, string, string, string];
+
+  const [mealName, setMealName] = useState('');
+  const [description, setDescription] = useState('');
+  const [notes, setNotes] = useState('');
+  // serving_size = quantity of ONE serving in serving_unit (e.g. 250 for 250 ml,
+  // or 1 when unit is 'serving'). total_servings = yield count.
+  const [servingSizeText, setServingSizeText] = useState('1');
+  const [servingUnit, setServingUnit] = useState('serving');
+  const [totalServingsText, setTotalServingsText] = useState('1');
+  // For non-serving units we ask the user for the BATCH amount and derive
+  // total_servings = totalAmount / servingSize on save.
+  const [totalAmountText, setTotalAmountText] = useState('1');
+  const [ingredients, setIngredients] = useState<MealIngredientDraft[]>([]);
+  const [pickerImages, setPickerImages] = useState<PickerImage[]>([]);
+  const [initializedMealId, setInitializedMealId] = useState<string | null>(
+    null
+  );
+
+  const { createMealAsync, isPending } = useCreateMeal();
+  const {
+    meal: editMeal,
+    isLoading: isEditMealLoading,
+    isError: isEditMealError,
+    refetch,
+  } = useMeal(editMealId, {
+    enabled: isEditMode,
+  });
+  const { updateMealAsync, isPending: isUpdatePending } = useUpdateMeal({
+    mealId: editMealId,
+  });
+
+  useEffect(() => {
+    if (!isEditMode || !editMeal || initializedMealId === editMeal.id) return;
+
+    // One-time form initialization from the async-loaded meal, guarded by its id.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMealName(editMeal.name);
+    setDescription(editMeal.description ?? '');
+    setNotes(editMeal.notes ?? '');
+    const loadedServingSize = editMeal.serving_size ?? 1;
+    const loadedTotalServings = editMeal.total_servings ?? 1;
+    setServingSizeText(String(loadedServingSize));
+    setServingUnit(editMeal.serving_unit);
+    setTotalServingsText(String(loadedTotalServings));
+    // toPrecision(15) strips IEEE 754 artifacts (e.g. 1000 * 4.015 →
+    // 4014.99999…) without losing real precision.
+    setTotalAmountText(
+      String(Number((loadedServingSize * loadedTotalServings).toPrecision(15)))
+    );
+    setIngredients(editMeal.foods.map(buildMealIngredientDraftFromMealFood));
+    setPickerImages(toSavedImages(editMeal.images));
+    setInitializedMealId(editMeal.id);
+  }, [editMeal, initializedMealId, isEditMode]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const selection = consumePendingMealIngredientSelection();
+      if (!selection) return;
+
+      setIngredients((currentIngredients) => {
+        const nextIngredients = [...currentIngredients];
+        if (
+          selection.ingredientIndex != null &&
+          selection.ingredientIndex >= 0 &&
+          selection.ingredientIndex < nextIngredients.length
+        ) {
+          nextIngredients[selection.ingredientIndex] = selection.ingredient;
+          return nextIngredients;
+        }
+
+        nextIngredients.push(selection.ingredient);
+        return nextIngredients;
+      });
+    }, [])
+  );
+
+  const totals = useMemo(() => toMealTotals(ingredients), [ingredients]);
+  const totalServingsCount = parseDecimalInput(totalServingsText) ?? 0;
+  const showPerServing = totalServingsCount > 1;
+  const proteinLabel = ` g ${t('nutrition.proteinAmount', { defaultValue: 'protein' })}`;
+  const carbsLabel = ` g ${t('nutrition.carbsAmount', { defaultValue: 'carbs' })}`;
+  const fatLabel = ` g ${t('nutrition.fatAmount', { defaultValue: 'fat' })}`;
+
+  const updateServingSize = (value: string) => {
+    if (DECIMAL_INPUT_REGEX.test(value)) {
+      setServingSizeText(value);
+    }
+  };
+
+  const updateTotalServings = (value: string) => {
+    if (DECIMAL_INPUT_REGEX.test(value)) {
+      setTotalServingsText(value);
+    }
+  };
+
+  const updateTotalAmount = (value: string) => {
+    if (DECIMAL_INPUT_REGEX.test(value)) {
+      setTotalAmountText(value);
+    }
+  };
+
+  const handleServingUnitChange = (value: string) => {
+    const previousUnit = servingUnit;
+    setServingUnit(value);
+    if (value === 'serving') {
+      // Switching INTO serving-unit.
+      // If coming from a quantity-based unit, derive total_servings from the
+      // current Total Amount / Default Serving Size so the user's recipe
+      // definition isn't silently lost when serving_size collapses to 1.
+      if (previousUnit !== 'serving') {
+        const parsedAmount = parseDecimalInput(totalAmountText);
+        const parsedSize = parseDecimalInput(servingSizeText);
+        if (parsedAmount && parsedSize && parsedAmount > 0 && parsedSize > 0) {
+          setTotalServingsText(String(parsedAmount / parsedSize));
+        }
+      }
+      setServingSizeText('1');
+    } else if (previousUnit === 'serving') {
+      // Switching OUT of serving-unit: seed Total Amount from total_servings × 1.
+      setServingSizeText('1');
+      setTotalAmountText(totalServingsText || '1');
+    }
+  };
+
+  const removeIngredient = (index: number) => {
+    setIngredients((currentIngredients) =>
+      currentIngredients.filter(
+        (_, ingredientIndex) => ingredientIndex !== index
+      )
+    );
+  };
+
+  const openIngredientPicker = () => {
+    navigation.push('FoodSearch', { pickerMode: 'meal-builder' });
+  };
+
+  const editIngredient = (
+    ingredient: MealIngredientDraft,
+    ingredientIndex: number
+  ) => {
+    // Linked sub-meal ingredients aren't editable in the mobile builder yet
+    // (quantity editing for a linked meal needs a meal-serving picker, not the
+    // food/variant editor below) — remove and re-add via the web app instead.
+    if (ingredient.item_type === 'meal') {
+      Toast.show({
+        type: 'info',
+        text1: t('mealBuilder.linkedMeal', { defaultValue: 'Linked meal' }),
+        text2: t('mealBuilder.linkedMealWebEdit', {
+          defaultValue: 'Edit this sub-meal ingredient in the web app.',
+        }),
+      });
+      return;
+    }
+    // Pass the ingredient's stored unit snapshot as a selectedVariantOverride so
+    // FoodEntryAdd opens with the actual unit/nutrition rather than the default variant.
+    const variantOverride: FoodUnitVariant = {
+      id: ingredient.variant_id || undefined,
+      serving_size: ingredient.serving_size,
+      serving_unit: ingredient.serving_unit,
+      calories: ingredient.calories,
+      protein: ingredient.protein,
+      carbs: ingredient.carbs,
+      fat: ingredient.fat,
+      dietary_fiber: ingredient.dietary_fiber,
+      saturated_fat: ingredient.saturated_fat,
+      sodium: ingredient.sodium,
+      sugars: ingredient.sugars,
+      trans_fat: ingredient.trans_fat,
+      potassium: ingredient.potassium,
+      calcium: ingredient.calcium,
+      iron: ingredient.iron,
+      caffeine_mg: ingredient.caffeine_mg,
+      water_ml: ingredient.water_ml,
+      alcohol_g: ingredient.alcohol_g,
+      cholesterol: ingredient.cholesterol,
+      vitamin_a: ingredient.vitamin_a,
+      vitamin_c: ingredient.vitamin_c,
+    };
+    navigation.navigate('FoodEntryAdd', {
+      item: mealIngredientDraftToFoodInfo(ingredient),
+      pickerMode: 'meal-builder',
+      ingredientIndex,
+      returnDepth: 1,
+      selectedVariantOverride: variantOverride,
+    });
+  };
+
+  const showIngredientMenu = (
+    ingredient: MealIngredientDraft,
+    ingredientIndex: number
+  ) => {
+    Alert.alert(
+      ingredient.food_name || t('addSheet.food', { defaultValue: 'Food' }),
+      undefined,
+      [
+        {
+          text: t('common.edit', { defaultValue: 'Edit' }),
+          onPress: () => editIngredient(ingredient, ingredientIndex),
+        },
+        {
+          text: t('common.delete', { defaultValue: 'Delete' }),
+          style: 'destructive',
+          onPress: () => removeIngredient(ingredientIndex),
+        },
+        {
+          text: t('common.cancel', { defaultValue: 'Cancel' }),
+          style: 'cancel',
+        },
+      ]
+    );
+  };
+
+  const handleSaveMeal = async () => {
+    const trimmedMealName = mealName.trim();
+
+    // Derive the persisted fields based on the unit:
+    //   - 'serving': user typed Total Servings directly; serving_size = 1.
+    //   - other:    user typed Total Amount + Default Serving Size; derive
+    //               total_servings = totalAmount / servingSize.
+    let parsedServingSize: number | null;
+    let parsedTotalServings: number | null;
+    if (servingUnit === 'serving') {
+      parsedServingSize = 1;
+      parsedTotalServings = parseDecimalInput(totalServingsText);
+    } else {
+      parsedServingSize = parseDecimalInput(servingSizeText);
+      const parsedTotalAmount = parseDecimalInput(totalAmountText);
+      parsedTotalServings =
+        parsedServingSize && parsedTotalAmount && parsedServingSize > 0
+          ? Number(
+              (parsedTotalAmount / parsedServingSize).toFixed(
+                MEAL_SERVING_PRECISION
+              )
+            )
+          : null;
+    }
+
+    if (!trimmedMealName) {
+      Toast.show({
+        type: 'error',
+        text1: t('mealBuilder.errors.missingNameTitle', {
+          defaultValue: 'Missing meal name',
+        }),
+        text2: t('mealBuilder.errors.missingNameMessage', {
+          defaultValue: 'Please enter a name for your meal.',
+        }),
+      });
+      return;
+    }
+
+    if (!parsedServingSize || parsedServingSize <= 0) {
+      Toast.show({
+        type: 'error',
+        text1: t('mealBuilder.errors.invalidServingSizeTitle', {
+          defaultValue: 'Invalid serving size',
+        }),
+        text2: t('mealBuilder.errors.invalidServingSizeMessage', {
+          defaultValue: 'Default serving size must be greater than zero.',
+        }),
+      });
+      return;
+    }
+
+    if (!parsedTotalServings || parsedTotalServings <= 0) {
+      Toast.show({
+        type: 'error',
+        text1:
+          servingUnit === 'serving'
+            ? t('mealBuilder.errors.invalidTotalServingsTitle', {
+                defaultValue: 'Invalid total servings',
+              })
+            : t('mealBuilder.errors.invalidTotalAmountTitle', {
+                defaultValue: 'Invalid total amount',
+              }),
+        text2:
+          servingUnit === 'serving'
+            ? t('mealBuilder.errors.invalidTotalServingsMessage', {
+                defaultValue: 'Total servings must be greater than zero.',
+              })
+            : t('mealBuilder.errors.invalidTotalAmountMessage', {
+                defaultValue: 'Total amount must be greater than zero.',
+              }),
+      });
+      return;
+    }
+
+    if (!ingredients.length) {
+      Toast.show({
+        type: 'error',
+        text1: t('mealBuilder.errors.noIngredientsTitle', {
+          defaultValue: 'No ingredients yet',
+        }),
+        text2: t('mealBuilder.errors.noIngredientsMessage', {
+          defaultValue: 'Add at least one food before saving this meal.',
+        }),
+      });
+      return;
+    }
+
+    if (ingredients.some((ingredient) => !ingredient.variant_id)) {
+      Toast.show({
+        type: 'error',
+        text1: t('mealBuilder.errors.missingIngredientTitle', {
+          defaultValue: 'Missing ingredient data',
+        }),
+        text2: t('mealBuilder.errors.missingIngredientMessage', {
+          defaultValue:
+            'One of the selected foods is missing a serving variant. Please re-add it.',
+        }),
+      });
+      return;
+    }
+
+    try {
+      const payload = {
+        name: trimmedMealName,
+        description: description.trim() || null,
+        notes: notes.trim() || null,
+        serving_size: parsedServingSize,
+        serving_unit: servingUnit,
+        total_servings: parsedTotalServings,
+        foods: ingredients.map(mealIngredientToPayload),
+      };
+
+      // Only send images on edit when they changed: a supplied `images` array
+      // is authoritative server-side and deletes anything omitted.
+      const imageArgs = isEditMode
+        ? pickerImagesDiffer(pickerImages, editMeal?.images)
+          ? splitPickerImages(pickerImages)
+          : undefined
+        : pickerImages.length > 0
+          ? splitPickerImages(pickerImages)
+          : undefined;
+
+      if (isEditMode) {
+        await updateMealAsync(payload, imageArgs);
+      } else {
+        await createMealAsync(
+          {
+            ...payload,
+            is_public: false,
+          },
+          imageArgs
+        );
+      }
+      navigation.goBack();
+    } catch {
+      // Error toast is handled in the mutation hook.
+    }
+  };
+
+  const isSaving = isPending || isUpdatePending;
+
+  const header = useScreenHeader({
+    title: isEditMode
+      ? t('mealBuilder.editTitle', { defaultValue: 'Edit Meal' })
+      : t('mealBuilder.createTitle', { defaultValue: 'Create Meal' }),
+    left: {
+      kind: 'dismiss',
+      onPress: () => navigation.goBack(),
+      disabled: isSaving,
+      identifier: isEditMode ? 'meal-edit-cancel' : 'meal-create-cancel',
+    },
+    right: {
+      kind: 'primary',
+      label: t('common.save', { defaultValue: 'Save' }),
+      busyLabel: t('common.saving', { defaultValue: 'Saving…' }),
+      busy: isSaving,
+      disabled: isSaving,
+      placement: 'native-only',
+      onPress: () => void handleSaveMeal(),
+      identifier: isEditMode ? 'meal-edit-save' : 'meal-create-save',
+    },
+  });
+
+  if (isEditMode && isEditMealLoading && !editMeal) {
+    return (
+      <View
+        className="flex-1 bg-background"
+        style={
+          Platform.OS === 'android' ? { paddingTop: insets.top } : undefined
+        }
+      >
+        {header}
+        <StatusView
+          loading
+          title={t('mealBuilder.loading', { defaultValue: 'Loading meal...' })}
+        />
+      </View>
+    );
+  }
+
+  if (isEditMode && (isEditMealError || !editMeal)) {
+    return (
+      <View
+        className="flex-1 bg-background"
+        style={
+          Platform.OS === 'android' ? { paddingTop: insets.top } : undefined
+        }
+      >
+        {header}
+        <StatusView
+          icon="alert-circle"
+          iconTone="danger"
+          iconSize={64}
+          title={t('mealBuilder.loadErrorTitle', {
+            defaultValue: 'Failed to load meal',
+          })}
+          subtitle={t('common.connectionRetry', {
+            defaultValue: 'Please check your connection and try again.',
+          })}
+          action={{
+            label: t('common.retry', { defaultValue: 'Retry' }),
+            onPress: () => void refetch(),
+            variant: 'primary',
+          }}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View
+      className="flex-1 bg-background"
+      style={Platform.OS === 'android' ? { paddingTop: insets.top } : undefined}
+    >
+      {header}
+
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName="px-4 pt-4 pb-8 gap-4"
+        keyboardShouldPersistTaps="handled"
+      >
+        <View className="bg-surface rounded-xl p-4 gap-4 shadow-sm">
+          <FoodImagePicker
+            items={pickerImages}
+            onItemsChange={setPickerImages}
+            disabled={isSaving}
+          />
+
+          <View className="gap-1.5">
+            <Text className="text-text-secondary text-sm font-medium">
+              {t('mealBuilder.mealName', { defaultValue: 'Meal Name' })} *
+            </Text>
+            <FormInput
+              placeholder={t('mealBuilder.mealNamePlaceholder', {
+                defaultValue: 'e.g. Chicken Rice Bowl',
+              })}
+              value={mealName}
+              onChangeText={setMealName}
+              returnKeyType="done"
+            />
+          </View>
+
+          <View className="gap-1.5">
+            <Text className="text-text-secondary text-sm font-medium">
+              {t('mealBuilder.descriptionOptional', {
+                defaultValue: 'Description (optional)',
+              })}
+            </Text>
+            <FormInput
+              placeholder={t('mealBuilder.descriptionPlaceholder', {
+                defaultValue: 'Notes about this meal',
+              })}
+              value={description}
+              onChangeText={setDescription}
+              multiline
+            />
+          </View>
+
+          {/* Top row: count-or-amount + unit selector */}
+          <View className="flex-row gap-3">
+            <View className="flex-1 gap-1.5">
+              {servingUnit === 'serving' ? (
+                <>
+                  <Text className="text-text-secondary text-sm font-medium">
+                    {t('mealBuilder.totalServings', {
+                      defaultValue: 'Total Servings',
+                    })}{' '}
+                    *
+                  </Text>
+                  <FormInput
+                    placeholder="1"
+                    value={totalServingsText}
+                    onChangeText={updateTotalServings}
+                    keyboardType="decimal-pad"
+                    returnKeyType="done"
+                  />
+                </>
+              ) : (
+                <>
+                  <Text className="text-text-secondary text-sm font-medium">
+                    {t('mealBuilder.totalAmount', {
+                      defaultValue: 'Total Amount ({{unit}}) *',
+                      unit: getServingUnitLabel(servingUnit, t),
+                    })}
+                  </Text>
+                  <FormInput
+                    placeholder="1"
+                    value={totalAmountText}
+                    onChangeText={updateTotalAmount}
+                    keyboardType="decimal-pad"
+                    returnKeyType="done"
+                  />
+                </>
+              )}
+            </View>
+            <View className="flex-1 gap-1.5">
+              <Text className="text-text-secondary text-sm font-medium">
+                {t('mealBuilder.unit', { defaultValue: 'Unit' })}
+              </Text>
+              <BottomSheetPicker
+                value={servingUnit}
+                options={localizedServingUnitOptions}
+                onSelect={handleServingUnitChange}
+                title={t('mealBuilder.selectUnit', {
+                  defaultValue: 'Select Unit',
+                })}
+                renderTrigger={({ onPress, selectedOption }) => (
+                  <TouchableOpacity
+                    onPress={onPress}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('mealBuilder.unitPickerLabel', {
+                      defaultValue: 'Unit, {{unit}}',
+                      unit: getServingUnitLabel(servingUnit, t),
+                    })}
+                    accessibilityHint={t('common.openSelectionMenu', {
+                      defaultValue: 'Opens selection menu',
+                    })}
+                    className="bg-raised rounded-lg border border-border-subtle px-3 py-2.5 flex-row items-center justify-between"
+                    style={{ minHeight: 44 }}
+                  >
+                    <Text
+                      className="text-text-primary"
+                      style={{ fontSize: 16 }}
+                    >
+                      {selectedOption?.label ??
+                        getServingUnitLabel(servingUnit, t)}
+                    </Text>
+                    <Icon
+                      name="chevron-down"
+                      size={12}
+                      color={textMuted}
+                      weight="medium"
+                    />
+                  </TouchableOpacity>
+                )}
+              />
+            </View>
+          </View>
+
+          {/* Bottom row: Serving Size — only for non-serving units. Short
+              label "Serving Size (unit) *" fits the half-width column, so we
+              use the same layout as Total Amount / Unit above. */}
+          {servingUnit !== 'serving' && (
+            <View className="flex-row gap-3">
+              <View className="flex-1 gap-1.5">
+                <Text className="text-text-secondary text-sm font-medium">
+                  {t('mealBuilder.servingSize', {
+                    defaultValue: 'Serving Size ({{unit}}) *',
+                    unit: getServingUnitLabel(servingUnit, t),
+                  })}
+                </Text>
+                <FormInput
+                  placeholder="1"
+                  value={servingSizeText}
+                  onChangeText={updateServingSize}
+                  keyboardType="decimal-pad"
+                  returnKeyType="done"
+                />
+              </View>
+              <View className="flex-1" />
+            </View>
+          )}
+        </View>
+
+        <View className="bg-surface rounded-xl p-4 gap-3 shadow-sm">
+          <Text className="text-text-primary text-lg font-semibold">
+            {t('mealBuilder.foodsInMeal', { defaultValue: 'Foods in Meal' })}
+          </Text>
+
+          {ingredients.length > 0 ? (
+            <View>
+              {ingredients.map((ingredient, index) => {
+                const servingSize = toFiniteNumber(ingredient.serving_size);
+                const quantity = toFiniteNumber(ingredient.quantity);
+                const scale = servingSize > 0 ? quantity / servingSize : 0;
+                const ingredientCalories = formatCaloriesDisplay(
+                  toFiniteNumber(ingredient.calories) * scale
+                );
+                const ingredientProtein = formatMacroDisplay(
+                  toFiniteNumber(ingredient.protein) * scale
+                );
+                const ingredientCarbs = formatMacroDisplay(
+                  toFiniteNumber(ingredient.carbs) * scale
+                );
+                const ingredientFat = formatMacroDisplay(
+                  toFiniteNumber(ingredient.fat) * scale
+                );
+                const isFirst = index === 0;
+                const ingredientKey = `${ingredient.food_id}-${ingredient.variant_id}-${index}`;
+
+                return (
+                  <ReanimatedSwipeable
+                    key={ingredientKey}
+                    overshootRight={false}
+                    rightThreshold={40}
+                    renderRightActions={() => (
+                      <View className="pl-3 py-1" style={{ width: 84 }}>
+                        <TouchableOpacity
+                          className="bg-bg-danger rounded-lg flex-1 justify-center items-center"
+                          onPress={() => removeIngredient(index)}
+                          activeOpacity={0.7}
+                          accessibilityLabel={t(
+                            'mealBuilder.removeIngredient',
+                            {
+                              defaultValue: 'Remove {{name}}',
+                              name:
+                                ingredient.food_name ||
+                                t('mealBuilder.ingredient', {
+                                  defaultValue: 'ingredient',
+                                }),
+                            }
+                          )}
+                          accessibilityRole="button"
+                        >
+                          <Text className="text-text-danger font-semibold text-sm">
+                            {t('common.delete', { defaultValue: 'Delete' })}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  >
+                    <GHTouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => editIngredient(ingredient, index)}
+                      onLongPress={() => showIngredientMenu(ingredient, index)}
+                      accessibilityLabel={t('mealBuilder.editIngredient', {
+                        defaultValue: 'Edit {{name}}',
+                        name:
+                          ingredient.food_name ||
+                          t('mealBuilder.ingredient', {
+                            defaultValue: 'ingredient',
+                          }),
+                      })}
+                      accessibilityRole="button"
+                      className="bg-surface"
+                    >
+                      <View
+                        className={`flex-row items-start justify-between gap-3 py-3 ${
+                          isFirst ? '' : 'border-t border-border-subtle'
+                        }`}
+                      >
+                        <View className="flex-1">
+                          <Text
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                            className="text-text-primary text-base font-semibold"
+                          >
+                            {ingredient.food_name ||
+                              t('addSheet.food', { defaultValue: 'Food' })}
+                            {ingredient.brand ? (
+                              <Text className="text-text-secondary font-normal">
+                                {' \u00b7 '}
+                                {ingredient.brand}
+                              </Text>
+                            ) : null}
+                          </Text>
+                          {ingredient.item_type === 'meal' ? (
+                            <View
+                              className="self-start rounded-full px-2 py-0.5 mt-1"
+                              style={{ backgroundColor: `${textMuted}1A` }}
+                            >
+                              <Text
+                                className="text-xs font-medium"
+                                style={{ color: textMuted }}
+                              >
+                                {t('mealBuilder.linkedMeal', {
+                                  defaultValue: 'Linked meal',
+                                })}
+                              </Text>
+                            </View>
+                          ) : null}
+                          <Text className="text-text-muted text-sm mt-1">
+                            {ingredientProtein}g{' '}
+                            {t('nutrition.protein', {
+                              defaultValue: 'protein',
+                            })}
+                            {' \u00b7 '}
+                            {ingredientCarbs}g{' '}
+                            {t('nutrition.carbs', { defaultValue: 'carbs' })}
+                            {' \u00b7 '}
+                            {ingredientFat}g{' '}
+                            {t('nutrition.fat', { defaultValue: 'fat' })}
+                          </Text>
+                        </View>
+                        <View className="items-end">
+                          <Text className="text-text-primary text-base font-semibold">
+                            {ingredientCalories}{' '}
+                            {t('foodSearch.labels.caloriesUnit', {
+                              defaultValue: 'cal',
+                            })}
+                          </Text>
+                          <Text className="text-text-muted text-sm mt-1">
+                            {formatServingSizeDisplay(quantity)}{' '}
+                            {getServingUnitLabel(
+                              ingredient.unit ||
+                                ingredient.serving_unit ||
+                                'serving',
+                              t
+                            )}
+                          </Text>
+                        </View>
+                      </View>
+                    </GHTouchableOpacity>
+                  </ReanimatedSwipeable>
+                );
+              })}
+            </View>
+          ) : null}
+
+          <View className="items-center pt-1">
+            <Button
+              variant="ghost"
+              onPress={openIngredientPicker}
+              className="min-h-11 flex-row items-center gap-1.5 rounded-xl px-3 py-2"
+              accessibilityLabel={t('mealBuilder.addFood', {
+                defaultValue: 'Add Food',
+              })}
+            >
+              <Icon name="add" size={16} color={accentColor} />
+              <Text className="text-accent-primary text-sm font-semibold">
+                {t('mealBuilder.addFood', { defaultValue: 'Add Food' })}
+              </Text>
+            </Button>
+          </View>
+
+          {ingredients.length > 0 ? (
+            <View className="bg-raised rounded-lg p-4 gap-4">
+              <View className="gap-2">
+                <View className="flex-row items-center justify-between">
+                  <Text className="text-text-secondary text-base font-medium">
+                    {t('mealBuilder.mealTotal', { defaultValue: 'Meal total' })}
+                  </Text>
+                  <Text className="text-text-primary text-base font-semibold text-right">
+                    {formatCaloriesDisplay(totals.calories)}{' '}
+                    {t('foodSearch.labels.caloriesUnit', {
+                      defaultValue: 'cal',
+                    })}
+                  </Text>
+                </View>
+                <View className="flex-row items-start gap-2 mt-1">
+                  <MacroStat
+                    color={proteinColor}
+                    value={formatMacroDisplay(totals.protein)}
+                    label={proteinLabel}
+                  />
+                  <MacroStat
+                    color={carbsColor}
+                    value={formatMacroDisplay(totals.carbs)}
+                    label={carbsLabel}
+                  />
+                  <MacroStat
+                    color={fatColor}
+                    value={formatMacroDisplay(totals.fat)}
+                    label={fatLabel}
+                  />
+                </View>
+              </View>
+              {showPerServing ? (
+                <View className="gap-2">
+                  <View className="flex-row items-center justify-between">
+                    <Text className="text-text-secondary text-base font-medium">
+                      {t('mealBuilder.perServing', {
+                        defaultValue: 'Per serving',
+                      })}
+                    </Text>
+                    <Text className="text-text-primary text-base font-semibold text-right">
+                      {formatCaloriesDisplay(
+                        totals.calories / totalServingsCount
+                      )}{' '}
+                      {t('foodSearch.labels.caloriesUnit', {
+                        defaultValue: 'cal',
+                      })}
+                    </Text>
+                  </View>
+                  <View className="flex-row items-start gap-2 mt-1">
+                    <MacroStat
+                      color={proteinColor}
+                      value={formatMacroDisplay(
+                        totals.protein / totalServingsCount
+                      )}
+                      label={proteinLabel}
+                    />
+                    <MacroStat
+                      color={carbsColor}
+                      value={formatMacroDisplay(
+                        totals.carbs / totalServingsCount
+                      )}
+                      label={carbsLabel}
+                    />
+                    <MacroStat
+                      color={fatColor}
+                      value={formatMacroDisplay(
+                        totals.fat / totalServingsCount
+                      )}
+                      label={fatLabel}
+                    />
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/*
+            Last, after the ingredients and nutrition totals: those are what
+            this screen is for, and a full recipe above them would push them
+            off-screen.
+          */}
+          <View className="mt-4">
+            <MarkdownNotesField
+              images={usableFoodImages(editMeal?.images)}
+              value={notes}
+              onCommit={setNotes}
+              label={t('mealBuilder.notes', {
+                defaultValue: 'Notes (optional)',
+              })}
+              placeholder={t('mealBuilder.notesPlaceholder', {
+                defaultValue: 'e.g. the recipe, or how you prepare this',
+              })}
+            />
+          </View>
+        </View>
+      </ScrollView>
+
+      {!usesNativeHeader && (
+        /* Sticky footer */
+        <FooterSaveBar
+          onPress={() => {
+            void handleSaveMeal();
+          }}
+          disabled={isSaving}
+          busy={isSaving}
+          label={
+            isSaving
+              ? t('common.saving', { defaultValue: 'Saving…' })
+              : t('common.save', { defaultValue: 'Save' })
+          }
+        />
+      )}
+    </View>
+  );
+};
+
+export default MealAddScreen;

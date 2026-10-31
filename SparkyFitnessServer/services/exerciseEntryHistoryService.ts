@@ -1,0 +1,858 @@
+import {
+  compareByEntryTime,
+  earliestEntryTime,
+  localDateToDay,
+  presetSessionResponseSchema,
+  type PresetSessionResponse,
+  type ActivityDetailResponse,
+  type ExerciseEntryResponse,
+  type ExerciseEntrySetResponse,
+  type ExerciseHistoryResponse,
+  type ExerciseModality,
+  type ExerciseSessionResponse,
+} from '@workspace/shared';
+
+import { getClient } from '../db/poolManager.js';
+import { log } from '../config/logging.js';
+import { EXERCISE_ENTRY_TELEMETRY_COLUMNS } from '../models/exerciseEntry.js';
+
+/** Convert a pg date value to a YYYY-MM-DD string, or return null. */
+function _dateToString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) return localDateToDay(value);
+  return String(value);
+}
+
+/** Parse a JSON string field into a string array, returning null on failure or missing input.
+ *  Handles double-stringified values (e.g. '"[\\"a\\"]"') by parsing recursively. */
+function _parseJsonArray(value: unknown): string[] | null {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return value as string[];
+  if (typeof value !== 'string') return null;
+  try {
+    let parsed: unknown = JSON.parse(value);
+    // Handle double-stringified JSON (legacy Free Exercise DB imports)
+    while (typeof parsed === 'string') {
+      parsed = JSON.parse(parsed);
+    }
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Parse detail_data recursively like activityDetailsRepository does. */
+function _parseDetailData(detailData: unknown): unknown {
+  let data = detailData;
+  while (typeof data === 'string') {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      break;
+    }
+  }
+  return data;
+}
+
+interface ActivityDetailRow {
+  id: string;
+  exercise_entry_id: string | null;
+  exercise_preset_entry_id: string | null;
+  provider_name: string;
+  detail_type: string;
+  detail_data: unknown;
+}
+
+// Raw provider sync dumps (Garmin's full_activity_data/full_workout_data) are large
+// (can include thousands of GPS points) and are meant to be fetched on demand for a
+// single entry, never inlined into a list/history response — see
+// activityDetailsRepository.getActivityDetailsSummaryForEntriesAndPresets, which this
+// mirrors for the hand-written queries in this file.
+const RAW_PROVIDER_DUMP_DETAIL_TYPES = [
+  'full_activity_data',
+  'full_workout_data',
+];
+
+/** Telemetry columns that hold free text rather than a measurement. */
+const TELEMETRY_TEXT_COLUMNS: ReadonlySet<string> = new Set([
+  'weather_condition',
+  'gear_name',
+  'gear_external_id',
+]);
+
+const ACTIVITY_DETAIL_COLUMNS_MASKED = `id, exercise_entry_id, exercise_preset_entry_id, provider_name, detail_type,
+       created_by_user_id, created_at,
+       CASE WHEN detail_type = ANY($2::text[]) THEN NULL ELSE detail_data END AS detail_data`;
+
+const SETS_SUBQUERY = `COALESCE(
+  (SELECT json_agg(set_data ORDER BY set_data.set_number)
+   FROM (
+     SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight,
+            ees.duration, ees.rest_time, ees.notes, ees.rpe, ees.rir,
+            to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at,
+            ees.is_pr, ees.distance
+     FROM exercise_entry_sets ees
+     WHERE ees.exercise_entry_id = ee.id
+   ) AS set_data
+  ), '[]'::json
+) AS sets`;
+
+/**
+ * Transform a raw exercise_entries row (with snapshot columns and inline sets)
+ * into the shape expected by exerciseEntryResponseSchema.
+ */
+function _buildExerciseEntryWithSnapshot(
+  row: Record<string, unknown>
+): ExerciseEntryResponse {
+  const {
+    exercise_name,
+    category,
+    modality,
+    source,
+    images,
+    primary_muscles,
+    secondary_muscles,
+    equipment,
+    instructions,
+    force,
+    level,
+    mechanic,
+    // Strip columns that aren't part of the API response
+    _user_id,
+    _created_by_user_id,
+    _updated_by_user_id,
+    _created_at,
+    _updated_at,
+    ...entryData
+  } = row;
+
+  const telemetryNumbers: Record<string, number | null> = {};
+  const telemetryText: Record<string, string | null> = {};
+  for (const column of EXERCISE_ENTRY_TELEMETRY_COLUMNS) {
+    const value = entryData[column];
+    if (TELEMETRY_TEXT_COLUMNS.has(column)) {
+      telemetryText[column] = (value as string | null | undefined) ?? null;
+    } else {
+      telemetryNumbers[column] = (value as number | null | undefined) ?? null;
+    }
+  }
+
+  return {
+    id: entryData.id as string,
+    exercise_id: entryData.exercise_id as string,
+    duration_minutes: (entryData.duration_minutes as number) ?? 0,
+    calories_burned: (entryData.calories_burned as number) ?? 0,
+    entry_date: _dateToString(entryData.entry_date),
+    entry_time: (entryData.entry_time as string) ?? null,
+    notes: (entryData.notes as string) ?? null,
+    distance: (entryData.distance as number) ?? null,
+    avg_heart_rate: (entryData.avg_heart_rate as number) ?? null,
+    steps: (entryData.steps as number) ?? null,
+    superset_group: (entryData.superset_group as number) ?? null,
+    workout_plan_assignment_id:
+      (entryData.workout_plan_assignment_id as string | number | null) ?? null,
+    source: (source as string) ?? null,
+    image_url: (entryData.image_url as string) ?? null,
+    sets: ((entryData.sets as unknown[]) ?? []) as ExerciseEntrySetResponse[],
+    // Wearable telemetry: entryData carries every exercise_entries column (the
+    // query behind this builder is SELECT ee.*), but nothing above copies these
+    // ~40 columns onto the response, so they were silently dropped even though
+    // the DB and the response schema both have them.
+    ...telemetryNumbers,
+    ...telemetryText,
+    exercise_snapshot: {
+      id: entryData.exercise_id as string,
+      name: exercise_name as string,
+      category: (category as string) ?? null,
+      modality: (modality as ExerciseModality) ?? null,
+      images: _parseJsonArray(images),
+      primary_muscles: _parseJsonArray(primary_muscles),
+      secondary_muscles: _parseJsonArray(secondary_muscles),
+      equipment: _parseJsonArray(equipment),
+      instructions: _parseJsonArray(instructions),
+      force: (force as string) ?? null,
+      level: (level as string) ?? null,
+      mechanic: (mechanic as string) ?? null,
+    },
+    activity_details: [] as ActivityDetailResponse[],
+  } satisfies ExerciseEntryResponse;
+}
+
+/** Count the total number of "sessions" (preset entries + standalone exercise entries). */
+async function countExerciseEntrySessions(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  client: { query: Function },
+  userId: string,
+  exerciseId: string | null
+): Promise<number> {
+  const result = await client.query(
+    `WITH sessions AS (
+       SELECT epe.id FROM exercise_preset_entries epe
+       WHERE epe.user_id = $1
+         AND ($2::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM exercise_entries ce
+           WHERE ce.exercise_preset_entry_id = epe.id AND ce.exercise_id = $2
+         ))
+       UNION ALL
+       SELECT id FROM exercise_entries
+       WHERE user_id = $1 AND exercise_preset_entry_id IS NULL
+         AND ($2::uuid IS NULL OR exercise_id = $2)
+     )
+     SELECT COUNT(*)::int AS count FROM sessions`,
+    [userId, exerciseId]
+  );
+  return result.rows[0].count;
+}
+
+/** Fetch paginated session stubs and their full details. */
+async function getExerciseEntryHistorySessions(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  client: { query: Function },
+  userId: string,
+  limit: number,
+  offset: number,
+  exerciseId: string | null
+): Promise<ExerciseSessionResponse[]> {
+  // Phase 1: Get paginated session stubs
+  const stubsResult = await client.query(
+    `WITH sessions AS (
+       SELECT epe.id, epe.entry_date, epe.created_at, 'preset' AS session_type
+       FROM exercise_preset_entries epe
+       WHERE epe.user_id = $1
+         AND ($4::uuid IS NULL OR EXISTS (
+           SELECT 1 FROM exercise_entries ce
+           WHERE ce.exercise_preset_entry_id = epe.id AND ce.exercise_id = $4
+         ))
+       UNION ALL
+       SELECT id, entry_date, created_at, 'individual' AS session_type
+       FROM exercise_entries
+       WHERE user_id = $1 AND exercise_preset_entry_id IS NULL
+         AND ($4::uuid IS NULL OR exercise_id = $4)
+     )
+     SELECT id, entry_date, created_at, session_type
+     FROM sessions ORDER BY entry_date DESC, created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, limit, offset, exerciseId]
+  );
+  const stubs = stubsResult.rows as Array<{
+    id: string;
+    entry_date: string;
+    created_at: string;
+    session_type: 'preset' | 'individual';
+  }>;
+
+  if (stubs.length === 0) return [];
+
+  // Partition stubs
+  const presetIds: string[] = [];
+  const individualIds: string[] = [];
+  for (const stub of stubs) {
+    if (stub.session_type === 'preset') {
+      presetIds.push(stub.id);
+    } else {
+      individualIds.push(stub.id);
+    }
+  }
+
+  // Phase 2: Batch fetch details
+  const presetMetaMap = new Map<string, Record<string, unknown>>();
+  const presetChildrenMap = new Map<string, ExerciseEntryResponse[]>();
+  const presetActivityMap = new Map<string, ActivityDetailRow[]>();
+  const individualMap = new Map<
+    string,
+    ExerciseEntryResponse & { name: string | null }
+  >();
+  const allExerciseEntryIds: string[] = [];
+
+  const batchQueries: Promise<void>[] = [];
+
+  if (presetIds.length > 0) {
+    // Initialize child buckets before parallel fetches so the child-entries
+    // query can safely append regardless of resolution order.
+    for (const id of presetIds) {
+      presetChildrenMap.set(id, []);
+    }
+
+    // Preset metadata
+    batchQueries.push(
+      client
+        .query(
+          `SELECT id, workout_preset_id, name, description, notes, source, location
+           FROM exercise_preset_entries WHERE id = ANY($1::uuid[])`,
+          [presetIds]
+        )
+        .then((r: { rows: Record<string, unknown>[] }) => {
+          for (const row of r.rows) {
+            presetMetaMap.set(row.id as string, row);
+          }
+        })
+    );
+
+    // Child exercise entries for presets
+    batchQueries.push(
+      client
+        .query(
+          `SELECT ee.*, ${SETS_SUBQUERY}
+           FROM exercise_entries ee
+           WHERE ee.exercise_preset_entry_id = ANY($1::uuid[])
+           ORDER BY ee.sort_order ASC, ee.created_at ASC`,
+          [presetIds]
+        )
+        .then((r: { rows: Record<string, unknown>[] }) => {
+          for (const row of r.rows) {
+            const entry = _buildExerciseEntryWithSnapshot(row);
+            allExerciseEntryIds.push(entry.id);
+            const presetId = row.exercise_preset_entry_id as string;
+            const children = presetChildrenMap.get(presetId);
+            if (children) {
+              children.push(entry);
+            }
+          }
+        })
+    );
+
+    // Preset-level activity details (raw provider dumps stripped of payload — see
+    // RAW_PROVIDER_DUMP_DETAIL_TYPES)
+    batchQueries.push(
+      client
+        .query(
+          `SELECT ${ACTIVITY_DETAIL_COLUMNS_MASKED}
+           FROM exercise_entry_activity_details
+           WHERE exercise_preset_entry_id = ANY($1::uuid[])`,
+          [presetIds, RAW_PROVIDER_DUMP_DETAIL_TYPES]
+        )
+        .then((r: { rows: ActivityDetailRow[] }) => {
+          for (const row of r.rows) {
+            const presetId = row.exercise_preset_entry_id as string;
+            if (!presetActivityMap.has(presetId)) {
+              presetActivityMap.set(presetId, []);
+            }
+            presetActivityMap.get(presetId)!.push(row);
+          }
+        })
+    );
+  }
+
+  if (individualIds.length > 0) {
+    // Individual exercise entries
+    batchQueries.push(
+      client
+        .query(
+          `SELECT ee.*, ${SETS_SUBQUERY}
+           FROM exercise_entries ee
+           WHERE ee.id = ANY($1::uuid[])`,
+          [individualIds]
+        )
+        .then((r: { rows: Record<string, unknown>[] }) => {
+          for (const row of r.rows) {
+            const entry = _buildExerciseEntryWithSnapshot(row);
+            allExerciseEntryIds.push(entry.id);
+            individualMap.set(entry.id, {
+              ...entry,
+              name: (row.exercise_name as string) ?? null,
+            });
+          }
+        })
+    );
+  }
+
+  await Promise.all(batchQueries);
+
+  // Entry-level activity details (for both preset children and individuals; raw
+  // provider dumps stripped of payload — see RAW_PROVIDER_DUMP_DETAIL_TYPES)
+  if (allExerciseEntryIds.length > 0) {
+    const adResult = await client.query(
+      `SELECT ${ACTIVITY_DETAIL_COLUMNS_MASKED}
+       FROM exercise_entry_activity_details
+       WHERE exercise_entry_id = ANY($1::uuid[])`,
+      [allExerciseEntryIds, RAW_PROVIDER_DUMP_DETAIL_TYPES]
+    );
+    const entryActivityMap = new Map<string, ActivityDetailRow[]>();
+    for (const row of adResult.rows as ActivityDetailRow[]) {
+      const eid = row.exercise_entry_id as string;
+      if (!entryActivityMap.has(eid)) {
+        entryActivityMap.set(eid, []);
+      }
+      entryActivityMap.get(eid)!.push(row);
+    }
+
+    // Attach entry-level activity details to preset children
+    for (const children of presetChildrenMap.values()) {
+      for (const child of children) {
+        const details = entryActivityMap.get(child.id) ?? [];
+        child.activity_details = details.map((d) => ({
+          id: d.id,
+          provider_name: d.provider_name,
+          detail_type: d.detail_type,
+          detail_data: _parseDetailData(d.detail_data),
+        }));
+      }
+    }
+
+    // Attach entry-level activity details to individuals
+    for (const [id, entry] of individualMap) {
+      const details = entryActivityMap.get(id) ?? [];
+      entry.activity_details = details.map((d) => ({
+        id: d.id,
+        provider_name: d.provider_name,
+        detail_type: d.detail_type,
+        detail_data: _parseDetailData(d.detail_data),
+      }));
+    }
+  }
+
+  // Phase 3: Assemble sessions in stub order
+  const sessions: ExerciseSessionResponse[] = [];
+  for (const stub of stubs) {
+    if (stub.session_type === 'preset') {
+      const meta = presetMetaMap.get(stub.id);
+      if (!meta) continue;
+      const children = presetChildrenMap.get(stub.id) ?? [];
+      const presetDetails = (presetActivityMap.get(stub.id) ?? []).map((d) => ({
+        id: d.id,
+        provider_name: d.provider_name,
+        detail_type: d.detail_type,
+        detail_data: _parseDetailData(d.detail_data),
+      }));
+      const totalDuration = children.reduce(
+        (sum, c) => sum + (c.duration_minutes ?? 0),
+        0
+      );
+      sessions.push({
+        type: 'preset' as const,
+        id: meta.id as string,
+        entry_date: _dateToString(stub.entry_date),
+        workout_preset_id: (meta.workout_preset_id as number) ?? null,
+        name: (meta.name as string) ?? 'Workout',
+        description: (meta.description as string) ?? null,
+        notes: (meta.notes as string) ?? null,
+        location: (meta.location as string) ?? null,
+        source: meta.source as string,
+        total_duration_minutes: totalDuration,
+        exercises: children,
+        activity_details: presetDetails,
+      });
+    } else {
+      const entry = individualMap.get(stub.id);
+      if (!entry) continue;
+      sessions.push({
+        type: 'individual' as const,
+        ...entry,
+      });
+    }
+  }
+
+  return sessions;
+}
+
+/**
+ * Get paginated exercise entry history for a user.
+ * Returns sessions (preset groups and standalone entries) sorted by date DESC.
+ * With `exerciseId`, only sessions containing that exercise are returned;
+ * preset sessions still include all of their child exercises.
+ */
+export async function getExerciseEntryHistory(
+  targetUserId: string,
+  page: number,
+  pageSize: number,
+  exerciseId: string | null = null
+): Promise<ExerciseHistoryResponse> {
+  const offset = (page - 1) * pageSize;
+  const client = await getClient(targetUserId);
+  try {
+    const [sessions, totalCount] = await Promise.all([
+      getExerciseEntryHistorySessions(
+        client,
+        targetUserId,
+        pageSize,
+        offset,
+        exerciseId
+      ),
+      countExerciseEntrySessions(client, targetUserId, exerciseId),
+    ]);
+
+    return {
+      sessions,
+      pagination: {
+        page,
+        pageSize,
+        totalCount,
+        hasMore: offset + sessions.length < totalCount,
+      },
+    };
+  } catch (error) {
+    log('error', 'Error fetching exercise entry history:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Get exercise sessions for a specific date, with properly parsed snapshots.
+ * V2 replacement for the legacy getExerciseEntriesByDate in exerciseEntry.js.
+ */
+export async function getExerciseEntriesByDateV2(
+  targetUserId: string,
+  selectedDate: string
+): Promise<ExerciseSessionResponse[]> {
+  const client = await getClient(targetUserId);
+  try {
+    return await _getExerciseEntriesByDateWithClient(
+      client,
+      targetUserId,
+      selectedDate
+    );
+  } catch (error) {
+    log('error', 'Error fetching v2 exercise entries by date:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function _getExerciseEntriesByDateWithClient(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  client: { query: Function },
+  userId: string,
+  selectedDate: string
+): Promise<ExerciseSessionResponse[]> {
+  // Fetch preset entries and all exercise entries for the date in parallel
+  const [presetResult, entriesResult] = await Promise.all([
+    client.query(
+      `SELECT id, workout_preset_id, name, description, notes, source, location, created_at
+       FROM exercise_preset_entries
+       WHERE user_id = $1 AND entry_date = $2
+       ORDER BY created_at ASC`,
+      [userId, selectedDate]
+    ),
+    client.query(
+      `SELECT ee.*, ${SETS_SUBQUERY}
+       FROM exercise_entries ee
+       WHERE ee.user_id = $1 AND ee.entry_date = $2
+       ORDER BY ee.sort_order ASC, ee.created_at ASC`,
+      [userId, selectedDate]
+    ),
+  ]);
+
+  const presetRows = presetResult.rows as Record<string, unknown>[];
+  const entryRows = entriesResult.rows as Record<string, unknown>[];
+
+  // Group entries: preset children vs standalone individuals
+  const presetChildrenMap = new Map<string, ExerciseEntryResponse[]>();
+  const individualMap = new Map<
+    string,
+    ExerciseEntryResponse & { name: string | null }
+  >();
+  const allEntryIds: string[] = [];
+
+  // Track created_at for chronological ordering of standalone entries
+  const individualCreatedAt = new Map<string, Date>();
+  const individualEntryTime = new Map<string, string | null>();
+
+  for (const id of presetRows.map((r) => r.id as string)) {
+    presetChildrenMap.set(id, []);
+  }
+
+  for (const row of entryRows) {
+    const entry = _buildExerciseEntryWithSnapshot(row);
+    allEntryIds.push(entry.id);
+    const presetId = row.exercise_preset_entry_id as string | null;
+
+    if (presetId && presetChildrenMap.has(presetId)) {
+      presetChildrenMap.get(presetId)!.push(entry);
+    } else {
+      individualMap.set(entry.id, {
+        ...entry,
+        name: (row.exercise_name as string) ?? null,
+      });
+      individualCreatedAt.set(entry.id, new Date(row.created_at as string));
+      individualEntryTime.set(entry.id, row.entry_time as string | null);
+    }
+  }
+
+  // Fetch activity details for all entries and presets
+  const presetIds = presetRows.map((r) => r.id as string);
+  const entryActivityMap = new Map<string, ActivityDetailRow[]>();
+  const presetActivityMap = new Map<string, ActivityDetailRow[]>();
+
+  const activityQueries: Promise<void>[] = [];
+
+  // Raw provider dumps stripped of payload — see RAW_PROVIDER_DUMP_DETAIL_TYPES.
+  if (allEntryIds.length > 0) {
+    activityQueries.push(
+      client
+        .query(
+          `SELECT ${ACTIVITY_DETAIL_COLUMNS_MASKED}
+           FROM exercise_entry_activity_details
+           WHERE exercise_entry_id = ANY($1::uuid[])`,
+          [allEntryIds, RAW_PROVIDER_DUMP_DETAIL_TYPES]
+        )
+        .then((r: { rows: ActivityDetailRow[] }) => {
+          for (const row of r.rows) {
+            const eid = row.exercise_entry_id as string;
+            if (!entryActivityMap.has(eid)) {
+              entryActivityMap.set(eid, []);
+            }
+            entryActivityMap.get(eid)!.push(row);
+          }
+        })
+    );
+  }
+
+  if (presetIds.length > 0) {
+    activityQueries.push(
+      client
+        .query(
+          `SELECT ${ACTIVITY_DETAIL_COLUMNS_MASKED}
+           FROM exercise_entry_activity_details
+           WHERE exercise_preset_entry_id = ANY($1::uuid[])`,
+          [presetIds, RAW_PROVIDER_DUMP_DETAIL_TYPES]
+        )
+        .then((r: { rows: ActivityDetailRow[] }) => {
+          for (const row of r.rows) {
+            const pid = row.exercise_preset_entry_id as string;
+            if (!presetActivityMap.has(pid)) {
+              presetActivityMap.set(pid, []);
+            }
+            presetActivityMap.get(pid)!.push(row);
+          }
+        })
+    );
+  }
+
+  await Promise.all(activityQueries);
+
+  // Attach activity details to entries
+  const mapActivityDetails = (
+    details: ActivityDetailRow[]
+  ): ActivityDetailResponse[] =>
+    details.map((d) => ({
+      id: d.id,
+      provider_name: d.provider_name,
+      detail_type: d.detail_type,
+      detail_data: _parseDetailData(d.detail_data),
+    }));
+
+  for (const children of presetChildrenMap.values()) {
+    for (const child of children) {
+      child.activity_details = mapActivityDetails(
+        entryActivityMap.get(child.id) ?? []
+      );
+    }
+  }
+
+  for (const entry of individualMap.values()) {
+    entry.activity_details = mapActivityDetails(
+      entryActivityMap.get(entry.id) ?? []
+    );
+  }
+
+  const getPresetEarliestTime = (presetId: string) =>
+    earliestEntryTime(presetChildrenMap.get(presetId) || []);
+
+  // Build a unified stub list for chronological ordering
+  const stubs: Array<{
+    sessionType: 'preset' | 'individual';
+    id: string;
+    createdAt: Date;
+    entryTime: string | null;
+  }> = [];
+
+  for (const presetRow of presetRows) {
+    const pid = presetRow.id as string;
+    stubs.push({
+      sessionType: 'preset',
+      id: pid,
+      createdAt: new Date(presetRow.created_at as string),
+      entryTime: getPresetEarliestTime(pid),
+    });
+  }
+
+  for (const [id, createdAt] of individualCreatedAt) {
+    stubs.push({
+      sessionType: 'individual',
+      id,
+      createdAt,
+      entryTime: individualEntryTime.get(id) || null,
+    });
+  }
+
+  stubs.sort(
+    (a, b) =>
+      compareByEntryTime(a.entryTime, b.entryTime) ||
+      a.createdAt.getTime() - b.createdAt.getTime()
+  );
+
+  // Assemble sessions in chronological order
+  const sessions: ExerciseSessionResponse[] = [];
+
+  for (const stub of stubs) {
+    if (stub.sessionType === 'preset') {
+      const presetRow = presetRows.find((r) => r.id === stub.id);
+      if (!presetRow) continue;
+      const children = presetChildrenMap.get(stub.id) ?? [];
+      const presetDetails = mapActivityDetails(
+        presetActivityMap.get(stub.id) ?? []
+      );
+      const totalDuration = children.reduce(
+        (sum, c) => sum + (c.duration_minutes ?? 0),
+        0
+      );
+
+      const childAssignmentId =
+        children.find(
+          (c) =>
+            c.workout_plan_assignment_id !== null &&
+            c.workout_plan_assignment_id !== undefined
+        )?.workout_plan_assignment_id ?? null;
+
+      sessions.push({
+        type: 'preset' as const,
+        id: stub.id,
+        entry_date: selectedDate,
+        workout_preset_id: (presetRow.workout_preset_id as number) ?? null,
+        workout_plan_assignment_id: childAssignmentId,
+        name: (presetRow.name as string) ?? 'Workout',
+        description: (presetRow.description as string) ?? null,
+        notes: (presetRow.notes as string) ?? null,
+        location: (presetRow.location as string) ?? null,
+        source: presetRow.source as string,
+        total_duration_minutes: totalDuration,
+        exercises: children,
+        activity_details: presetDetails,
+      });
+    } else {
+      const entry = individualMap.get(stub.id);
+      if (!entry) continue;
+      sessions.push({
+        type: 'individual' as const,
+        ...entry,
+      });
+    }
+  }
+
+  return sessions;
+}
+
+export async function getGroupedExerciseSessionById(
+  targetUserId: string,
+  presetEntryId: string
+): Promise<PresetSessionResponse | null> {
+  const client = await getClient(targetUserId);
+  try {
+    return getGroupedExerciseSessionByIdWithClient(
+      client,
+      targetUserId,
+      presetEntryId
+    );
+  } catch (error) {
+    log('error', 'Error fetching grouped exercise session:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getGroupedExerciseSessionByIdWithClient(
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+  client: { query: Function },
+  targetUserId: string,
+  presetEntryId: string,
+  lockExerciseEntries = false
+): Promise<PresetSessionResponse | null> {
+  // The session row is locked before its exercises because every other
+  // writer of the session (a date move, a delete) takes it first; taking the
+  // exercises first deadlocks against them.
+  const metaResult = await client.query(
+    `SELECT id, workout_preset_id, name, description, notes, source, entry_date, location
+     FROM exercise_preset_entries
+     WHERE user_id = $1 AND id = $2
+     ${lockExerciseEntries ? 'FOR NO KEY UPDATE' : ''}`,
+    [targetUserId, presetEntryId]
+  );
+
+  if (metaResult.rows.length === 0) {
+    return null;
+  }
+
+  // Children follow the workout's own order (sort_order), never entry_time: a
+  // live session stamps entry_time when an exercise's first set is logged, so
+  // logging out of order would otherwise reorder the workout on every save.
+  const [childEntriesResult, presetActivityResult] = await Promise.all([
+    client.query(
+      `SELECT ee.*, ${SETS_SUBQUERY}
+       FROM exercise_entries ee
+       WHERE ee.user_id = $1 AND ee.exercise_preset_entry_id = $2
+       ORDER BY ee.sort_order ASC, ee.created_at ASC
+       ${lockExerciseEntries ? 'FOR UPDATE OF ee' : ''}`,
+      [targetUserId, presetEntryId]
+    ),
+    client.query(
+      `SELECT * FROM exercise_entry_activity_details
+       WHERE exercise_preset_entry_id = $1`,
+      [presetEntryId]
+    ),
+  ]);
+
+  const childRows = childEntriesResult.rows as Record<string, unknown>[];
+  const childEntryIds = childRows.map((row) => row.id as string);
+  const entryActivityMap = new Map<string, ActivityDetailRow[]>();
+
+  if (childEntryIds.length > 0) {
+    const childActivityResult = await client.query(
+      `SELECT * FROM exercise_entry_activity_details
+       WHERE exercise_entry_id = ANY($1::uuid[])`,
+      [childEntryIds]
+    );
+
+    for (const row of childActivityResult.rows as ActivityDetailRow[]) {
+      const entryId = row.exercise_entry_id as string;
+      if (!entryActivityMap.has(entryId)) {
+        entryActivityMap.set(entryId, []);
+      }
+      entryActivityMap.get(entryId)!.push(row);
+    }
+  }
+
+  const exercises = childRows.map((row) => {
+    const entry = _buildExerciseEntryWithSnapshot(row);
+    const activityDetails = entryActivityMap.get(entry.id) ?? [];
+    entry.activity_details = activityDetails.map((detail) => ({
+      id: detail.id,
+      provider_name: detail.provider_name,
+      detail_type: detail.detail_type,
+      detail_data: _parseDetailData(detail.detail_data),
+    }));
+    return entry;
+  });
+
+  const presetActivityDetails = (
+    presetActivityResult.rows as ActivityDetailRow[]
+  ).map((detail) => ({
+    id: detail.id,
+    provider_name: detail.provider_name,
+    detail_type: detail.detail_type,
+    detail_data: _parseDetailData(detail.detail_data),
+  }));
+
+  const meta = metaResult.rows[0] as Record<string, unknown>;
+
+  return presetSessionResponseSchema.parse({
+    type: 'preset',
+    id: meta.id as string,
+    entry_date: _dateToString(meta.entry_date),
+    workout_preset_id: (meta.workout_preset_id as number) ?? null,
+    name: meta.name as string,
+    description: (meta.description as string) ?? null,
+    notes: (meta.notes as string) ?? null,
+    location: (meta.location as string) ?? null,
+    source: meta.source as string,
+    total_duration_minutes: exercises.reduce(
+      (sum, exercise) => sum + (exercise.duration_minutes ?? 0),
+      0
+    ),
+    exercises,
+    activity_details: presetActivityDetails,
+  });
+}

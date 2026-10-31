@@ -1,0 +1,543 @@
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { addDays, format, isAfter, parseISO } from 'date-fns';
+import type { ExerciseSessionResponse } from '@workspace/shared';
+import {
+  EMPTY_SUPPLEMENT_TOTALS,
+  computeStepCalories,
+} from '@workspace/shared';
+import { getDailySummaryRange } from '../services/dailySummaryRangeService.js';
+import { getDailySummary } from '../services/dailySummaryService.js';
+import goalService from '../services/goalService.js';
+import foodEntryService from '../services/foodEntryService.js';
+import { getExerciseEntriesByDateV2 } from '../services/exerciseEntryHistoryService.js';
+import reportRepository from '../models/reportRepository.js';
+import exerciseEntryRepository from '../models/exerciseEntry.js';
+import measurementRepository from '../models/measurementRepository.js';
+import userRepository from '../models/userRepository.js';
+import preferenceRepository from '../models/preferenceRepository.js';
+import foodRepository from '../models/foodMisc.js';
+import * as genericHealthRepository from '../models/genericHealthRepository.js';
+import bmrService from '../services/bmrService.js';
+
+vi.mock('../models/calorieRuleHistoryRepository.js', () => ({
+  default: { getCalorieRuleHistory: async () => [] },
+}));
+vi.mock('../services/goalService.js', () => ({
+  default: { getUserGoals: vi.fn(), getUserGoalsForRange: vi.fn() },
+}));
+vi.mock('../services/foodEntryService.js', () => ({
+  default: { getFoodEntriesByDate: vi.fn() },
+}));
+vi.mock('../services/exerciseEntryHistoryService.js', () => ({
+  getExerciseEntriesByDateV2: vi.fn(),
+}));
+vi.mock('../models/reportRepository.js', () => ({
+  default: { getNutritionData: vi.fn() },
+}));
+vi.mock('../models/exerciseEntry.js', () => ({
+  default: { getDailyExerciseCalorieSplitRange: vi.fn() },
+}));
+vi.mock('../models/measurementRepository.js', () => ({
+  default: {
+    getWaterIntakeByDate: vi.fn(),
+    getLatestCheckInMeasurementsOnOrBeforeDate: vi.fn(),
+    getCheckInMeasurementsByDateRange: vi.fn(),
+    getStepCaloriesForDate: vi.fn(),
+    getLatestWeightHeight: vi.fn(),
+    getExternalBmrForDate: vi.fn(),
+    getExternalBmrByDateRange: vi.fn(),
+  },
+}));
+vi.mock('../models/userRepository.js', () => ({
+  default: { getUserProfile: vi.fn() },
+}));
+vi.mock('../models/preferenceRepository.js', () => ({
+  default: { getUserPreferences: vi.fn() },
+}));
+vi.mock('../models/foodMisc.js', () => ({
+  default: { getDailySupplementTotals: vi.fn() },
+}));
+vi.mock('../models/genericHealthRepository.js', () => ({
+  getDeviceTotalCaloriesByDateRange: vi.fn(),
+}));
+vi.mock('../services/bmrService.js', () => ({
+  default: { calculateBmr: vi.fn() },
+}));
+
+const USER = 'user-1';
+const GOAL = 1962;
+const WEIGHT = 80;
+const HEIGHT = 180;
+
+const PREFERENCES = {
+  timezone: 'UTC',
+  activity_level: 'not_much',
+  calorie_goal_adjustment_mode: 'dynamic',
+  include_bmr_in_net_calories: false,
+  use_external_bmr: false,
+};
+const PROFILE = { date_of_birth: '1990-01-01', gender: 'male' };
+const MEASUREMENT = { weight: WEIGHT, height: HEIGHT };
+
+/**
+ * Three days chosen to cover the two shapes issue #2094 got wrong plus a control:
+ *  - Aug 11: a logged workout AND a device "Active Calories" row AND background steps
+ *  - Aug 08: steps only, no exercise entries at all
+ *  - Aug 09: nothing logged
+ */
+const FIXTURE = {
+  '2026-08-08': {
+    eaten: 2198,
+    active: 0,
+    other: 0,
+    activitySteps: 0,
+    steps: 5781,
+  },
+  '2026-08-09': {
+    eaten: 2095,
+    active: 0,
+    other: 0,
+    activitySteps: 0,
+    steps: 0,
+  },
+  // 5,786 steps at 80kg/180cm is 183 kcal, so logged + steps = 824 and edges out
+  // the 774 kcal device summary — exactly the reporter's Aug 11.
+  '2026-08-11': {
+    eaten: 2477,
+    active: 774,
+    other: 641,
+    activitySteps: 0,
+    steps: 5786,
+  },
+} as const;
+
+type FixtureDate = keyof typeof FIXTURE;
+const DATES = Object.keys(FIXTURE) as FixtureDate[];
+
+const stepCaloriesFor = (date: FixtureDate): number =>
+  computeStepCalories({
+    backgroundSteps: Math.max(
+      0,
+      FIXTURE[date].steps - FIXTURE[date].activitySteps
+    ),
+    weightKg: WEIGHT,
+    heightCm: HEIGHT,
+  });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(bmrService.calculateBmr).mockReturnValue(2000);
+
+  // ── ranged path ──
+  vi.mocked(reportRepository.getNutritionData).mockResolvedValue(
+    DATES.map((date) => ({ date, calories: FIXTURE[date].eaten }))
+  );
+  vi.mocked(goalService.getUserGoalsForRange).mockImplementation(
+    async (_userId: string, startDate: string, endDate: string) => {
+      const goals: Record<string, { calories: number }> = {};
+      let cursor = parseISO(startDate);
+      const end = parseISO(endDate);
+      while (!isAfter(cursor, end)) {
+        goals[format(cursor, 'yyyy-MM-dd')] = { calories: GOAL };
+        cursor = addDays(cursor, 1);
+      }
+      return goals;
+    }
+  );
+  vi.mocked(
+    exerciseEntryRepository.getDailyExerciseCalorieSplitRange
+  ).mockResolvedValue(
+    DATES.map((date) => ({
+      entry_date: date,
+      active_calories: FIXTURE[date].active,
+      other_calories: FIXTURE[date].other,
+      activity_steps: FIXTURE[date].activitySteps,
+    }))
+  );
+  vi.mocked(
+    measurementRepository.getCheckInMeasurementsByDateRange
+  ).mockResolvedValue(
+    DATES.map((date) => ({
+      entry_date: date,
+      steps: FIXTURE[date].steps,
+      ...MEASUREMENT,
+    }))
+  );
+  vi.mocked(measurementRepository.getLatestWeightHeight).mockResolvedValue({
+    weightKg: WEIGHT,
+    heightCm: HEIGHT,
+  });
+  vi.mocked(measurementRepository.getExternalBmrByDateRange).mockResolvedValue(
+    new Map()
+  );
+  vi.mocked(
+    genericHealthRepository.getDeviceTotalCaloriesByDateRange
+  ).mockResolvedValue([]);
+
+  // ── per-date path ──
+  vi.mocked(goalService.getUserGoals).mockResolvedValue({ calories: GOAL });
+  vi.mocked(measurementRepository.getWaterIntakeByDate).mockResolvedValue(null);
+  vi.mocked(foodRepository.getDailySupplementTotals).mockResolvedValue(
+    EMPTY_SUPPLEMENT_TOTALS
+  );
+  vi.mocked(measurementRepository.getExternalBmrForDate).mockResolvedValue(
+    null
+  );
+
+  // ── shared ──
+  vi.mocked(
+    measurementRepository.getLatestCheckInMeasurementsOnOrBeforeDate
+  ).mockResolvedValue(MEASUREMENT);
+  vi.mocked(userRepository.getUserProfile).mockResolvedValue(PROFILE);
+  vi.mocked(preferenceRepository.getUserPreferences).mockResolvedValue(
+    PREFERENCES
+  );
+});
+
+const runRange = () =>
+  getDailySummaryRange({
+    actorUserId: USER,
+    targetUserId: USER,
+    startDate: '2026-08-08',
+    endDate: '2026-08-11',
+    includeCheckin: true,
+  });
+
+describe('measured BMR is scoped to its own day', () => {
+  /**
+   * Reports read this endpoint while the Diary reads the per-date path. Carrying a
+   * measured BMR forward here made the two disagree about the same day: one
+   * reading on Aug 9 reported `measured` for Aug 10 and 11 as well.
+   */
+  test('applies a measured BMR only on the date it was recorded', async () => {
+    vi.mocked(preferenceRepository.getUserPreferences).mockResolvedValue({
+      ...PREFERENCES,
+      use_external_bmr: true,
+    });
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue(
+      DATES.map((date) => ({
+        entry_date: date,
+        steps: FIXTURE[date].steps,
+        ...MEASUREMENT,
+        // A single reading, well inside the plausibility band against the 2000
+        // kcal formula estimate the bmrService mock returns.
+        bmr: date === '2026-08-09' ? 2200 : null,
+      })) as never
+    );
+
+    const { days } = await runRange();
+    const byDate = new Map(days.map((d) => [d.date, d]));
+
+    expect(byDate.get('2026-08-09')?.bmr).toBe(2200);
+    expect(byDate.get('2026-08-09')?.bmrSource).toBe('measured');
+
+    for (const date of ['2026-08-10', '2026-08-11'] as const) {
+      expect(byDate.get(date)?.bmrSource).toBe('formula');
+      expect(byDate.get(date)?.bmr).not.toBe(2200);
+    }
+  });
+});
+
+describe('parity with the per-date Diary path', () => {
+  /**
+   * The structural guard for issue #2094.
+   *
+   * If anyone ever reintroduces a second implementation of the calorie balance, this
+   * fails. The bug was reopened precisely because Reports and the Diary each had their
+   * own idea of a day's balance, and nothing asserted they agreed.
+   */
+  test.each(DATES)(
+    'the ranged row for %s deep-equals the Diary calorieBalance',
+    async (date) => {
+      const fixture = FIXTURE[date];
+
+      vi.mocked(foodEntryService.getFoodEntriesByDate).mockResolvedValue([
+        { calories: fixture.eaten, quantity: 1, serving_size: 1 },
+      ]);
+      vi.mocked(getExerciseEntriesByDateV2).mockResolvedValue([
+        ...(fixture.active
+          ? [
+              {
+                type: 'individual',
+                name: 'Active Calories',
+                calories_burned: fixture.active,
+                steps: 0,
+              },
+            ]
+          : []),
+        ...(fixture.other
+          ? [
+              {
+                type: 'individual',
+                name: 'Run',
+                calories_burned: fixture.other,
+                steps: fixture.activitySteps,
+              },
+            ]
+          : []),
+      ] as unknown as ExerciseSessionResponse[]);
+      vi.mocked(measurementRepository.getStepCaloriesForDate).mockResolvedValue(
+        stepCaloriesFor(date)
+      );
+
+      const [{ days }, summary] = await Promise.all([
+        runRange(),
+        getDailySummary({
+          actorUserId: USER,
+          targetUserId: USER,
+          date,
+          includeCheckin: true,
+        }),
+      ]);
+
+      const row = days.find((entry) => entry.date === date);
+      expect(row).toBeDefined();
+
+      const { date: _date, stepCalories: _steps, ...balance } = row!;
+      expect(balance).toEqual(summary.calorieBalance);
+    }
+  );
+
+  test('the Aug 11 row credits 824, not 1415', async () => {
+    const { days } = await runRange();
+    const row = days.find((entry) => entry.date === '2026-08-11');
+
+    // max(774, 641 + steps), never 641 + 774.
+    expect(row?.burned).toBe(824);
+    expect(row?.burned).not.toBe(1415);
+    // The identity the Reports chart uses to turn `remaining` back into a goal.
+    expect(row!.eaten + row!.remaining).toBe(GOAL + 824);
+  });
+
+  test('the steps-only day is credited rather than zeroed', async () => {
+    const { days } = await runRange();
+    const row = days.find((entry) => entry.date === '2026-08-08');
+
+    expect(row?.stepCalories).toBe(stepCaloriesFor('2026-08-08'));
+    expect(row?.burned).toBeGreaterThan(0);
+    expect(row!.eaten + row!.remaining).toBe(GOAL + row!.burned);
+  });
+});
+
+describe('range mechanics', () => {
+  test('uses the matching device total for each completed day', async () => {
+    vi.mocked(preferenceRepository.getUserPreferences).mockResolvedValue({
+      ...PREFERENCES,
+      calorie_goal_adjustment_mode: 'tdee',
+      goal_mode: 'maintain',
+    });
+    vi.mocked(
+      genericHealthRepository.getDeviceTotalCaloriesByDateRange
+    ).mockResolvedValue([
+      {
+        entry_date: '2026-08-08',
+        source_provider: 'garmin',
+        total_calories: 2300,
+      },
+    ]);
+
+    const { days } = await runRange();
+    const day = days.find((entry) => entry.date === '2026-08-08');
+
+    expect(day?.tdeeProjection?.source).toBe('health_connect_total');
+    expect(day?.tdeeProjection?.projectedBurn).toBe(2300);
+    expect(day?.goal).toBe(2300);
+  });
+
+  test('emits one row per calendar day, including days with nothing logged', async () => {
+    const { days } = await runRange();
+
+    // 2026-08-10 has no fixture at all and must still appear.
+    expect(days.map((day) => day.date)).toEqual([
+      '2026-08-08',
+      '2026-08-09',
+      '2026-08-10',
+      '2026-08-11',
+    ]);
+
+    const empty = days.find((day) => day.date === '2026-08-10');
+    expect(empty?.eaten).toBe(0);
+    expect(empty?.burned).toBe(0);
+    expect(empty?.goal).toBe(GOAL);
+  });
+
+  /**
+   * Guards the O(1) property against a future "just call getStepCaloriesForDate in the
+   * loop" edit. The per-day alternative is ~13 queries a day, i.e. over a thousand for a
+   * 90-day report.
+   */
+  test('issues a fixed number of queries regardless of range length', async () => {
+    await getDailySummaryRange({
+      actorUserId: USER,
+      targetUserId: USER,
+      startDate: '2026-01-01',
+      endDate: '2026-03-31', // 90 days
+      includeCheckin: true,
+    });
+
+    expect(reportRepository.getNutritionData).toHaveBeenCalledTimes(1);
+    expect(goalService.getUserGoalsForRange).toHaveBeenCalledTimes(1);
+    expect(
+      exerciseEntryRepository.getDailyExerciseCalorieSplitRange
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).toHaveBeenCalledTimes(1);
+    expect(measurementRepository.getLatestWeightHeight).toHaveBeenCalledTimes(
+      1
+    );
+    expect(userRepository.getUserProfile).toHaveBeenCalledTimes(1);
+    expect(preferenceRepository.getUserPreferences).toHaveBeenCalledTimes(1);
+    expect(
+      genericHealthRepository.getDeviceTotalCaloriesByDateRange
+    ).toHaveBeenCalledTimes(1);
+    // The per-date step query must never be reached from the ranged path.
+    expect(measurementRepository.getStepCaloriesForDate).not.toHaveBeenCalled();
+  });
+
+  test('withholds check-in derived data when the caller lacks permission', async () => {
+    const { days } = await getDailySummaryRange({
+      actorUserId: USER,
+      targetUserId: USER,
+      startDate: '2026-08-08',
+      endDate: '2026-08-11',
+      includeCheckin: false,
+    });
+
+    expect(days.every((day) => day.stepCalories === 0)).toBe(true);
+    expect(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).not.toHaveBeenCalled();
+    expect(
+      measurementRepository.getExternalBmrByDateRange
+    ).not.toHaveBeenCalled();
+    expect(
+      genericHealthRepository.getDeviceTotalCaloriesByDateRange
+    ).not.toHaveBeenCalled();
+    // The Aug 8 day was steps-only, so with no checkin access it credits nothing.
+    expect(days.find((day) => day.date === '2026-08-08')?.burned).toBe(0);
+  });
+
+  test('returns the calendar days requested, unshifted', async () => {
+    vi.mocked(preferenceRepository.getUserPreferences).mockResolvedValue({
+      ...PREFERENCES,
+      timezone: 'Pacific/Kiritimati', // UTC+14, the worst case for naive UTC slicing
+    });
+
+    const { days } = await getDailySummaryRange({
+      actorUserId: USER,
+      targetUserId: USER,
+      startDate: '2026-08-08',
+      endDate: '2026-08-09',
+      includeCheckin: true,
+    });
+
+    expect(days.map((day) => day.date)).toEqual(['2026-08-08', '2026-08-09']);
+  });
+
+  /**
+   * Caught by an end-to-end run against real data, not by a mock: the Diary's
+   * `getLatestCheckInMeasurementsOnOrBeforeDate` resolves each body-composition column
+   * to its own latest non-null, positive value. Walking whole rows instead meant a
+   * check-in row recording only `steps` blanked weight and height for that day and every
+   * day after it, quietly dropping BMR to the 70kg/175cm defaults.
+   */
+  test('carries body composition forward per field across steps-only check-in rows', async () => {
+    vi.mocked(
+      measurementRepository.getLatestCheckInMeasurementsOnOrBeforeDate
+    ).mockResolvedValue({ weight: 80, height: 180 });
+
+    vi.mocked(
+      measurementRepository.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([
+      // A steps-only sync: no weight, no height.
+      { entry_date: '2026-08-09', steps: 4000, weight: null, height: null },
+      // A zero is as meaningless as a null here, matching the SQL's `> 0` guard.
+      { entry_date: '2026-08-10', steps: 4000, weight: 0, height: 0 },
+    ]);
+
+    await getDailySummaryRange({
+      actorUserId: USER,
+      targetUserId: USER,
+      startDate: '2026-08-08',
+      endDate: '2026-08-11',
+      includeCheckin: true,
+    });
+
+    // Every day must still see the seeded 80kg / 180cm, never the defaults.
+    for (const call of vi.mocked(bmrService.calculateBmr).mock.calls) {
+      expect(call[1]).toBe(80);
+      expect(call[2]).toBe(180);
+    }
+  });
+});
+
+test('step calories use independently carried measurements for each report date', async () => {
+  vi.mocked(measurementRepository.getLatestWeightHeight).mockResolvedValue({
+    weightKg: 120,
+    heightCm: 200,
+  });
+  vi.mocked(
+    measurementRepository.getLatestCheckInMeasurementsOnOrBeforeDate
+  ).mockResolvedValue({ weight: '80', height: '180' });
+  vi.mocked(
+    measurementRepository.getCheckInMeasurementsByDateRange
+  ).mockResolvedValue([
+    { entry_date: '2026-08-11', steps: 10000, weight: 0, height: -1 },
+    { entry_date: '2026-08-09', steps: 10000, weight: '100', height: null },
+    { entry_date: '2026-08-08', steps: 10000 },
+    { entry_date: '2026-08-10', steps: 10000, height: '200' },
+  ]);
+  vi.mocked(
+    exerciseEntryRepository.getDailyExerciseCalorieSplitRange
+  ).mockResolvedValue([]);
+
+  const { days } = await getDailySummaryRange({
+    actorUserId: USER,
+    targetUserId: USER,
+    startDate: '2026-08-08',
+    endDate: '2026-08-11',
+    includeCheckin: true,
+  });
+
+  expect(days.map((day) => [day.date, day.stepCalories])).toEqual([
+    ['2026-08-08', 316],
+    ['2026-08-09', 395],
+    ['2026-08-10', 439],
+    ['2026-08-11', 439],
+  ]);
+});
+
+test('uses the earliest later height until dated measurements are available', async () => {
+  vi.mocked(measurementRepository.getLatestWeightHeight).mockResolvedValue({
+    weightKg: 80,
+    heightCm: 200,
+  });
+  vi.mocked(
+    measurementRepository.getLatestCheckInMeasurementsOnOrBeforeDate
+  ).mockResolvedValue({ weight: '80', height: null });
+  vi.mocked(
+    measurementRepository.getCheckInMeasurementsByDateRange
+  ).mockResolvedValue([
+    { entry_date: '2026-08-08', steps: 10000 },
+    { entry_date: '2026-08-09', steps: 10000, height: '200' },
+    { entry_date: '2026-08-10', steps: 10000, weight: '100' },
+  ]);
+  vi.mocked(
+    exerciseEntryRepository.getDailyExerciseCalorieSplitRange
+  ).mockResolvedValue([]);
+
+  const { days } = await runRange();
+
+  expect(days.map((day) => [day.date, day.stepCalories])).toEqual([
+    ['2026-08-08', 351],
+    ['2026-08-09', 351],
+    ['2026-08-10', 439],
+    ['2026-08-11', 0],
+  ]);
+  expect(
+    measurementRepository.getLatestWeightHeight
+  ).toHaveBeenCalledExactlyOnceWith(USER, '2026-08-08');
+});

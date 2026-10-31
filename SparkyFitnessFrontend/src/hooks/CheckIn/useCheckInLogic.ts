@@ -1,0 +1,866 @@
+import { useState, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { parseISO } from 'date-fns';
+import { toast } from '@/hooks/use-toast';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import { getMostRecentMeasurement } from '@/api/CheckIn/checkInService';
+import {
+  calculateBodyFatBmi,
+  calculateBodyFatNavy,
+} from '@/services/bodyCompositionService';
+import { userManagementService } from '@/api/Admin/userManagementService';
+import {
+  useCustomCategories,
+  useDeleteCustomMeasurementMutation,
+  useCheckInMeasurementsForDate,
+  useLatestCheckInMeasurements,
+  useExistingCustomMeasurements,
+  useLatestManualCustomEntriesOnOrBefore,
+  useRecentCustomMeasurements,
+  useRecentStandardMeasurements,
+  useSaveCheckInMeasurementsMutation,
+  useSaveCustomMeasurementMutation,
+  useUpdateCheckInMeasurementFieldMutation,
+} from '@/hooks/CheckIn/useCheckIn';
+import {
+  useCreateMoodCheckinMutation,
+  useDeleteMoodCheckinMutation,
+  useMoodCheckinsByDate,
+  useUpdateMoodCheckinMutation,
+} from '@/hooks/CheckIn/useMood';
+import {
+  useFastingHistory,
+  useDeleteFastMutation,
+} from '@/hooks/Fasting/useFasting';
+import { CheckInPlaceholders, CombinedMeasurement } from '@/types/checkin';
+import type { MoodEntry } from '@/types/mood';
+import {
+  buildCheckinCreateBody,
+  buildCheckinUpdateBody,
+  type CheckinDraft,
+} from '@workspace/shared';
+import { error as logError } from '@/utils/logging';
+import { getUserLoggingLevel } from '@/utils/userPreferences';
+import {
+  CheckInMeasurementsResponse,
+  CustomMeasurementsResponse,
+  UpdateCheckInMeasurementsRequest,
+  UpdateCustomMeasurementsRequest,
+  calculateAge,
+} from '@workspace/shared';
+import { useAuth } from '../useAuth';
+import { useSearchParams } from 'react-router-dom';
+import { addDays, todayInZone } from '@workspace/shared';
+
+/**
+ * Builds the check-in upsert payload with per-field edit semantics:
+ * a filled field is set, an emptied field that has a value recorded on this
+ * date is cleared (explicit null), and everything else is omitted so the
+ * server leaves it untouched.
+ */
+export function buildCheckInMeasurementsPayload(
+  entryDate: string,
+  form: {
+    weight: string;
+    neck: string;
+    waist: string;
+    hips: string;
+    steps: string;
+    height: string;
+    bodyFatPercentage: string;
+    muscleMassKg: string;
+    boneMassKg: string;
+    bodyWaterPercentage: string;
+    bmr: string;
+  },
+  existing: CheckInMeasurementsResponse | null | undefined
+): UpdateCheckInMeasurementsRequest {
+  const payload: UpdateCheckInMeasurementsRequest = { entry_date: entryDate };
+
+  const apply = (
+    key:
+      | 'weight'
+      | 'neck'
+      | 'waist'
+      | 'hips'
+      | 'steps'
+      | 'height'
+      | 'body_fat_percentage'
+      | 'muscle_mass_kg'
+      | 'bone_mass_kg'
+      | 'body_water_percentage'
+      | 'bmr',
+    raw: string | undefined,
+    parse: (value: string) => number
+  ) => {
+    if (raw && raw.trim() !== '') {
+      const parsed = parse(raw);
+      if (!Number.isNaN(parsed)) {
+        payload[key] = parsed;
+      }
+      return;
+    }
+    if (existing?.[key] != null) {
+      payload[key] = null;
+    }
+  };
+
+  apply('weight', form.weight, parseFloat);
+  apply('neck', form.neck, parseFloat);
+  apply('waist', form.waist, parseFloat);
+  apply('hips', form.hips, parseFloat);
+  apply('steps', form.steps, (value) => parseInt(value, 10));
+  apply('height', form.height, parseFloat);
+  apply('body_fat_percentage', form.bodyFatPercentage, parseFloat);
+  apply('muscle_mass_kg', form.muscleMassKg, parseFloat);
+  apply('bone_mass_kg', form.boneMassKg, parseFloat);
+  apply('body_water_percentage', form.bodyWaterPercentage, parseFloat);
+  apply('bmr', form.bmr, parseFloat);
+
+  return payload;
+}
+
+function useDerivedState<T>(derivedValue: T, selectedDate: string) {
+  const [stateMap, setStateMap] = useState<Record<string, T>>({});
+
+  const value =
+    stateMap[selectedDate] !== undefined
+      ? stateMap[selectedDate]
+      : derivedValue;
+
+  const setValue = useCallback(
+    (newValue: React.SetStateAction<T>) => {
+      setStateMap((prev) => {
+        const current =
+          prev[selectedDate] !== undefined ? prev[selectedDate] : derivedValue;
+        const resolvedValue =
+          typeof newValue === 'function'
+            ? (newValue as (prevState: T) => T)(current)
+            : newValue;
+        return { ...prev, [selectedDate]: resolvedValue };
+      });
+    },
+    [selectedDate, derivedValue]
+  );
+
+  return [value, setValue] as const;
+}
+
+export const useCheckInLogic = (currentUserId: string | undefined) => {
+  const { t } = useTranslation();
+  const { user } = useAuth();
+  const {
+    weightUnit: defaultWeightUnit,
+    measurementUnit: defaultMeasurementUnit,
+    formatDateInUserTimezone,
+    bodyFatAlgorithm,
+    timezone,
+  } = usePreferences();
+
+  const [searchParams] = useSearchParams();
+
+  const [selectedDate, setSelectedDate] = useState(
+    searchParams.get('date') ?? todayInZone(timezone)
+  );
+
+  const { mutateAsync: saveCheckInMeasurements, isPending: isSavingCheckIn } =
+    useSaveCheckInMeasurementsMutation();
+  const { mutateAsync: saveCustomMeasurement, isPending: isSavingCustom } =
+    useSaveCustomMeasurementMutation();
+  const { mutateAsync: deleteCustomMeasurement, isPending: isDeletingCustom } =
+    useDeleteCustomMeasurementMutation();
+  const {
+    mutateAsync: updateCheckInMeasurementField,
+    isPending: isUpdatingField,
+  } = useUpdateCheckInMeasurementFieldMutation();
+  const { mutateAsync: createMoodCheckin, isPending: isCreatingCheckin } =
+    useCreateMoodCheckinMutation();
+  const { mutateAsync: updateMoodCheckin, isPending: isUpdatingCheckin } =
+    useUpdateMoodCheckinMutation();
+  const { mutateAsync: deleteMoodCheckin } = useDeleteMoodCheckinMutation();
+  const isSavingMoodCheckin = isCreatingCheckin || isUpdatingCheckin;
+  const { mutateAsync: deleteFast } = useDeleteFastMutation();
+
+  const loading =
+    isSavingCheckIn ||
+    isSavingCustom ||
+    isDeletingCustom ||
+    isUpdatingField ||
+    isSavingMoodCheckin;
+
+  const { data: customCategories = [] } = useCustomCategories(
+    user?.activeUserId
+  );
+  // Form values come from what was actually recorded on the selected date;
+  // the latest carried-forward values are only shown as input placeholders.
+  const { data: existingCheckIn } = useCheckInMeasurementsForDate(selectedDate);
+  const { data: latestCheckIn } = useLatestCheckInMeasurements(selectedDate);
+  const { data: existingCustom } = useExistingCustomMeasurements(selectedDate);
+  // Previous manual values per custom category, shown as placeholders so past
+  // entries give context without being resubmitted.
+  const { data: latestManualCustom = [] } =
+    useLatestManualCustomEntriesOnOrBefore(selectedDate);
+  const { data: moodCheckins = [], isLoading: isLoadingMoodCheckins } =
+    useMoodCheckinsByDate(selectedDate);
+
+  const { data: recentCustom = [] } = useRecentCustomMeasurements();
+  const endDate = todayInZone(timezone);
+  const startDate = addDays(endDate, -30);
+  const { data: recentStandard = [] } = useRecentStandardMeasurements(
+    startDate,
+    endDate
+  );
+  const { data: recentFasting = [] } = useFastingHistory(10, 0);
+
+  /**
+   * Per-category previous values, keyed by category id.
+   *
+   * Only categories the check-in actually renders are considered, and a
+   * category whose selected day already holds a value keeps that value as the
+   * editable one: the hint is only offered while its input is empty.
+   */
+  const customPlaceholders = useMemo(() => {
+    const placeholders: Record<string, number | string | null> = {};
+
+    for (const entry of latestManualCustom) {
+      const category = customCategories.find((c) => c.id === entry.category_id);
+      if (!category) continue;
+      if (existingCustom?.some((m) => m.category_id === entry.category_id)) {
+        continue;
+      }
+
+      // Numeric categories keep the metric string the API returned; UnitInput
+      // converts it for display. Text categories use it verbatim.
+      placeholders[entry.category_id] =
+        category.data_type === 'numeric' ? entry.value : entry.value;
+    }
+
+    return placeholders;
+  }, [latestManualCustom, customCategories, existingCustom]);
+
+  const [useMostRecentForCalculation, setUseMostRecentForCalculation] =
+    useState(true);
+
+  const shouldConvertCustomMeasurement = useCallback((unit: string) => {
+    const convertibleUnits = ['kg', 'lbs', 'st_lbs', 'cm', 'inches', 'ft_in'];
+    return convertibleUnits.includes(unit.toLowerCase());
+  }, []);
+
+  const derivedWeight = useMemo(() => {
+    const w = existingCheckIn?.weight;
+    if (w == null) return '';
+    // State should be Metric (kg). UnitInput handles preferred unit display.
+    return w.toString();
+  }, [existingCheckIn?.weight]);
+
+  const derivedNeck = useMemo(() => {
+    const n = existingCheckIn?.neck;
+    if (n == null) return '';
+    // State should be Metric (cm).
+    return n.toString();
+  }, [existingCheckIn?.neck]);
+
+  const derivedWaist = useMemo(() => {
+    const w = existingCheckIn?.waist;
+    if (w == null) return '';
+    // State should be Metric (cm).
+    return w.toString();
+  }, [existingCheckIn?.waist]);
+
+  const derivedHips = useMemo(() => {
+    const h = existingCheckIn?.hips;
+    if (h == null) return '';
+    // State should be Metric (cm).
+    return h.toString();
+  }, [existingCheckIn?.hips]);
+
+  const derivedHeight = useMemo(() => {
+    const h = existingCheckIn?.height;
+    if (h == null) return '';
+    // State should be Metric (cm).
+    return h.toString();
+  }, [existingCheckIn?.height]);
+
+  const derivedBodyFat = useMemo(() => {
+    return existingCheckIn?.body_fat_percentage?.toString() || '';
+  }, [existingCheckIn?.body_fat_percentage]);
+
+  const derivedSteps = useMemo(() => {
+    return existingCheckIn?.steps?.toString() || '';
+  }, [existingCheckIn?.steps]);
+
+  // Smart-scale composition. Masses are metric (kg) in state, like weight;
+  // UnitInput handles preferred-unit display.
+  const derivedMuscleMass = useMemo(() => {
+    return existingCheckIn?.muscle_mass_kg?.toString() || '';
+  }, [existingCheckIn?.muscle_mass_kg]);
+
+  const derivedBoneMass = useMemo(() => {
+    return existingCheckIn?.bone_mass_kg?.toString() || '';
+  }, [existingCheckIn?.bone_mass_kg]);
+
+  const derivedBodyWater = useMemo(() => {
+    return existingCheckIn?.body_water_percentage?.toString() || '';
+  }, [existingCheckIn?.body_water_percentage]);
+
+  const derivedBmr = useMemo(() => {
+    return existingCheckIn?.bmr?.toString() || '';
+  }, [existingCheckIn?.bmr]);
+
+  const { derivedCustomValues, derivedCustomNotes } = useMemo(() => {
+    const newCustomValues: Record<string, string> = {};
+    const newCustomNotes: Record<string, string> = {};
+
+    if (
+      existingCustom &&
+      existingCustom.length > 0 &&
+      customCategories &&
+      customCategories.length > 0
+    ) {
+      existingCustom.forEach((measurement: CustomMeasurementsResponse) => {
+        const category = customCategories.find(
+          (c) => c.id === measurement.category_id
+        );
+        if (category && category.frequency !== 'Unlimited') {
+          if (category.data_type === 'numeric') {
+            // Keep value in Metric (cm/kg) as stored in DB. UnitInput handles preferred display.
+            newCustomValues[measurement.category_id] =
+              measurement.value !== null && measurement.value !== undefined
+                ? measurement.value.toString()
+                : '';
+          } else {
+            newCustomValues[measurement.category_id] =
+              measurement.value?.toString() || '';
+          }
+          newCustomNotes[measurement.category_id] = measurement.notes || '';
+        }
+      });
+    }
+    return {
+      derivedCustomValues: newCustomValues,
+      derivedCustomNotes: newCustomNotes,
+    };
+  }, [existingCustom, customCategories]);
+
+  const [weight, setWeight] = useDerivedState<string>(
+    derivedWeight,
+    selectedDate
+  );
+  const [neck, setNeck] = useDerivedState<string>(derivedNeck, selectedDate);
+  const [waist, setWaist] = useDerivedState<string>(derivedWaist, selectedDate);
+  const [hips, setHips] = useDerivedState<string>(derivedHips, selectedDate);
+  const [height, setHeight] = useDerivedState<string>(
+    derivedHeight,
+    selectedDate
+  );
+  const [steps, setSteps] = useDerivedState<string>(derivedSteps, selectedDate);
+  const [muscleMassKg, setMuscleMassKg] = useDerivedState<string>(
+    derivedMuscleMass,
+    selectedDate
+  );
+  const [boneMassKg, setBoneMassKg] = useDerivedState<string>(
+    derivedBoneMass,
+    selectedDate
+  );
+  const [bodyWaterPercentage, setBodyWaterPercentage] = useDerivedState<string>(
+    derivedBodyWater,
+    selectedDate
+  );
+  const [bmr, setBmr] = useDerivedState<string>(derivedBmr, selectedDate);
+  const [bodyFatPercentage, setBodyFatPercentage] = useDerivedState<string>(
+    derivedBodyFat,
+    selectedDate
+  );
+  const [customValues, setCustomValues] = useDerivedState<
+    Record<string, string>
+  >(derivedCustomValues, selectedDate);
+  const [customNotes, setCustomNotes] = useDerivedState<Record<string, string>>(
+    derivedCustomNotes,
+    selectedDate
+  );
+
+  // Latest recorded values (on or before the selected date), shown as input
+  // placeholders so past measurements give context without being resubmitted.
+  const placeholders: CheckInPlaceholders = useMemo(
+    () => ({
+      weight: latestCheckIn?.weight ?? null,
+      neck: latestCheckIn?.neck ?? null,
+      waist: latestCheckIn?.waist ?? null,
+      hips: latestCheckIn?.hips ?? null,
+      height: latestCheckIn?.height ?? null,
+      bodyFatPercentage: latestCheckIn?.body_fat_percentage ?? null,
+      bmr: latestCheckIn?.bmr ?? null,
+    }),
+    [latestCheckIn]
+  );
+
+  const recentMeasurements = useMemo(() => {
+    const allMeasurements: CombinedMeasurement[] = [];
+
+    recentCustom.forEach((m) => {
+      const category = customCategories.find((c) => c.id === m.category_id);
+      allMeasurements.push({
+        id: m.id,
+        entry_date: m.entry_date.toString(),
+        entry_hour: m.entry_hour,
+        entry_timestamp: m.entry_timestamp?.toString() ?? '',
+        value: m.value,
+        type: 'custom',
+        display_name: (category?.display_name || category?.name) ?? '',
+        display_unit: category?.measurement_type,
+        custom_categories: category,
+      });
+    });
+
+    recentStandard.forEach((s: CheckInMeasurementsResponse) => {
+      if (s.weight != null)
+        allMeasurements.push({
+          id: `${s.id}-weight`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.weight,
+          type: 'standard',
+          display_name: 'Weight',
+          display_unit: defaultWeightUnit,
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.neck != null)
+        allMeasurements.push({
+          id: `${s.id}-neck`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.neck,
+          type: 'standard',
+          display_name: 'Neck',
+          display_unit: defaultMeasurementUnit,
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.waist != null)
+        allMeasurements.push({
+          id: `${s.id}-waist`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.waist,
+          type: 'standard',
+          display_name: 'Waist',
+          display_unit: defaultMeasurementUnit,
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.hips != null)
+        allMeasurements.push({
+          id: `${s.id}-hips`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.hips,
+          type: 'standard',
+          display_name: 'Hips',
+          display_unit: defaultMeasurementUnit,
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.steps != null)
+        allMeasurements.push({
+          id: `${s.id}-steps`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.steps,
+          type: 'standard',
+          display_name: 'Steps',
+          display_unit: 'steps',
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.height != null)
+        allMeasurements.push({
+          id: `${s.id}-height`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.height,
+          type: 'standard',
+          display_name: 'Height',
+          display_unit: defaultMeasurementUnit,
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+      if (s.body_fat_percentage != null)
+        allMeasurements.push({
+          id: `${s.id}-bf`,
+          originalId: s.id,
+          entry_date: s.entry_date,
+          value: s.body_fat_percentage,
+          type: 'standard',
+          display_name: 'Body Fat %',
+          display_unit: '%',
+          entry_hour: null,
+          entry_timestamp: s.updated_at,
+        });
+    });
+
+    recentFasting.forEach((fast) => {
+      allMeasurements.push({
+        id: `fast-${fast.id}`,
+        originalId: fast.id,
+        entry_date: formatDateInUserTimezone(
+          parseISO(fast.end_time || fast.start_time),
+          'yyyy-MM-dd'
+        ),
+        entry_hour: parseISO(fast.end_time || fast.start_time).getHours(),
+        entry_timestamp: fast.end_time || fast.start_time,
+        value: fast.duration_minutes || 0,
+        type: 'fasting',
+        display_name: 'Fasting',
+        display_unit: 'min',
+        fasting_type: fast.fasting_type,
+        duration_minutes: fast.duration_minutes || 0,
+        originalFast: fast,
+      });
+    });
+
+    allMeasurements.sort((a, b) => {
+      return (
+        new Date(b.entry_timestamp).getTime() -
+        new Date(a.entry_timestamp).getTime()
+      );
+    });
+
+    return allMeasurements.slice(0, 20);
+  }, [
+    recentCustom,
+    recentStandard,
+    recentFasting,
+    defaultWeightUnit,
+    defaultMeasurementUnit,
+    formatDateInUserTimezone,
+    customCategories,
+  ]);
+
+  const handleDeleteMeasurementClick = async (
+    measurement: CombinedMeasurement
+  ) => {
+    if (!currentUserId) return;
+
+    if (measurement.type === 'custom') {
+      await deleteCustomMeasurement(measurement.id);
+    } else if (measurement.type === 'fasting') {
+      const fastId = measurement.originalId || measurement.id;
+      await deleteFast(fastId);
+    } else if (measurement.type === 'standard') {
+      const standardId = measurement.originalId || measurement.id;
+      let fieldToNull: string;
+
+      switch (measurement.display_name) {
+        case 'Weight':
+          fieldToNull = 'weight';
+          break;
+        case 'Neck':
+          fieldToNull = 'neck';
+          break;
+        case 'Waist':
+          fieldToNull = 'waist';
+          break;
+        case 'Hips':
+          fieldToNull = 'hips';
+          break;
+        case 'Steps':
+          fieldToNull = 'steps';
+          break;
+        case 'Height':
+          fieldToNull = 'height';
+          break;
+        case 'Body Fat %':
+          fieldToNull = 'body_fat_percentage';
+          break;
+        default:
+          return;
+      }
+      await updateCheckInMeasurementField({
+        id: standardId,
+        field: fieldToNull,
+        value: null,
+        entry_date: measurement.entry_date,
+      });
+    }
+  };
+
+  // Check-ins: each handler resolves to whether the request succeeded. The
+  // mutations' meta shows the success or error toast.
+  const runCheckinRequest = async (
+    request: () => Promise<unknown>
+  ): Promise<boolean> => {
+    if (!currentUserId) return false;
+    try {
+      await request();
+      return true;
+    } catch (err) {
+      logError(getUserLoggingLevel(), 'Mood check-in request failed:', err);
+      return false;
+    }
+  };
+
+  const handleCreateMoodCheckin = (draft: CheckinDraft) =>
+    runCheckinRequest(() =>
+      createMoodCheckin(buildCheckinCreateBody(draft, selectedDate, timezone))
+    );
+
+  const handleUpdateMoodCheckin = (entry: MoodEntry, draft: CheckinDraft) =>
+    runCheckinRequest(() =>
+      updateMoodCheckin({
+        id: entry.id,
+        body: buildCheckinUpdateBody(entry, draft, selectedDate, timezone),
+      })
+    );
+
+  const handleDeleteMoodCheckin = (entry: MoodEntry) =>
+    runCheckinRequest(() => deleteMoodCheckin(entry.id));
+
+  const handleSubmit = async (e: React.SubmitEvent) => {
+    e.preventDefault();
+
+    if (!currentUserId) return;
+
+    try {
+      const measurementData = buildCheckInMeasurementsPayload(
+        selectedDate,
+        {
+          weight,
+          neck,
+          waist,
+          hips,
+          steps,
+          height,
+          bodyFatPercentage,
+          muscleMassKg,
+          boneMassKg,
+          bodyWaterPercentage,
+          bmr,
+        },
+        existingCheckIn
+      );
+
+      await saveCheckInMeasurements(measurementData);
+
+      const currentTime = new Date();
+      const currentHour = currentTime.getHours();
+      const currentTimestamp = currentTime.toISOString();
+
+      const hourlyDateTime = new Date(currentTime);
+      hourlyDateTime.setHours(currentHour, 0, 0, 0);
+      const hourlyTimestamp = hourlyDateTime.toISOString();
+
+      const categoryMap = new Map(customCategories.map((c) => [c.id, c]));
+
+      const savePromises = Object.entries(customValues)
+        .filter(([categoryId, inputValue]) => {
+          const isChanged =
+            inputValue !== (derivedCustomValues[categoryId] || '') ||
+            (customNotes[categoryId] || '') !==
+              (derivedCustomNotes[categoryId] || '');
+          return isChanged;
+        })
+        .map(async ([categoryId, inputValue]) => {
+          const category = categoryMap.get(categoryId);
+
+          if (!category) return;
+          if (!inputValue && !customNotes[categoryId]) return;
+
+          const isHourly = category.frequency === 'Hourly';
+
+          const customMeasurementData: UpdateCustomMeasurementsRequest = {
+            category_id: categoryId,
+            notes: customNotes[categoryId] || '',
+            entry_date: selectedDate,
+            entry_hour: isHourly ? currentHour : null,
+            entry_timestamp: isHourly ? hourlyTimestamp : currentTimestamp,
+          };
+
+          if (category.data_type === 'numeric') {
+            const numericValue = parseFloat(inputValue);
+            if (!isNaN(numericValue)) {
+              // Now that custom measurements also use UnitInput in the form,
+              // they are already normalized to Metric (kg/cm) in the state.
+              customMeasurementData.value = numericValue.toString();
+            }
+          } else {
+            customMeasurementData.value = inputValue;
+          }
+
+          return saveCustomMeasurement(customMeasurementData);
+        });
+
+      await Promise.all(savePromises);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleCalculateBodyFat = async () => {
+    if (!currentUserId) return;
+
+    try {
+      const userProfile = await userManagementService.getUserProfile();
+
+      if (!userProfile) {
+        toast({
+          title: t('common.error', 'Error'),
+          description: t(
+            'checkIn.couldNotLoadUserProfileOrPrefs',
+            'Could not load user profile or preferences for calculation.'
+          ),
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const age = userProfile.date_of_birth
+        ? calculateAge(userProfile.date_of_birth, timezone)
+        : 0;
+      const gender = userProfile.gender;
+
+      let weightKg: number;
+      let heightCm: number;
+      let waistCm: number;
+      let neckCm: number;
+      let hipsCm: number;
+
+      if (useMostRecentForCalculation) {
+        const [
+          recentWeight,
+          recentHeight,
+          recentWaist,
+          recentNeck,
+          recentHips,
+        ] = await Promise.all([
+          getMostRecentMeasurement('weight'),
+          getMostRecentMeasurement('height'),
+          getMostRecentMeasurement('waist'),
+          getMostRecentMeasurement('neck'),
+          getMostRecentMeasurement('hips'),
+        ]);
+
+        weightKg = recentWeight?.weight ?? parseFloat(weight);
+        heightCm = recentHeight?.height ?? parseFloat(height);
+        waistCm = recentWaist?.waist ?? parseFloat(waist);
+        neckCm = recentNeck?.neck ?? parseFloat(neck);
+        hipsCm = recentHips?.hips ?? parseFloat(hips);
+      } else {
+        weightKg = parseFloat(weight);
+        heightCm = parseFloat(height);
+        waistCm = parseFloat(waist);
+        neckCm = parseFloat(neck);
+        hipsCm = parseFloat(hips);
+      }
+
+      let bfp = 0;
+      let errorMessage = '';
+
+      if (bodyFatAlgorithm === 'BMI Method') {
+        if (isNaN(weightKg) || isNaN(heightCm) || age === 0 || !gender) {
+          errorMessage = t(
+            'checkIn.bmiMethodRequiredFields',
+            'Weight, height, age, and gender are required for BMI Method.'
+          );
+        } else {
+          bfp = calculateBodyFatBmi(weightKg, heightCm, age, gender);
+        }
+      } else {
+        if (
+          !gender ||
+          isNaN(heightCm) ||
+          isNaN(waistCm) ||
+          isNaN(neckCm) ||
+          (gender === 'female' && isNaN(hipsCm))
+        ) {
+          errorMessage = t(
+            'checkIn.usNavyMethodRequiredFields',
+            'Gender, height, waist, neck, and (if female) hips measurements are required for U.S. Navy Method.'
+          );
+        } else {
+          bfp = calculateBodyFatNavy(gender, heightCm, waistCm, neckCm, hipsCm);
+        }
+      }
+
+      if (errorMessage) {
+        toast({
+          title: t('common.error', 'Error'),
+          description: t(
+            'checkIn.failedToCalculateBodyFatWithError',
+            'Failed to calculate body fat: {{error}}',
+            { error: errorMessage }
+          ),
+          variant: 'destructive',
+        });
+      } else {
+        setBodyFatPercentage(bfp.toFixed(2));
+        toast({
+          title: t('common.success', 'Success'),
+          description: t(
+            'checkIn.bodyFatCalculated',
+            'Body fat percentage calculated.'
+          ),
+        });
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      toast({
+        title: t('common.error', 'Error'),
+        description: t(
+          'checkIn.failedToCalculateBodyFatWithError',
+          'Failed to calculate body fat: {{error}}',
+          { error: errorMsg }
+        ),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  return {
+    bodyFatPercentage,
+    boneMassKg,
+    bodyWaterPercentage,
+    muscleMassKg,
+    bmr,
+    customCategories,
+    customNotes,
+    customPlaceholders,
+    customValues,
+    handleCalculateBodyFat,
+    handleDeleteMeasurementClick,
+    handleSubmit,
+    height,
+    hips,
+    loading,
+    neck,
+    placeholders,
+    recentMeasurements,
+    selectedDate,
+    setBodyFatPercentage,
+    setBoneMassKg,
+    setBodyWaterPercentage,
+    setMuscleMassKg,
+    setBmr,
+    setCustomNotes,
+    setCustomValues,
+    setHeight,
+    setHips,
+    setNeck,
+    setSelectedDate,
+    setSteps,
+    setUseMostRecentForCalculation,
+    setWaist,
+    setWeight,
+    shouldConvertCustomMeasurement,
+    steps,
+    useMostRecentForCalculation,
+    waist,
+    weight,
+    moodCheckins,
+    isLoadingMoodCheckins,
+    isSavingMoodCheckin,
+    handleCreateMoodCheckin,
+    handleUpdateMoodCheckin,
+    handleDeleteMoodCheckin,
+  };
+};

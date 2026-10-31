@@ -1,0 +1,1086 @@
+import React, { useState, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { View, Text, ScrollView, Platform } from 'react-native';
+import Animated, { LinearTransition } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCSSVariable } from 'uniwind';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import Toast from 'react-native-toast-message';
+
+import Icon from '../components/Icon';
+import BottomSheetPicker from '../components/BottomSheetPicker';
+import FormInput from '../components/FormInput';
+import WeeklyWeightGoalFields from '../components/WeeklyWeightGoalFields';
+import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
+import Switch from '../components/ui/Switch';
+import { usePreferences } from '../hooks/usePreferences';
+import { useDailySummary } from '../hooks/useDailySummary';
+import { getTodayDate } from '../utils/dateUtils';
+import { updatePreferences } from '../services/api/preferencesApi';
+import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
+import { useScreenHeader } from '../hooks/useScreenHeader';
+import { preferencesQueryKey } from '../hooks/queryKeys';
+import type { UserPreferences } from '../types/preferences';
+import type { RootStackScreenProps } from '../types/navigation';
+import {
+  DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
+  MAX_CALORIE_SAFETY_FLOOR,
+  MAX_GOAL_MODE_PERCENTAGE,
+  MIN_CALORIE_SAFETY_FLOOR,
+  convertEnergyValue,
+  isAdaptiveEarnBackSuppressed,
+  isAdaptiveActivitySeparated,
+  todayInZone,
+  type CalorieSafetyFloorMode,
+  type GoalMode,
+  type GoalModeCalculationMethod,
+} from '@workspace/shared';
+
+type CalorieSettingsScreenProps = RootStackScreenProps<'CalorieSettings'>;
+
+function normalizePreferences(prefs: UserPreferences | undefined) {
+  const raw = prefs?.calorie_goal_adjustment_mode;
+  return {
+    mode: !raw ? 'dynamic' : raw === 'smart' ? 'tdee' : raw,
+    activityLevel: prefs?.activity_level ?? 'not_much',
+    exerciseCaloriePercentage: prefs?.exercise_calorie_percentage ?? 100,
+    includeBmrInNetCalories: prefs?.include_bmr_in_net_calories ?? false,
+    useExternalBmr: prefs?.use_external_bmr ?? false,
+    useMoveRingActiveCalories: prefs?.use_move_ring_active_calories ?? false,
+    tdeeAllowNegativeAdjustment: prefs?.tdee_allow_negative_adjustment ?? false,
+    goalMode: prefs?.goal_mode ?? 'maintain',
+    goalModeCalculationMethod: prefs?.goal_mode_calculation_method ?? 'manual',
+    adaptiveActivitySeparate: prefs?.adaptive_activity_separate ?? false,
+    goalModeCustomPercentage: prefs?.goal_mode_custom_percentage ?? 0,
+    goalModeWeeklyChangeKg: prefs?.goal_mode_weekly_change_kg ?? 0,
+    calorieSafetyFloorMode: prefs?.calorie_safety_floor_mode ?? 'standard',
+    calorieSafetyFloorValue:
+      prefs?.calorie_safety_floor_value ?? DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
+    energyUnit: prefs?.energy_unit ?? 'kcal',
+  };
+}
+
+const displayEnergy = (kcal: number, unit: 'kcal' | 'kJ') =>
+  Math.round(convertEnergyValue(kcal, 'kcal', unit));
+
+const toKcal = (value: number, unit: 'kcal' | 'kJ') =>
+  Math.round(convertEnergyValue(value, unit, 'kcal'));
+
+const CalorieSettingsScreen: React.FC<CalorieSettingsScreenProps> = () => {
+  const { t } = useTranslation();
+  const safetyFloorOptions = useMemo(
+    () => [
+      {
+        label: t('calorieSettings.safetyFloor.standard', {
+          defaultValue: 'Standard',
+        }),
+        value: 'standard',
+      },
+      {
+        label: t('calorieSettings.safetyFloor.custom', {
+          defaultValue: 'Custom',
+        }),
+        value: 'custom',
+      },
+      {
+        label: t('calorieSettings.safetyFloor.disabled', {
+          defaultValue: 'Disabled',
+        }),
+        value: 'disabled',
+      },
+    ],
+    [t]
+  );
+  const modeOptions = [
+    {
+      label: t('calorieSettings.modes.adaptive', {
+        defaultValue: 'Adaptive Goal',
+      }),
+      value: 'adaptive',
+    },
+    {
+      label: t('calorieSettings.modes.dynamic', {
+        defaultValue: 'Dynamic Goal',
+      }),
+      value: 'dynamic',
+    },
+    {
+      label: t('calorieSettings.modes.fixed', { defaultValue: 'Fixed Goal' }),
+      value: 'fixed',
+    },
+    {
+      label: t('calorieSettings.modes.percentage', {
+        defaultValue: 'Percentage Earn-Back',
+      }),
+      value: 'percentage',
+    },
+    {
+      label: t('calorieSettings.modes.tdee', {
+        defaultValue: 'Device Projection',
+      }),
+      value: 'tdee',
+    },
+  ];
+  const goalModeOptions = [
+    {
+      label: t('calorieSettings.goalMode.weekly', {
+        defaultValue: 'Weekly weight change',
+      }),
+      value: 'weekly',
+    },
+    {
+      label: t('calorieSettings.goalMode.maintain', {
+        defaultValue: 'Maintain (0%)',
+      }),
+      value: 'maintain',
+    },
+    {
+      label: t('calorieSettings.goalMode.recomp', {
+        defaultValue: 'Body Recomposition (-10%)',
+      }),
+      value: 'recomp',
+    },
+    {
+      label: t('calorieSettings.goalMode.cut', {
+        defaultValue: 'Cut (-15%)',
+      }),
+      value: 'cut',
+    },
+    {
+      label: t('calorieSettings.goalMode.highCut', {
+        defaultValue: 'High Cut (-20%)',
+      }),
+      value: 'high_cut',
+    },
+    {
+      label: t('calorieSettings.goalMode.leanBulk', {
+        defaultValue: 'Lean Bulk (+10%)',
+      }),
+      value: 'lean_bulk',
+    },
+    {
+      label: t('calorieSettings.goalMode.bulk', {
+        defaultValue: 'Bulk (+20%)',
+      }),
+      value: 'bulk',
+    },
+    {
+      label: t('calorieSettings.goalMode.manual', {
+        defaultValue: 'Manual (Custom %)',
+      }),
+      value: 'manual',
+    },
+  ];
+  const calculationMethodOptions = [
+    {
+      label: t('calorieSettings.goalMode.methodAdaptive', {
+        defaultValue: 'Adaptive',
+      }),
+      value: 'adaptive',
+    },
+    {
+      label: t('calorieSettings.goalMode.methodManual', {
+        defaultValue: 'Manual',
+      }),
+      value: 'manual',
+    },
+  ];
+  const activityLevelOptions = [
+    {
+      label: t('calorieSettings.activity.none', {
+        defaultValue: 'None (x1.0)',
+      }),
+      value: 'none',
+    },
+    {
+      label: t('calorieSettings.activity.sedentary', {
+        defaultValue: 'Sedentary (x1.2)',
+      }),
+      value: 'not_much',
+    },
+    {
+      label: t('calorieSettings.activity.light', {
+        defaultValue: 'Lightly Active (x1.375)',
+      }),
+      value: 'light',
+    },
+    {
+      label: t('calorieSettings.activity.moderate', {
+        defaultValue: 'Moderately Active (x1.55)',
+      }),
+      value: 'moderate',
+    },
+    {
+      label: t('calorieSettings.activity.heavy', {
+        defaultValue: 'Very Active (x1.725)',
+      }),
+      value: 'heavy',
+    },
+  ];
+  const insets = useSafeAreaInsets();
+  const activeWorkoutBarPadding = useActiveWorkoutBarPadding('stack');
+  const usesNativeHeader = useNativeIOSHeadersActive();
+  const [accentPrimary] = useCSSVariable(['--color-accent-primary']) as [
+    string,
+  ];
+
+  const queryClient = useQueryClient();
+  const { preferences } = usePreferences();
+  const normalized = normalizePreferences(preferences);
+  const activitySeparated = isAdaptiveActivitySeparated(
+    normalized.mode,
+    normalized.goalModeCalculationMethod,
+    normalized.adaptiveActivitySeparate
+  );
+  const adaptiveEarnBackConfigured = isAdaptiveEarnBackSuppressed(
+    normalized.mode,
+    normalized.goalModeCalculationMethod,
+    normalized.adaptiveActivitySeparate
+  );
+  const { summary } = useDailySummary({
+    date: preferences?.timezone
+      ? todayInZone(preferences.timezone)
+      : getTodayDate(),
+    enabled: adaptiveEarnBackConfigured,
+  });
+
+  const [percentageText, setPercentageText] = useState(() =>
+    String(normalized.exerciseCaloriePercentage)
+  );
+  const [goalModePercentageText, setGoalModePercentageText] = useState(() =>
+    String(normalized.goalModeCustomPercentage)
+  );
+  const [safetyFloorText, setSafetyFloorText] = useState(() =>
+    String(
+      displayEnergy(normalized.calorieSafetyFloorValue, normalized.energyUnit)
+    )
+  );
+
+  // Re-sync the input text when the saved percentage changes (e.g. a background
+  // refetch). Done during render (instead of in an effect) so the field shows
+  // the latest saved value on the first render after it changes.
+  const [syncedPercentage, setSyncedPercentage] = useState(
+    normalized.exerciseCaloriePercentage
+  );
+  if (syncedPercentage !== normalized.exerciseCaloriePercentage) {
+    setSyncedPercentage(normalized.exerciseCaloriePercentage);
+    setPercentageText(String(normalized.exerciseCaloriePercentage));
+  }
+  const [syncedGoalModePercentage, setSyncedGoalModePercentage] = useState(
+    normalized.goalModeCustomPercentage
+  );
+  if (syncedGoalModePercentage !== normalized.goalModeCustomPercentage) {
+    setSyncedGoalModePercentage(normalized.goalModeCustomPercentage);
+    setGoalModePercentageText(String(normalized.goalModeCustomPercentage));
+  }
+  const [syncedSafetyFloor, setSyncedSafetyFloor] = useState(
+    `${normalized.calorieSafetyFloorValue}:${normalized.energyUnit}`
+  );
+  const safetyFloorSyncKey = `${normalized.calorieSafetyFloorValue}:${normalized.energyUnit}`;
+  if (syncedSafetyFloor !== safetyFloorSyncKey) {
+    setSyncedSafetyFloor(safetyFloorSyncKey);
+    setSafetyFloorText(
+      String(
+        displayEnergy(normalized.calorieSafetyFloorValue, normalized.energyUnit)
+      )
+    );
+  }
+
+  const mutation = useMutation({
+    scope: { id: 'calorie-settings' },
+    mutationFn: (data: Partial<UserPreferences>) => updatePreferences(data),
+    onMutate: async (data) => {
+      await queryClient.cancelQueries({ queryKey: preferencesQueryKey });
+      const previous =
+        queryClient.getQueryData<UserPreferences>(preferencesQueryKey);
+      queryClient.setQueryData<UserPreferences>(preferencesQueryKey, (old) =>
+        old ? { ...old, ...data } : (data as UserPreferences)
+      );
+      return { previous };
+    },
+    onError: (_err, _data, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(preferencesQueryKey, context.previous);
+      }
+      Toast.show({
+        type: 'error',
+        text1: t('common.error', { defaultValue: 'Error' }),
+        text2: t('calorieSettings.updateFailed', {
+          defaultValue: 'Failed to update setting.',
+        }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dailySummary'] });
+      queryClient.invalidateQueries({ queryKey: ['familyDailySummary'] });
+      queryClient.invalidateQueries({ queryKey: ['goals'] });
+      queryClient.invalidateQueries({ queryKey: ['goalsRange'] });
+      queryClient.invalidateQueries({ queryKey: ['nutritionTrends'] });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: preferencesQueryKey });
+    },
+  });
+
+  const handleModeChange = useCallback(
+    (value: string) => {
+      mutation.mutate({ calorie_goal_adjustment_mode: value });
+    },
+    [mutation]
+  );
+
+  const handleGoalModeChange = useCallback(
+    (value: string) => {
+      mutation.mutate({ goal_mode: value as GoalMode });
+    },
+    [mutation]
+  );
+
+  const handleGoalModeCalculationMethodChange = useCallback(
+    (value: string) => {
+      mutation.mutate({
+        goal_mode_calculation_method: value as GoalModeCalculationMethod,
+      });
+    },
+    [mutation]
+  );
+
+  const handleActivityLevelChange = useCallback(
+    (value: string) => {
+      mutation.mutate({ activity_level: value });
+    },
+    [mutation]
+  );
+
+  const handleBmrToggle = useCallback(
+    (value: boolean) => {
+      mutation.mutate({ include_bmr_in_net_calories: value });
+    },
+    [mutation]
+  );
+
+  const handleExternalBmrToggle = useCallback(
+    (value: boolean) => {
+      mutation.mutate({ use_external_bmr: value });
+    },
+    [mutation]
+  );
+
+  const handleMoveRingToggle = useCallback(
+    (value: boolean) => {
+      mutation.mutate({ use_move_ring_active_calories: value });
+    },
+    [mutation]
+  );
+
+  const handleNegativeAdjustmentToggle = useCallback(
+    (value: boolean) => {
+      mutation.mutate({ tdee_allow_negative_adjustment: value });
+    },
+    [mutation]
+  );
+
+  const handleSafetyFloorModeChange = useCallback(
+    (value: string) => {
+      mutation.mutate({
+        calorie_safety_floor_mode: value as CalorieSafetyFloorMode,
+      });
+    },
+    [mutation]
+  );
+
+  const handleSafetyFloorBlur = useCallback(() => {
+    const trimmedValue = safetyFloorText.trim();
+    if (trimmedValue === '') {
+      setSafetyFloorText(
+        String(
+          displayEnergy(
+            normalized.calorieSafetyFloorValue,
+            normalized.energyUnit
+          )
+        )
+      );
+      return;
+    }
+    const parsed = Number(trimmedValue);
+    const kcal = Number.isFinite(parsed)
+      ? toKcal(parsed, normalized.energyUnit)
+      : normalized.calorieSafetyFloorValue;
+    const clamped = Math.max(
+      MIN_CALORIE_SAFETY_FLOOR,
+      Math.min(MAX_CALORIE_SAFETY_FLOOR, kcal)
+    );
+    setSafetyFloorText(String(displayEnergy(clamped, normalized.energyUnit)));
+    if (clamped !== normalized.calorieSafetyFloorValue) {
+      mutation.mutate({ calorie_safety_floor_value: clamped });
+    }
+  }, [
+    mutation,
+    normalized.calorieSafetyFloorValue,
+    normalized.energyUnit,
+    safetyFloorText,
+  ]);
+
+  const handlePercentageBlur = useCallback(() => {
+    const parsed = parseInt(percentageText, 10);
+    const clamped = isNaN(parsed) ? 100 : Math.max(0, Math.min(100, parsed));
+    setPercentageText(String(clamped));
+    if (clamped !== normalized.exerciseCaloriePercentage) {
+      mutation.mutate({ exercise_calorie_percentage: clamped });
+    }
+  }, [percentageText, normalized.exerciseCaloriePercentage, mutation]);
+
+  const handleGoalModePercentageBlur = useCallback(() => {
+    const trimmedValue = goalModePercentageText.trim();
+    if (trimmedValue === '' || trimmedValue === '-') {
+      setGoalModePercentageText(String(normalized.goalModeCustomPercentage));
+      return;
+    }
+    const parsed = Math.round(Number(trimmedValue));
+    const clamped = Number.isFinite(parsed)
+      ? Math.max(
+          -MAX_GOAL_MODE_PERCENTAGE,
+          Math.min(MAX_GOAL_MODE_PERCENTAGE, parsed)
+        )
+      : normalized.goalModeCustomPercentage;
+    setGoalModePercentageText(String(clamped));
+    if (clamped !== normalized.goalModeCustomPercentage) {
+      mutation.mutate({ goal_mode_custom_percentage: clamped });
+    }
+  }, [goalModePercentageText, mutation, normalized.goalModeCustomPercentage]);
+
+  const optionsLayout = LinearTransition.delay(0).duration(250);
+  const pipelineLayout = LinearTransition.delay(50).duration(250);
+
+  // Match goalService: without a usable BMR the stored manual target remains
+  // active. Keep its earn-back control available until the balance is known.
+  const adaptiveEarnBackSuppressed =
+    adaptiveEarnBackConfigured && (summary?.calorieBalance?.bmr ?? 0) > 0;
+  const showPercentage =
+    normalized.mode === 'percentage' && !adaptiveEarnBackSuppressed;
+  const showActivityLevel =
+    normalized.mode === 'tdee' || normalized.mode === 'adaptive';
+  const showNegativeAdjustment = normalized.mode === 'tdee';
+
+  const explanation = useMemo(() => {
+    const mode = normalized.mode;
+    const bmr = normalized.includeBmrInNetCalories;
+    const pct = normalized.exerciseCaloriePercentage;
+
+    const burned =
+      mode === 'tdee'
+        ? t('calorieSettings.formulas.projectedTotal', {
+            defaultValue:
+              'Device total calories (BMR + active calories fallback)',
+          })
+        : bmr
+          ? t('calorieSettings.formulas.activityWithBmr', {
+              defaultValue: 'Activity + BMR',
+            })
+          : t('calorieSettings.formulas.activityOnly', {
+              defaultValue: 'Activity only (exercise + steps)',
+            });
+    const net = t('calorieSettings.formulas.eatenBurned', {
+      defaultValue: 'Eaten − Burned',
+    });
+
+    let remainingFormula: string;
+    let remainingNote: string | null;
+    switch (adaptiveEarnBackSuppressed ? 'adaptive' : mode) {
+      case 'dynamic':
+        remainingFormula = activitySeparated
+          ? t('calorieSettings.formulas.dynamicActivitySeparated', {
+              defaultValue: 'Goal − Eaten + Activity',
+            })
+          : t('calorieSettings.formulas.dynamic', {
+              defaultValue: 'Goal − Net Energy',
+            });
+        remainingNote = t('calorieSettings.notes.dynamic', {
+          defaultValue: 'Goal grows as you move',
+        });
+        break;
+      case 'percentage':
+        remainingFormula = bmr
+          ? t('calorieSettings.formulas.percentageWithBmr', {
+              defaultValue: 'Goal − Eaten + BMR + {{percentage}}% of Exercise',
+              percentage: pct,
+            })
+          : t('calorieSettings.formulas.percentage', {
+              defaultValue: 'Goal − Eaten + {{percentage}}% of Exercise',
+              percentage: pct,
+            });
+        remainingNote = null;
+        break;
+      case 'tdee':
+        remainingFormula =
+          normalized.goalMode === 'weekly'
+            ? t('calorieSettings.formulas.tdeeWeekly', {
+                defaultValue: 'Projected TDEE + Weekly Goal Adjustment − Eaten',
+              })
+            : t('calorieSettings.formulas.tdee', {
+                defaultValue: 'Projected TDEE × Goal Mode − Eaten',
+              });
+        remainingNote = t('calorieSettings.notes.tdee', {
+          defaultValue:
+            'The projection converges with the device total at midnight',
+        });
+        break;
+      case 'adaptive':
+        remainingFormula = t('calorieSettings.formulas.adaptive', {
+          defaultValue: 'Goal − Eaten',
+        });
+        remainingNote = adaptiveEarnBackSuppressed
+          ? null
+          : normalized.goalMode === 'weekly'
+            ? t('calorieSettings.notes.adaptiveWeekly', {
+                defaultValue: 'Goal = Adaptive TDEE + Weekly Goal Adjustment',
+              })
+            : t('calorieSettings.notes.adaptive', {
+                defaultValue: 'Goal = Adaptive TDEE',
+              });
+        break;
+      default:
+        remainingFormula = t('calorieSettings.formulas.fixed', {
+          defaultValue: 'Goal − Eaten',
+        });
+        remainingNote = t('calorieSettings.notes.fixed', {
+          defaultValue: 'Activity does not change your budget',
+        });
+        break;
+    }
+
+    return { burned, net, remainingFormula, remainingNote };
+  }, [
+    activitySeparated,
+    adaptiveEarnBackSuppressed,
+    normalized.mode,
+    normalized.includeBmrInNetCalories,
+    normalized.exerciseCaloriePercentage,
+    normalized.goalMode,
+    t,
+  ]);
+
+  const header = useScreenHeader({
+    title: t('calorieSettings.title', {
+      defaultValue: 'Calorie & BMR Settings',
+    }),
+    left: { kind: 'back' },
+  });
+
+  return (
+    <View
+      className="flex-1 bg-background"
+      style={usesNativeHeader ? undefined : { paddingTop: insets.top }}
+    >
+      {header}
+      <ScrollView
+        contentContainerStyle={{
+          padding: 16,
+          paddingTop: 16,
+          paddingBottom: insets.bottom + 80 + activeWorkoutBarPadding,
+        }}
+        contentInsetAdjustmentBehavior={
+          usesNativeHeader ? 'automatic' : 'never'
+        }
+      >
+        {/* Mode */}
+        <View className="bg-surface rounded-xl p-3 mb-4 shadow-sm">
+          <View className="flex-row items-center justify-between">
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.modeLabel', { defaultValue: 'Calorie Mode' })}
+            </Text>
+            <BottomSheetPicker
+              value={normalized.mode}
+              options={modeOptions}
+              onSelect={handleModeChange}
+              title={t('calorieSettings.adjustmentMode', {
+                defaultValue: 'Adjustment Mode',
+              })}
+              containerStyle={{ flex: 1, maxWidth: 200, marginLeft: 16 }}
+            />
+          </View>
+          <Text className="text-text-secondary text-sm mt-3">
+            {t('calorieSettings.modeDescription', {
+              defaultValue:
+                'Controls how your daily calorie goal adjusts based on activity.',
+            })}
+          </Text>
+          {normalized.mode === 'tdee' && (
+            <Text className="text-text-secondary text-sm mt-3">
+              {t('calorieSettings.deviceProjectionDescription', {
+                defaultValue:
+                  'Current-day device total calories (Health Connect, Garmin or Polar) are projected to midnight; completed days use the recorded total. Goal Mode is applied to that TDEE, with BMR + active calories as a fallback.',
+              })}
+            </Text>
+          )}
+          {adaptiveEarnBackSuppressed && (
+            <Text className="text-text-secondary text-sm mt-3">
+              {t('calorieSettings.adaptiveEarnBack', {
+                defaultValue:
+                  'Adaptive targets already include activity. Remaining calories are Target minus Eaten. Exercise earn-back applies only to Manual targets.',
+              })}
+            </Text>
+          )}
+          {normalized.mode === 'dynamic' &&
+            normalized.goalModeCalculationMethod === 'adaptive' && (
+              <View className="mt-3">
+                <View className="flex-row items-center justify-between gap-3">
+                  <Text className="flex-1 text-base font-semibold text-text-primary">
+                    {t('calorieSettings.adaptiveActivitySeparate', {
+                      defaultValue: 'Count activity calories separately',
+                    })}
+                  </Text>
+                  <Switch
+                    value={normalized.adaptiveActivitySeparate}
+                    onValueChange={(value) =>
+                      mutation.mutate({ adaptive_activity_separate: value })
+                    }
+                    accessibilityLabel={t(
+                      'calorieSettings.adaptiveActivitySeparate',
+                      {
+                        defaultValue: 'Count activity calories separately',
+                      }
+                    )}
+                  />
+                </View>
+                <Text className="text-text-secondary text-sm mt-3">
+                  {t('calorieSettings.adaptiveActivitySeparateHint', {
+                    defaultValue:
+                      'Learn a baseline excluding historical activity and credit today’s steps and workouts once, without adding BMR again. This needs consistent food, weight, step and workout history. Until enough history is available, use BMR × your non-workout activity multiplier.',
+                  })}
+                </Text>
+                {activitySeparated && (
+                  <Text className="text-text-secondary text-sm mt-3">
+                    {t('calorieSettings.adaptiveActivitySeparateReporting', {
+                      defaultValue:
+                        'BMR stays in Burned and Net Energy when Include Resting Calories is enabled. Only steps and workouts are added to your remaining calorie budget.',
+                    })}
+                  </Text>
+                )}
+              </View>
+            )}
+        </View>
+
+        {/* Options */}
+        <Animated.View
+          className="bg-surface rounded-xl p-4 mb-4 shadow-sm"
+          layout={optionsLayout}
+        >
+          {/* Percentage Input */}
+          {showPercentage && (
+            <Animated.View layout={optionsLayout}>
+              <Text className="text-base font-semibold text-text-primary mb-2">
+                {t('calorieSettings.exerciseCaloriesApplied', {
+                  defaultValue: 'Exercise Calories Applied',
+                })}
+              </Text>
+              <FormInput
+                value={percentageText}
+                onChangeText={setPercentageText}
+                onBlur={handlePercentageBlur}
+                keyboardType="number-pad"
+                maxLength={3}
+                returnKeyType="done"
+                accessibilityLabel={t(
+                  'calorieSettings.exerciseCaloriesApplied',
+                  { defaultValue: 'Exercise Calories Applied' }
+                )}
+              />
+              <Text className="text-text-secondary text-sm mt-3">
+                {t('calorieSettings.exerciseCaloriesDescription', {
+                  defaultValue:
+                    'How much of your exercise calories are added back to your daily goal.',
+                })}
+              </Text>
+              <View className="border-t border-border-subtle my-3" />
+            </Animated.View>
+          )}
+
+          {/* Activity Level */}
+          {showActivityLevel && (
+            <Animated.View layout={optionsLayout}>
+              <View className="flex-row items-center justify-between">
+                <Text className="text-base font-semibold text-text-primary">
+                  {t('calorieSettings.activityLevel', {
+                    defaultValue: 'Activity Level',
+                  })}
+                </Text>
+                <BottomSheetPicker
+                  value={normalized.activityLevel}
+                  options={activityLevelOptions}
+                  onSelect={handleActivityLevelChange}
+                  title={t('calorieSettings.activityLevel', {
+                    defaultValue: 'Activity Level',
+                  })}
+                  containerStyle={{ flex: 1, maxWidth: 200, marginLeft: 16 }}
+                />
+              </View>
+              <Text className="text-text-secondary text-sm mt-1">
+                {normalized.mode === 'tdee'
+                  ? t('calorieSettings.deviceProjectionFallback', {
+                      defaultValue:
+                        'Only used for the BMR + active calories fallback when a device total is unavailable.',
+                    })
+                  : t('calorieSettings.activityBaseline', {
+                      defaultValue: 'Used as a baseline for TDEE.',
+                    })}
+              </Text>
+              {normalized.mode === 'adaptive' && (
+                <Text className="text-text-secondary text-sm mt-3">
+                  {t('calorieSettings.adaptiveFallback', {
+                    defaultValue:
+                      'The fallback estimate until you have enough tracking data — and it keeps setting the plausibility limits afterwards. Your measured TDEE is capped to within ±500 kcal of BMR × this multiplier.',
+                  })}
+                </Text>
+              )}
+              <View className="border-t border-border-subtle my-3" />
+            </Animated.View>
+          )}
+
+          {/* Negative Adjustment Toggle */}
+          {showNegativeAdjustment && (
+            <Animated.View layout={optionsLayout}>
+              <View className="flex-row justify-between items-center">
+                <Text className="text-base font-semibold text-text-primary">
+                  {t('calorieSettings.allowNegative', {
+                    defaultValue: 'Allow Lower Fallback Projection',
+                  })}
+                </Text>
+                <Switch
+                  onValueChange={handleNegativeAdjustmentToggle}
+                  value={normalized.tdeeAllowNegativeAdjustment}
+                  accessibilityLabel={t('calorieSettings.allowNegative', {
+                    defaultValue: 'Allow Lower Fallback Projection',
+                  })}
+                />
+              </View>
+              <Text className="text-text-secondary text-sm mt-3">
+                {t('calorieSettings.negativeDescription', {
+                  defaultValue:
+                    'When a device total is unavailable, let the BMR + active calories fallback lower your target.',
+                })}
+              </Text>
+              <View className="border-t border-border-subtle my-3" />
+            </Animated.View>
+          )}
+
+          {/* BMR Toggle */}
+          <Animated.View layout={optionsLayout}>
+            <View className="flex-row justify-between items-center">
+              <Text className="text-base font-semibold text-text-primary">
+                {t('calorieSettings.includeResting', {
+                  defaultValue: 'Include Resting Calories',
+                })}
+              </Text>
+              <Switch
+                onValueChange={handleBmrToggle}
+                value={normalized.includeBmrInNetCalories}
+                accessibilityLabel={t('calorieSettings.includeResting', {
+                  defaultValue: 'Include Resting Calories',
+                })}
+              />
+            </View>
+            <Text className="text-text-secondary text-sm mt-3">
+              {t('calorieSettings.includeRestingDescription', {
+                defaultValue:
+                  'Include your baseline energy (BMR) in net calculations.',
+              })}
+            </Text>
+          </Animated.View>
+        </Animated.View>
+
+        {/* Goal Mode */}
+        <Animated.View
+          className="bg-surface rounded-xl p-4 mb-4 shadow-sm"
+          layout={optionsLayout}
+        >
+          <View className="flex-row items-center justify-between">
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.goalMode.title', {
+                defaultValue: 'Goal Mode',
+              })}
+            </Text>
+            <BottomSheetPicker
+              value={normalized.goalMode}
+              options={goalModeOptions}
+              onSelect={handleGoalModeChange}
+              title={t('calorieSettings.goalMode.title', {
+                defaultValue: 'Goal Mode',
+              })}
+              containerStyle={{ flex: 1, maxWidth: 230, marginLeft: 16 }}
+            />
+          </View>
+          <Text className="text-text-secondary text-sm mt-3">
+            {normalized.goalMode === 'weekly'
+              ? t('calorieSettings.weeklyGoal.description', {
+                  defaultValue:
+                    'Choose how much weight you want to lose or gain each week, or keep your weight stable.',
+                })
+              : normalized.mode === 'tdee'
+                ? t('calorieSettings.goalMode.deviceProjectionDescription', {
+                    defaultValue:
+                      'This percentage is applied directly to the projected device TDEE.',
+                  })
+                : t('calorieSettings.goalMode.description', {
+                    defaultValue:
+                      'Adjusts your calorie target for maintenance, a deficit, or a surplus.',
+                  })}
+          </Text>
+          {normalized.goalMode === 'weekly' && (
+            <WeeklyWeightGoalFields
+              weeklyChangeKg={normalized.goalModeWeeklyChangeKg}
+              weightUnit={preferences?.default_weight_unit}
+              energyUnit={normalized.energyUnit}
+              onChange={(weeklyChangeKg) =>
+                mutation.mutate({ goal_mode_weekly_change_kg: weeklyChangeKg })
+              }
+            />
+          )}
+          {normalized.goalMode === 'manual' && (
+            <View className="mt-4">
+              <Text className="text-sm font-semibold text-text-primary mb-2">
+                {t('calorieSettings.goalMode.customPercentage', {
+                  defaultValue: 'Custom percentage',
+                })}
+              </Text>
+              <FormInput
+                value={goalModePercentageText}
+                onChangeText={setGoalModePercentageText}
+                onBlur={handleGoalModePercentageBlur}
+                keyboardType="numbers-and-punctuation"
+                maxLength={3}
+                returnKeyType="done"
+                accessibilityLabel={t(
+                  'calorieSettings.goalMode.customPercentage',
+                  { defaultValue: 'Custom percentage' }
+                )}
+              />
+              <Text className="text-text-secondary text-sm mt-3">
+                {t('calorieSettings.goalMode.customPercentageDescription', {
+                  defaultValue:
+                    'Positive adds calories; negative creates a deficit. Limited to ±40%.',
+                })}
+              </Text>
+            </View>
+          )}
+          {normalized.mode !== 'tdee' && (
+            <View className="mt-4 pt-4 border-t border-border flex-row items-center justify-between">
+              <Text className="text-base font-semibold text-text-primary">
+                {t('calorieSettings.goalMode.calculationMethod', {
+                  defaultValue: 'Calculation Method',
+                })}
+              </Text>
+              <BottomSheetPicker
+                value={normalized.goalModeCalculationMethod}
+                options={calculationMethodOptions}
+                onSelect={handleGoalModeCalculationMethodChange}
+                title={t('calorieSettings.goalMode.calculationMethod', {
+                  defaultValue: 'Calculation Method',
+                })}
+                containerStyle={{ flex: 1, maxWidth: 200, marginLeft: 16 }}
+              />
+            </View>
+          )}
+        </Animated.View>
+
+        <Animated.View
+          className="bg-surface rounded-xl p-4 mb-4 shadow-sm"
+          layout={optionsLayout}
+        >
+          <View className="flex-row items-center justify-between">
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.safetyFloor.title', {
+                defaultValue: 'Safety Floor',
+              })}
+            </Text>
+            <BottomSheetPicker
+              value={normalized.calorieSafetyFloorMode}
+              options={safetyFloorOptions}
+              onSelect={handleSafetyFloorModeChange}
+              title={t('calorieSettings.safetyFloor.title', {
+                defaultValue: 'Safety Floor',
+              })}
+              containerStyle={{ flex: 1, maxWidth: 200, marginLeft: 16 }}
+            />
+          </View>
+          {normalized.calorieSafetyFloorMode === 'custom' && (
+            <View className="mt-4">
+              <Text className="text-sm font-semibold text-text-primary mb-2">
+                {t('calorieSettings.safetyFloor.customMinimum', {
+                  defaultValue: 'Custom minimum ({{unit}})',
+                  unit: normalized.energyUnit,
+                })}
+              </Text>
+              <FormInput
+                value={safetyFloorText}
+                onChangeText={setSafetyFloorText}
+                onBlur={handleSafetyFloorBlur}
+                keyboardType="number-pad"
+                maxLength={5}
+                returnKeyType="done"
+              />
+            </View>
+          )}
+          <Text className="text-text-secondary text-sm mt-3">
+            {normalized.calorieSafetyFloorMode === 'standard'
+              ? t('calorieSettings.safetyFloor.standardDescription', {
+                  defaultValue:
+                    'Uses the higher of your estimated RMR and the clinical minimum.',
+                })
+              : normalized.calorieSafetyFloorMode === 'custom'
+                ? t('calorieSettings.safetyFloor.customDescription', {
+                    defaultValue:
+                      'Replaces the standard floor with your chosen minimum. Health recommendations remain visible.',
+                  })
+                : t('calorieSettings.safetyFloor.disabledDescription', {
+                    defaultValue:
+                      'Stops automatic target clamping. Health warnings remain visible.',
+                  })}
+          </Text>
+        </Animated.View>
+
+        {/* Calculation Pipeline */}
+        <Animated.View
+          className="rounded-xl p-4 mb-4"
+          layout={pipelineLayout}
+          style={{ backgroundColor: `${accentPrimary}15` }}
+        >
+          <View className="flex-row items-center mb-4">
+            <Icon name="info-circle" size={18} color={accentPrimary} />
+            <Text className="text-base font-semibold text-text-primary ml-2">
+              {t('calorieSettings.howThisWorks', {
+                defaultValue: 'How this works',
+              })}
+            </Text>
+          </View>
+
+          <Animated.View className="items-center" layout={pipelineLayout}>
+            {/* Step 1: Burned */}
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.burnedCalories', {
+                defaultValue: 'Burned Calories',
+              })}
+            </Text>
+            <Animated.View
+              key={`burned-${explanation.burned}`}
+              layout={pipelineLayout}
+            >
+              <Text className="text-sm text-text-secondary">
+                {explanation.burned}
+              </Text>
+            </Animated.View>
+
+            <Text className="text-text-muted text-lg my-1">{'\u2193'}</Text>
+
+            {/* Step 2: Net */}
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.netEnergy', { defaultValue: 'Net Energy' })}
+            </Text>
+            <Animated.View
+              key={`net-${explanation.net}`}
+              layout={pipelineLayout}
+            >
+              <Text className="text-sm text-text-secondary">
+                {explanation.net}
+              </Text>
+            </Animated.View>
+
+            <Text className="text-text-muted text-lg my-1">{'\u2193'}</Text>
+
+            {/* Step 3: Remaining */}
+            <Text className="text-base font-semibold text-text-primary">
+              {t('calorieSettings.remainingCalories', {
+                defaultValue: 'Remaining Calories',
+              })}
+            </Text>
+            <Animated.View
+              key={`remaining-${explanation.remainingFormula}`}
+              layout={pipelineLayout}
+            >
+              <Text className="text-sm text-text-secondary">
+                {explanation.remainingFormula}
+              </Text>
+            </Animated.View>
+            {explanation.remainingNote && (
+              <Animated.View
+                key={`note-${explanation.remainingNote}`}
+                layout={pipelineLayout}
+              >
+                <Text className="text-sm text-text-secondary mt-2 italic">
+                  ({explanation.remainingNote})
+                </Text>
+              </Animated.View>
+            )}
+          </Animated.View>
+        </Animated.View>
+
+        {/* Measured BMR — same `use_external_bmr` preference as the web
+            Calculation Settings, so a change here shows up there and vice versa.
+            Deliberately worded identically: one setting under two different names
+            across clients is worse than a slightly less platform-native label. */}
+        <View className="bg-surface rounded-xl p-4 mb-4 shadow-sm">
+          <View className="flex-row justify-between items-center">
+            <Text className="text-base font-semibold text-text-primary flex-1 mr-3">
+              {t('calorieSettings.useExternalBmr', {
+                defaultValue:
+                  'Use measured BMR from check-ins and synced devices',
+              })}
+            </Text>
+            <Switch
+              onValueChange={handleExternalBmrToggle}
+              value={normalized.useExternalBmr}
+              accessibilityLabel={t('calorieSettings.useExternalBmr', {
+                defaultValue:
+                  'Use measured BMR from check-ins and synced devices',
+              })}
+            />
+          </View>
+          <Text className="text-text-secondary text-sm mt-3">
+            {t('calorieSettings.useExternalBmrHint', {
+              defaultValue:
+                'Off by default — your chosen formula is always used until you turn this on. When enabled, a BMR recorded on a check-in or synced from a smart scale or health provider replaces the formula for that day, provided it is physiologically plausible for you.',
+            })}
+          </Text>
+          {normalized.useExternalBmr && Platform.OS === 'ios' && (
+            <Text className="text-text-secondary text-xs mt-3 italic">
+              {t('calorieSettings.useExternalBmrIosNote', {
+                defaultValue:
+                  'Apple Health’s Resting Energy already includes light daily activity, so consider setting Activity Level to None (×1.0) to avoid counting it twice.',
+              })}
+            </Text>
+          )}
+        </View>
+
+        {/* An account setting so it follows the person to a new phone; only the
+            iPhone sync reads it. */}
+        {Platform.OS === 'ios' && (
+          <View className="bg-surface rounded-xl p-4 mb-4 shadow-sm">
+            <View className="flex-row justify-between items-center">
+              <Text className="text-base font-semibold text-text-primary flex-1 mr-3">
+                {t('calorieSettings.useMoveRingActiveCalories', {
+                  defaultValue: 'Use Move ring for active calories',
+                })}
+              </Text>
+              <Switch
+                onValueChange={handleMoveRingToggle}
+                value={normalized.useMoveRingActiveCalories}
+                accessibilityLabel={t(
+                  'calorieSettings.useMoveRingActiveCalories',
+                  { defaultValue: 'Use Move ring for active calories' }
+                )}
+              />
+            </View>
+            <Text className="text-text-secondary text-sm mt-3">
+              {t('calorieSettings.useMoveRingActiveCaloriesHint', {
+                defaultValue:
+                  'Off by default, active calories come from the Apple Health Active Energy total. When on, they come from your Move ring, so they match the Fitness app. The ring counts what your Apple Watch and iPhone measure, and workouts other apps save to Apple Health can add to it too. A day with no ring, such as when Activity access is off, uses the Active Energy total. Applies to days synced after the change.',
+              })}
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+    </View>
+  );
+};
+
+export default CalorieSettingsScreen;

@@ -1,0 +1,157 @@
+import { ExerciseOwnershipFilter } from '@/types/exercises';
+
+export const exerciseKeys = {
+  all: ['exercises'] as const,
+  lists: () => [...exerciseKeys.all, 'list'] as const,
+  list: (
+    searchTerm: string,
+    categoryFilter: string,
+    ownershipFilter: ExerciseOwnershipFilter,
+    page: number,
+    limit: number,
+    sortOrder: string = 'name:asc'
+  ) =>
+    [
+      ...exerciseKeys.lists(),
+      { searchTerm, categoryFilter, ownershipFilter, page, limit, sortOrder },
+    ] as const,
+  details: () => [...exerciseKeys.all, 'detail'] as const,
+  detail: (id: string) => [...exerciseKeys.details(), id] as const,
+  impact: (id: string) => [...exerciseKeys.detail(id), 'impact'] as const,
+  alternatives: (id: string, mode: string, excludeIds: readonly string[]) =>
+    [
+      ...exerciseKeys.all,
+      'alternatives',
+      id,
+      mode,
+      [...excludeIds].sort().join(','),
+    ] as const,
+};
+
+export const workoutCoachingKeys = {
+  all: ['workoutCoaching'] as const,
+  settings: () => [...workoutCoachingKeys.all, 'settings'] as const,
+  feedback: (presetEntryId: string) =>
+    [...workoutCoachingKeys.all, 'feedback', presetEntryId] as const,
+  /** Adaptive suggestions; feedback saves invalidate this prefix. */
+  suggestions: () => [...workoutCoachingKeys.all, 'suggestions'] as const,
+};
+
+export const presetKeys = {
+  all: ['workoutPresets'] as const,
+  lists: () => [...presetKeys.all, 'list'] as const,
+  /**
+   * Key for one page of workout presets. It is scoped to the signed-in user so
+   * a cached page can never be handed back after the session switches account,
+   * matching the shape of `presetKeys.search` below.
+   */
+  list: (userId: string | undefined, page: number, limit: number) =>
+    [...presetKeys.lists(), { userId, page, limit }] as const,
+  details: () => [...presetKeys.all, 'detail'] as const,
+  detail: (id: string) => [...presetKeys.details(), id] as const,
+  search: (searchTerm: string, userId?: string, limit: number = 10) =>
+    [...presetKeys.lists(), 'search', { searchTerm, userId, limit }] as const,
+};
+
+export const exerciseSearchKeys = {
+  all: ['exerciseSearch'] as const,
+  providers: ['exerciseSearch', 'providers'] as const,
+  filters: {
+    all: ['exerciseSearch', 'filters'] as const,
+    equipment: () => ['exerciseSearch', 'filters', 'equipment'] as const,
+    muscles: () => ['exerciseSearch', 'filters', 'muscles'] as const,
+    wger: () => ['exerciseSearch', 'filters', 'wger'] as const,
+  },
+  search: {
+    all: ['exerciseSearch', 'search'] as const,
+    internal: (query: string, equipment: string[], muscles: string[]) =>
+      [
+        'exerciseSearch',
+        'search',
+        'internal',
+        { query, equipment, muscles },
+      ] as const,
+    external: (
+      query: string,
+      providerId: string,
+      providerType: string,
+      equipment: string[],
+      muscles: string[],
+      limit?: number
+    ) =>
+      [
+        'exerciseSearch',
+        'search',
+        'external',
+        query,
+        providerId,
+        providerType,
+        { equipment, muscles, limit },
+      ] as const,
+  },
+  suggestions: {
+    recent: (userId: string, limit: number) =>
+      ['exerciseSearch', 'recent', userId, { limit }] as const,
+    top: (userId: string, limit: number) =>
+      ['exerciseSearch', 'top', userId, { limit }] as const,
+  },
+};
+
+export const freeExerciseDBKeys = {
+  all: ['freeExerciseDB'] as const,
+  muscles: () => [...freeExerciseDBKeys.all, 'muscles'] as const,
+  equipment: () => [...freeExerciseDBKeys.all, 'equipment'] as const,
+};
+
+export const exerciseEntryKeys = {
+  all: ['exerciseEntries'] as const,
+  byDate: (date: string, userId?: string) =>
+    [
+      ...exerciseEntryKeys.all,
+      'date',
+      date,
+      ...(userId ? [{ userId }] : []),
+    ] as const,
+  /** Synced workouts that may match a logged workout (calorie link). */
+  calorieLink: (entryId: string) =>
+    [...exerciseEntryKeys.all, 'calorieLink', entryId] as const,
+  /** Autocomplete source for the workout gym / location field. */
+  locations: () => [...exerciseEntryKeys.all, 'locations'] as const,
+  history: (exerciseId: string, limit?: number) =>
+    [
+      ...exerciseEntryKeys.all,
+      'history',
+      exerciseId,
+      ...(limit ? [{ limit }] : []),
+    ] as const,
+  progress: (
+    exerciseId: string,
+    startDate: string,
+    endDate: string,
+    agg: string
+  ) =>
+    [
+      ...exerciseEntryKeys.all,
+      'progress',
+      exerciseId,
+      { startDate, endDate, agg },
+    ] as const,
+  activityDetails: (entryId: string, providerName: string) =>
+    [
+      ...exerciseEntryKeys.all,
+      'activityDetails',
+      entryId,
+      providerName,
+    ] as const,
+  detail: (entryId: string) =>
+    [...exerciseEntryKeys.all, 'detail', entryId] as const,
+  dailyStats: (date: string) =>
+    [...exerciseEntryKeys.all, 'dailyStats', date] as const,
+  groupedSession: (presetEntryId: string) =>
+    [...exerciseEntryKeys.all, 'groupedSession', presetEntryId] as const,
+};
+
+export const assetKeys = {
+  all: ['assets'] as const,
+  svg: (filename: string) => [...assetKeys.all, 'svg', filename] as const,
+};

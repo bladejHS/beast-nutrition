@@ -1,0 +1,96 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
+import Toast from 'react-native-toast-message';
+import { getSettings, putSettings } from '../services/api/cycleApi';
+import { cycleSettingsQueryKey } from './queryKeys';
+import { addLog } from '../services/LogService';
+import type { SharedCycleSettings } from '../types/womensHealth';
+
+export function useCycleSettings() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: cycleSettingsQueryKey,
+    queryFn: getSettings,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: true,
+  });
+
+  const mutation = useMutation({
+    mutationFn: (
+      body: Partial<SharedCycleSettings> & {
+        mark_onboarded?: boolean;
+        reset_onboarding?: boolean;
+      }
+    ) => putSettings(body),
+    onMutate: async (newVars) => {
+      // Cancel outgoing refetches so they don't overwrite optimistic update
+      await queryClient.cancelQueries({ queryKey: cycleSettingsQueryKey });
+
+      // Snapshot previous value
+      const previousSettings =
+        queryClient.getQueryData<SharedCycleSettings | null>(
+          cycleSettingsQueryKey
+        );
+
+      // Optimistically update to new value immediately. mark_onboarded and
+      // reset_onboarding are request-only flags, so keep them out of the
+      // cached settings object.
+      if (previousSettings) {
+        const { mark_onboarded, reset_onboarding, ...settingsPatch } = newVars;
+        const optimistic: SharedCycleSettings = {
+          ...previousSettings,
+          ...settingsPatch,
+          onboarded_at: mark_onboarded
+            ? new Date().toISOString()
+            : reset_onboarding
+              ? null
+              : previousSettings.onboarded_at,
+        };
+        queryClient.setQueryData<SharedCycleSettings | null>(
+          cycleSettingsQueryKey,
+          optimistic
+        );
+      }
+
+      return { previousSettings };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData<SharedCycleSettings | null>(
+        cycleSettingsQueryKey,
+        data
+      );
+    },
+    onError: (error, _variables, context) => {
+      // Rollback to previous settings on error
+      if (context?.previousSettings) {
+        queryClient.setQueryData<SharedCycleSettings | null>(
+          cycleSettingsQueryKey,
+          context.previousSettings
+        );
+      }
+      addLog(`Failed to update cycle settings: ${error}`, 'ERROR');
+      Toast.show({
+        type: 'error',
+        text1: t('cycleSettings.updateFailed', {
+          defaultValue: 'Update failed',
+        }),
+        text2: t('cycleSettings.saveFailed', {
+          defaultValue: 'Could not save cycle settings. Please try again.',
+        }),
+      });
+    },
+  });
+
+  return {
+    settings: query.data,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    error: query.error,
+    refetch: query.refetch,
+    updateSettings: mutation.mutate,
+    updateSettingsAsync: mutation.mutateAsync,
+    isUpdating: mutation.isPending,
+  };
+}

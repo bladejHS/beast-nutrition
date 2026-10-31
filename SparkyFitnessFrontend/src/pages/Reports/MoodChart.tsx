@@ -1,0 +1,247 @@
+import React from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  ScatterChart,
+  Scatter,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts';
+import { getMoodDisplay } from '@/utils/moodUtils';
+import { dailyMoodSeries, moodByName } from '@workspace/shared';
+import type { MoodEntry } from '@/types/mood';
+import { useTranslation } from 'react-i18next';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import { getTimeXAxisProps, prepareTimeChartData } from '@/utils/chartUtils';
+
+/** A built-in mood as "<emoji> <name>", or the raw tag for a user's own mood. */
+function moodTagLabel(tag: string): string {
+  const def = moodByName(tag);
+  return def ? `${def.emoji} ${def.displayName}` : tag;
+}
+
+interface MoodChartProps {
+  data: MoodEntry[];
+  title: string;
+}
+
+interface FormattedMoodEntry {
+  date: string;
+  moodValue: number;
+  moodDisplay: {
+    emoji: string;
+    label: string;
+  };
+  checkinCount: number;
+}
+
+const MoodChart = ({ data, title }: MoodChartProps) => {
+  const { t } = useTranslation();
+  const { formatDateInUserTimezone, chartScaleMode } = usePreferences();
+  const [isMounted, setIsMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  const formattedData = React.useMemo(() => {
+    const checkinCounts = new Map<string, number>();
+    for (const entry of data) {
+      if (entry.source === 'manual' && entry.mood_value !== null) {
+        checkinCounts.set(
+          entry.entry_date,
+          (checkinCounts.get(entry.entry_date) ?? 0) + 1
+        );
+      }
+    }
+    return prepareTimeChartData(
+      dailyMoodSeries(data).map((day) => ({
+        date: day.date,
+        moodValue: day.mood_value,
+        moodDisplay: getMoodDisplay(day.mood_value), // Get both emoji and label
+        checkinCount: checkinCounts.get(day.date) ?? 0,
+      })),
+      chartScaleMode
+    );
+  }, [data, chartScaleMode]);
+
+  // Mood-tag frequency across the range (most common moods).
+  const tagFrequency = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of data) {
+      for (const tag of entry.mood_tags ?? []) {
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([tag, count]) => ({ label: moodTagLabel(tag), count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12);
+  }, [data]);
+
+  if (!isMounted) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>{title}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="h-[500px] flex items-center justify-center bg-gray-50 dark:bg-gray-900 rounded-md">
+            <span className="text-xs text-muted-foreground">
+              {t('common.loading', 'Loading charts...')}
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-8">
+        {/* Most common moods (tag frequency) */}
+        {tagFrequency.length > 0 && (
+          <div>
+            <p className="mb-2 text-sm font-medium">
+              {t('mood.mostCommon', 'Most common moods')}
+            </p>
+            <ResponsiveContainer
+              width="100%"
+              height={Math.max(160, tagFrequency.length * 28)}
+            >
+              <BarChart
+                data={tagFrequency}
+                layout="vertical"
+                margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
+              >
+                <CartesianGrid horizontal={false} strokeDasharray="3 3" />
+                <XAxis type="number" allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  width={120}
+                  tick={{ fontSize: 12 }}
+                />
+                <Tooltip />
+                <Bar dataKey="count" fill="#C9524E" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Overall-mood intensity trend (numeric) */}
+        {formattedData.length > 0 ? (
+          <div>
+            <p className="mb-2 text-sm font-medium">
+              {t('mood.intensityTrend', 'Overall mood over time')}
+            </p>
+            <ResponsiveContainer
+              width="100%"
+              height={400}
+              minWidth={0}
+              minHeight={0}
+              debounce={100}
+            >
+              <ScatterChart
+                margin={{ top: 20, right: 20, bottom: 20, left: 20 }}
+              >
+                <CartesianGrid />
+                <XAxis
+                  {...getTimeXAxisProps({
+                    chartScaleMode,
+                    formatDate: formatDateInUserTimezone,
+                  })}
+                  name={t('mood.date', 'Date')}
+                />
+                <YAxis
+                  type="number"
+                  dataKey="moodValue"
+                  name={t('mood.mood', 'Mood')}
+                  domain={[0, 100]}
+                />
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3' }}
+                  content={<CustomTooltip />}
+                />
+                <Scatter
+                  name={t('mood.dailyMood', 'Daily Mood')}
+                  data={formattedData}
+                  fill="#8884d8"
+                  shape={(props) => {
+                    const { cx, cy, payload } = props;
+                    return (
+                      <text
+                        x={cx}
+                        y={cy}
+                        dy={5}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        className="custom-chart-emoji"
+                      >
+                        <tspan>{payload.moodDisplay.emoji}</tspan>{' '}
+                        {/* Use emoji from moodDisplay */}
+                      </text>
+                    );
+                  }}
+                />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p>
+            {t('mood.noMoodData', 'No mood data available for this period.')}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+export default MoodChart;
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: {
+    payload: FormattedMoodEntry;
+  }[];
+}
+
+// Custom Tooltip for Mood Chart
+const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
+  const { t } = useTranslation();
+  const { formatDateInUserTimezone } = usePreferences();
+
+  if (active && payload && payload.length) {
+    const entry = payload[0]?.payload;
+    return (
+      <div className="p-2 bg-background border rounded-md shadow-md">
+        <p className="label">
+          {entry
+            ? `${formatDateInUserTimezone(entry.date, 'MMM dd, yyyy')}`
+            : ''}
+        </p>
+        <p className="intro">
+          {entry
+            ? `${t('mood.moodValue', 'Mood Value')}: ${entry.moodValue} ${entry.moodDisplay.emoji} (${entry.moodDisplay.label})`
+            : ''}
+        </p>
+        {entry && entry.checkinCount > 0 && (
+          <p className="desc" style={{ marginTop: '5px' }}>
+            {t('checkIn.checkinCount', '{{count}} check-ins', {
+              count: entry.checkinCount,
+              defaultValue_one: '{{count}} check-in',
+            })}
+          </p>
+        )}
+      </div>
+    );
+  }
+  return null;
+};

@@ -1,0 +1,251 @@
+import { vi, beforeEach, describe, expect, it } from 'vitest';
+import { getGroupedExerciseSessionByIdWithClient } from '../services/exerciseEntryHistoryService.js';
+
+vi.mock('../db/poolManager', () => ({
+  getClient: vi.fn(),
+  getSystemClient: vi.fn(),
+}));
+vi.mock('../config/logging', () => ({
+  log: vi.fn(),
+}));
+
+const PRESET_ENTRY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const USER_ID = '99999999-9999-4999-8999-999999999999';
+const EXERCISE_ID = '11111111-1111-4111-8111-111111111111';
+
+function makeChildRow(
+  id: string,
+  sortOrder: number,
+  supersetGroup: number | null | undefined
+) {
+  const row: Record<string, unknown> = {
+    id,
+    user_id: USER_ID,
+    exercise_id: EXERCISE_ID,
+    duration_minutes: 10,
+    calories_burned: 50,
+    entry_date: '2026-03-12',
+    notes: null,
+    distance: null,
+    avg_heart_rate: null,
+    steps: null,
+    source: 'manual',
+    image_url: null,
+    exercise_preset_entry_id: PRESET_ENTRY_ID,
+    sort_order: sortOrder,
+    created_at: '2026-03-12T10:00:00Z',
+    exercise_name: 'Bench Press',
+    category: 'Strength',
+    modality: 'weight_reps',
+    images: null,
+    primary_muscles: null,
+    secondary_muscles: null,
+    equipment: null,
+    instructions: null,
+    force: null,
+    level: null,
+    mechanic: null,
+    sets: [],
+  };
+  if (supersetGroup !== undefined) {
+    row.superset_group = supersetGroup;
+  }
+  return row;
+}
+
+function makeClient(childRows: Record<string, unknown>[]) {
+  return {
+    query: vi.fn((sql: string) => {
+      if (/FROM exercise_preset_entries/.test(sql)) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: PRESET_ENTRY_ID,
+              workout_preset_id: null,
+              name: 'Superset Day',
+              description: null,
+              notes: null,
+              source: 'manual',
+              entry_date: '2026-03-12',
+            },
+          ],
+        });
+      }
+      if (/FROM exercise_entries ee/.test(sql)) {
+        return Promise.resolve({ rows: childRows });
+      }
+      return Promise.resolve({ rows: [] });
+    }),
+  };
+}
+
+describe('getGroupedExerciseSessionByIdWithClient superset_group', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('surfaces superset_group values and passes the strict response parse', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, 1),
+      makeChildRow('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 1, 1),
+      makeChildRow('dddddddd-dddd-4ddd-8ddd-dddddddddddd', 2, null),
+    ]);
+
+    // The function ends in a presetSessionResponseSchema.parse, so a
+    // resolved value proves the strict schema accepts the built response.
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    expect(session).not.toBeNull();
+    expect(session!.exercises.map((e) => e.superset_group)).toEqual([
+      1,
+      1,
+      null,
+    ]);
+    const childSql = client.query.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('FROM exercise_entries ee'));
+    expect(childSql).toBeDefined();
+    expect(childSql).not.toContain('FOR UPDATE');
+  });
+
+  it('locks child rows only when the caller asks', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, null),
+    ]);
+
+    await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID,
+      true
+    );
+
+    const childSql = client.query.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('FROM exercise_entries ee'));
+    expect(childSql).toContain('FOR UPDATE OF ee');
+  });
+
+  it('orders children by sort_order, not by when their first set was logged', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, null),
+    ]);
+
+    await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    // A live session stamps entry_time on an exercise once a set is logged;
+    // ordering by it moved an exercise logged out of turn to the top.
+    const childSql = client.query.mock.calls
+      .map((call) => String(call[0]))
+      .find((sql) => sql.includes('FROM exercise_entries ee'));
+    expect(childSql).toMatch(/ORDER BY ee\.sort_order ASC, ee\.created_at ASC/);
+    expect(childSql).not.toContain('entry_time');
+  });
+
+  it('maps rows without the column to superset_group null', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, undefined),
+    ]);
+
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    expect(session!.exercises[0].superset_group).toBeNull();
+  });
+});
+
+describe('getGroupedExerciseSessionByIdWithClient modality', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('lands the entry modality column in exercise_snapshot', async () => {
+    const client = makeClient([
+      makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, null),
+    ]);
+
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    expect(session!.exercises[0].exercise_snapshot?.modality).toBe(
+      'weight_reps'
+    );
+  });
+
+  it('maps a null modality column to null rather than dropping it', async () => {
+    const row = makeChildRow('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 0, null);
+    row.modality = null;
+    const client = makeClient([row]);
+
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    expect(session!.exercises[0].exercise_snapshot?.modality).toBeNull();
+  });
+});
+
+describe('getGroupedExerciseSessionByIdWithClient telemetry columns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('surfaces wearable telemetry columns instead of dropping them', async () => {
+    const row = makeChildRow('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 0, null);
+    row.max_heart_rate = 121;
+    row.elevation_gain_meters = 16;
+    row.elevation_loss_meters = 39.75;
+    row.weather_condition = 'Clear';
+    const client = makeClient([row]);
+
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    const exercise = session!.exercises[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(exercise.max_heart_rate).toBe(121);
+    expect(exercise.elevation_gain_meters).toBe(16);
+    expect(exercise.elevation_loss_meters).toBe(39.75);
+    expect(exercise.weather_condition).toBe('Clear');
+  });
+
+  it('defaults absent telemetry columns to null rather than undefined', async () => {
+    const client = makeClient([
+      makeChildRow('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 0, null),
+    ]);
+
+    const session = await getGroupedExerciseSessionByIdWithClient(
+      client,
+      USER_ID,
+      PRESET_ENTRY_ID
+    );
+
+    const exercise = session!.exercises[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(exercise.max_heart_rate).toBeNull();
+    expect(exercise.weather_condition).toBeNull();
+  });
+});

@@ -1,0 +1,160 @@
+// Sole consumer: ActivityDetailScreen. The workout/preset forms use the
+// card-based WorkoutFormExerciseList (ActiveWorkoutExerciseCard in edit mode).
+import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Text, TouchableOpacity, View } from 'react-native';
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+} from 'react-native-reanimated';
+import { useCSSVariable } from 'uniwind';
+import Icon from './Icon';
+import EditableSetRow from './EditableSetRow';
+import { isDurationModality } from '../utils/workoutSession';
+import type { WorkoutDraftSet } from '../types/drafts';
+import {
+  isWeightDistanceModality,
+  isWeightDurationModality,
+  type ExerciseModality,
+} from '@workspace/shared';
+
+type EditableField = 'weight' | 'reps' | 'duration' | 'distance';
+
+interface EditableSetListProps {
+  exerciseClientId: string;
+  sets: WorkoutDraftSet[];
+  activeSetKey: string | null;
+  // 'rpe' comes from the shared editing hook but never occurs for activities.
+  activeSetField: EditableField | 'rpe';
+  /** The owning exercise's resolved modality; decides the column set. */
+  modality?: ExerciseModality;
+  weightUnit: string;
+  /** Unit label for a carry's distance column (e.g. m / yd). */
+  distanceUnitLabel?: string;
+  onActivateSet: (setKey: string, field: EditableField) => void;
+  onDeactivateSet: () => void;
+  onUpdateSetField: (
+    exerciseClientId: string,
+    setClientId: string,
+    field: EditableField,
+    value: string
+  ) => void;
+  onRemoveSet: (exerciseClientId: string, setClientId: string) => void;
+  onAddSet: (exerciseClientId: string) => void;
+}
+
+function EditableSetList({
+  exerciseClientId,
+  sets,
+  activeSetKey,
+  activeSetField,
+  modality = 'weight_reps',
+  weightUnit,
+  distanceUnitLabel = '',
+  onActivateSet,
+  onDeactivateSet,
+  onUpdateSetField,
+  onRemoveSet,
+  onAddSet,
+}: EditableSetListProps) {
+  const { t } = useTranslation();
+  const [accentPrimary] = useCSSVariable(['--color-accent-primary']) as [
+    string,
+  ];
+  const durationLike = isDurationModality(modality);
+
+  return (
+    <>
+      {sets.length > 0 && (
+        <Animated.View className="mt-2" layout={LinearTransition.duration(300)}>
+          <View className="flex-row items-center py-1 mb-1">
+            <Text className="text-xs font-semibold text-text-muted w-10 text-center">
+              {t('activeWorkout.columns.set', { defaultValue: 'Set' })}
+            </Text>
+            {durationLike ? (
+              <Text className="text-xs font-semibold text-text-muted flex-1 text-center">
+                {t('activeWorkout.columns.seconds', { defaultValue: 'Sec' })}
+              </Text>
+            ) : (
+              <>
+                {modality !== 'reps_only' && (
+                  <Text className="text-xs font-semibold text-text-muted flex-1 text-center">
+                    {t('activeWorkout.setRow.weight', {
+                      defaultValue: 'Weight',
+                    })}
+                  </Text>
+                )}
+                <Text className="text-xs font-semibold text-text-muted flex-1 text-center">
+                  {isWeightDurationModality(modality)
+                    ? t('activeWorkout.columns.seconds', {
+                        defaultValue: 'Sec',
+                      })
+                    : isWeightDistanceModality(modality)
+                      ? distanceUnitLabel
+                      : t('activeWorkout.setRow.reps', {
+                          defaultValue: 'Reps',
+                        })}
+                </Text>
+              </>
+            )}
+            <View style={{ width: 18 }} />
+          </View>
+          {sets.map((set, index) => {
+            const setKey = `${exerciseClientId}:${set.clientId}`;
+            const nextSet = sets[index + 1];
+            return (
+              <Animated.View
+                key={set.clientId}
+                entering={FadeIn.duration(200)}
+                exiting={FadeOut.duration(150)}
+                layout={LinearTransition.duration(300)}
+              >
+                <EditableSetRow
+                  exerciseClientId={exerciseClientId}
+                  setClientId={set.clientId}
+                  weight={set.weight}
+                  reps={set.reps}
+                  duration={set.duration != null ? String(set.duration) : ''}
+                  distance={set.distance ?? ''}
+                  distanceUnitLabel={distanceUnitLabel}
+                  setNumber={index + 1}
+                  isActive={activeSetKey === setKey}
+                  activeField={
+                    activeSetKey === setKey ? activeSetField : undefined
+                  }
+                  modality={modality}
+                  weightUnit={weightUnit}
+                  nextSetKey={
+                    nextSet ? `${exerciseClientId}:${nextSet.clientId}` : null
+                  }
+                  onActivateSet={onActivateSet}
+                  onDeactivate={onDeactivateSet}
+                  onUpdateSetField={onUpdateSetField}
+                  onRemoveSet={onRemoveSet}
+                  onAddSet={onAddSet}
+                />
+              </Animated.View>
+            );
+          })}
+        </Animated.View>
+      )}
+
+      <TouchableOpacity
+        className="flex-row items-center justify-center py-3"
+        onPress={() => onAddSet(exerciseClientId)}
+        activeOpacity={0.6}
+      >
+        <Icon name="add" size={18} color={accentPrimary} />
+        <Text
+          className="text-base font-medium ml-1"
+          style={{ color: accentPrimary }}
+        >
+          {t('activeWorkout.exerciseCard.addSet', { defaultValue: 'Add Set' })}
+        </Text>
+      </TouchableOpacity>
+    </>
+  );
+}
+
+export default React.memo(EditableSetList);

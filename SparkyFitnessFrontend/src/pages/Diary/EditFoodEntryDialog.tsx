@@ -1,0 +1,802 @@
+import { useState, useMemo, useEffect, useRef, SubmitEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import { Check, Sparkles, Clock, CalendarDays, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { NumericInput } from '@/components/NumericInput';
+import { TimeInput } from '@/components/ui/TimeInput';
+import { Label } from '@/components/ui/label';
+import { MarkdownView } from '@/components/ui/MarkdownView';
+import { MarkdownEditor } from '@/components/ui/MarkdownEditor';
+import { diaryEntryImages, usableFoodImages } from '@/utils/foodImages';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import { info, warn, error } from '@/utils/logging';
+import type { FoodVariant, FoodEntry } from '@/types/food';
+import { useFoodView } from '@/hooks/Foods/useFoods';
+import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
+import {
+  useFoodVariants,
+  useCreateFoodVariantMutation,
+} from '@/hooks/Foods/useFoodVariants';
+import { useUpdateFoodEntryMutation } from '@/hooks/Diary/useFoodEntries';
+import { calculateNutrition } from '@/utils/nutritionCalculations';
+import { NutrientGrid } from './NutrientsGrid';
+import {
+  canAutoConvertToUnit,
+  useUnitConversion,
+} from '@/hooks/Foods/useUnitConversion';
+import { FoodEntryUpdateData, MealTypeDefinition } from '@/types/diary';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { DEFAULT_NUTRIENTS } from '@/constants/nutrients';
+import {
+  CONFIDENCE_TONES,
+  type AiConfidence,
+  type ConfidenceTone,
+  toHourMinute,
+  userHourMinute,
+} from '@workspace/shared';
+import { formatServingLabel } from '@/utils/foodServing';
+import FoodEntryImageOverride from './FoodEntryImageOverride';
+import { useEntryImageDraft } from '@/hooks/Diary/useEntryImageDraft';
+import { getAiEstimateLabel } from '@/utils/aiConfidenceLabels';
+
+const AI_PICKER_ICON_TONE_CLASSES: Record<ConfidenceTone, string> = {
+  success: 'text-emerald-600 dark:text-emerald-400',
+  warning: 'text-amber-600 dark:text-amber-400',
+  error: 'text-rose-600 dark:text-rose-400',
+};
+
+interface EditFoodEntryDialogProps {
+  entry: FoodEntry | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  availableMealTypes: MealTypeDefinition[];
+}
+
+const EditFoodEntryDialog = ({
+  entry,
+  open,
+  onOpenChange,
+  availableMealTypes,
+}: EditFoodEntryDialogProps) => {
+  const { t } = useTranslation();
+  const {
+    loggingLevel,
+    energyUnit,
+    convertEnergy,
+    nutrientDisplayPreferences,
+    timezone,
+  } = usePreferences();
+  const isMobile = useIsMobile();
+  const platform = isMobile ? 'mobile' : 'desktop';
+
+  const [quantity, setQuantity] = useState<number>(entry?.quantity || 1);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(
+    entry?.variant_id || null
+  );
+  const [mealId, setMealId] = useState<string>(entry?.meal_type_id ?? '');
+  const [entryTime, setEntryTime] = useState<string>(
+    toHourMinute(entry?.entry_time) || ''
+  );
+  const [entryNotes, setEntryNotes] = useState<string>(entry?.notes || '');
+
+  // Photos a note may embed: this entry's own override if it has one, else the
+  // parent food's. `diaryEntryImages` already resolves each to a usable src,
+  // and that resolved form is the one to write into the markdown.
+  const entryImageOptions = useMemo(
+    () => diaryEntryImages(entry).map((src) => ({ path: src, src })),
+    [entry]
+  );
+
+  const { data: customNutrients } = useCustomNutrients();
+  const { data: foodData, isLoading: isLoadingFood } = useFoodView(
+    entry?.food_id || ''
+  );
+  const { data: variantsData, isLoading: isLoadingVariants } = useFoodVariants(
+    entry?.food_id || ''
+  );
+  const { mutateAsync: updateFoodEntry } = useUpdateFoodEntryMutation();
+  // Photos are staged here and applied by handleSubmit, so closing the dialog
+  // without saving discards them.
+  const imageDraft = useEntryImageDraft(entry?.id ?? '', entry?.images, 'food');
+  const createFoodVariantMutation = useCreateFoodVariantMutation();
+
+  // The food's own note can reference the food's photos, which
+  // `diaryEntryImages` hides once the entry has an override of its own — so
+  // resolve note references against both sets.
+  const notePhotoCandidates = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...usableFoodImages(entry?.images),
+          ...usableFoodImages(foodData?.images),
+        ])
+      ),
+    [entry?.images, foodData?.images]
+  );
+
+  const loading = isLoadingFood || isLoadingVariants;
+  const isEditingAllowed = open && !!entry && !entry.meal_id;
+
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open && !loading && inputRef.current) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 50);
+    }
+  }, [open, loading]);
+
+  const isFoodFound = !!foodData;
+
+  const snapshotVariant = useMemo((): FoodVariant | null => {
+    if (!entry) return null;
+    return {
+      id: entry.variant_id || 'snapshot-variant',
+      serving_size: entry.serving_size || 100,
+      serving_unit: entry.unit || 'g',
+      calories: entry.calories ?? 0,
+      protein: entry.protein ?? 0,
+      carbs: entry.carbs ?? 0,
+      fat: entry.fat ?? 0,
+      saturated_fat: entry.saturated_fat ?? 0,
+      polyunsaturated_fat: entry.polyunsaturated_fat ?? 0,
+      monounsaturated_fat: entry.monounsaturated_fat ?? 0,
+      trans_fat: entry.trans_fat ?? 0,
+      cholesterol: entry.cholesterol ?? 0,
+      sodium: entry.sodium ?? 0,
+      potassium: entry.potassium ?? 0,
+      dietary_fiber: entry.dietary_fiber ?? 0,
+      sugars: entry.sugars ?? 0,
+      vitamin_a: entry.vitamin_a ?? 0,
+      vitamin_c: entry.vitamin_c ?? 0,
+      calcium: entry.calcium ?? 0,
+      iron: entry.iron ?? 0,
+      caffeine_mg: entry.caffeine_mg ?? 0,
+      water_ml: entry.water_ml ?? undefined,
+      alcohol_g: entry.alcohol_g ?? 0,
+      glycemic_index: entry.glycemic_index,
+      custom_nutrients:
+        (entry.custom_nutrients as Record<string, string | number>) || {},
+    };
+  }, [entry]);
+
+  const variants = useMemo(() => {
+    if (!isEditingAllowed || !entry) return [];
+
+    if (foodData && variantsData) {
+      const defaultVariant =
+        foodData.default_variant || variantsData.find((v) => v.is_default);
+
+      const primaryUnit: FoodVariant = defaultVariant
+        ? {
+            ...defaultVariant,
+            calories: defaultVariant.calories || 0,
+            protein: defaultVariant.protein || 0,
+            carbs: defaultVariant.carbs || 0,
+            fat: defaultVariant.fat || 0,
+            custom_nutrients: defaultVariant.custom_nutrients || {},
+          }
+        : ({
+            id: entry.food_id,
+            serving_size: 100,
+            serving_unit: 'g',
+            calories: 0,
+            protein: 0,
+            carbs: 0,
+            fat: 0,
+            custom_nutrients: {},
+          } as FoodVariant);
+
+      const variantsFromDb = variantsData
+        .filter((v) => v.id !== primaryUnit.id)
+        .map((variant) => ({
+          ...variant,
+          calories: variant.calories || 0,
+          protein: variant.protein || 0,
+          carbs: variant.carbs || 0,
+          fat: variant.fat || 0,
+          custom_nutrients: variant.custom_nutrients || {},
+        }));
+
+      return [primaryUnit, ...variantsFromDb];
+    }
+
+    if (snapshotVariant) {
+      return [snapshotVariant];
+    }
+
+    return [];
+  }, [foodData, variantsData, entry, isEditingAllowed, snapshotVariant]);
+
+  const selectedVariant = useMemo((): FoodVariant | null => {
+    if (!variants.length) return snapshotVariant;
+    if (selectedVariantId) {
+      return (
+        variants.find((v) => v.id === selectedVariantId) ||
+        variants[0] ||
+        snapshotVariant
+      );
+    }
+    return variants[0] || snapshotVariant;
+  }, [variants, selectedVariantId, snapshotVariant]);
+
+  const {
+    pendingUnit,
+    setPendingUnit,
+    pendingUnitIsCustom,
+    conversionFactor,
+    setConversionFactor,
+    autoConversionFactor,
+    conversionBaseVariant,
+    conversionError,
+    setConversionError,
+    isConverting,
+    convertibleUnits,
+    dropdownValue,
+    buildConvertedVariant,
+    handleUnitChange,
+    cancelConversion,
+  } = useUnitConversion({
+    variants,
+    selectedVariant,
+    onVariantSelect: (variantId) => {
+      setSelectedVariantId(variantId);
+    },
+  });
+
+  const quickInfoPreferences =
+    nutrientDisplayPreferences.find(
+      (p) => p.view_group === 'food_database' && p.platform === platform
+    ) ||
+    nutrientDisplayPreferences.find(
+      (p) => p.view_group === 'food_database' && p.platform === 'desktop'
+    );
+
+  const visibleNutrients = useMemo(() => {
+    const base = quickInfoPreferences
+      ? quickInfoPreferences.visible_nutrients
+      : DEFAULT_NUTRIENTS;
+
+    const allKeys = [...base, ...(customNutrients?.map((cn) => cn.name) || [])];
+
+    return Array.from(new Set(allKeys));
+  }, [quickInfoPreferences, customNutrients]);
+
+  if (!entry) return null;
+
+  const handleSubmit = async (e: SubmitEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (isConverting) {
+      const convertedVariant = buildConvertedVariant();
+      if (!convertedVariant) {
+        setConversionError(
+          'Please enter a valid unit name and conversion factor.'
+        );
+        return;
+      }
+      setConversionError('');
+      try {
+        let variantWithId: FoodVariant = convertedVariant;
+        if (isFoodFound && entry.food_id) {
+          const savedVariant = await createFoodVariantMutation.mutateAsync({
+            foodId: entry.food_id,
+            variant: convertedVariant,
+          });
+          variantWithId = {
+            ...convertedVariant,
+            ...savedVariant,
+          };
+        }
+        const data: FoodEntryUpdateData = {
+          quantity,
+          unit: variantWithId.serving_unit,
+          variant_id:
+            variantWithId.id === 'default-variant' ||
+            variantWithId.id === 'snapshot-variant'
+              ? null
+              : variantWithId.id || null,
+          meal_type_id: mealId,
+          entry_time: entryTime || null,
+          notes: entryNotes.trim() || null,
+        };
+        await updateFoodEntry({
+          id: entry.id,
+          data,
+        });
+        // This branch returns early, so it needs the same photo save as the
+        // normal path below; otherwise staged photos are silently dropped.
+        await imageDraft.save();
+        info(
+          loggingLevel,
+          'Food entry updated with converted variant:',
+          entry.id
+        );
+        onOpenChange(false);
+      } catch (err) {
+        error(loggingLevel, 'Error saving converted variant:', err);
+        setConversionError('Failed to save the new unit. Please try again.');
+      }
+      return;
+    }
+
+    if (!selectedVariant) {
+      warn(loggingLevel, 'Save called with no selected variant.');
+      return;
+    }
+
+    try {
+      const updateData = {
+        quantity,
+        unit: selectedVariant.serving_unit,
+        meal_type_id: mealId,
+        variant_id:
+          selectedVariant.id === 'default-variant' ||
+          selectedVariant.id === 'snapshot-variant'
+            ? entry.variant_id || null
+            : selectedVariant.id,
+        entry_time: entryTime || null,
+        notes: entryNotes.trim() || null,
+      };
+
+      await updateFoodEntry({ id: entry.id, data: updateData });
+      // Photos are staged rather than saved on pick, so they are applied here
+      // as part of the same submit. No-ops when nothing changed.
+      await imageDraft.save();
+
+      info(loggingLevel, 'Food entry updated successfully:', entry.id);
+      onOpenChange(false);
+    } catch (err) {
+      error(loggingLevel, 'Error updating food entry:', err);
+    }
+  };
+
+  // Use the converted variant for nutrition when converting, otherwise the selected variant
+  const activeVariant = isConverting
+    ? buildConvertedVariant()
+    : selectedVariant;
+  const nutrition = activeVariant
+    ? calculateNutrition(activeVariant, quantity)
+    : null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        requireConfirmation
+        className="max-w-2xl max-h-[90vh] overflow-y-auto"
+      >
+        <DialogHeader>
+          <DialogTitle>
+            {t('editFoodEntry.title', 'Edit Food Entry')}
+          </DialogTitle>
+          <DialogDescription>
+            {t(
+              'editFoodEntry.description',
+              'Edit the quantity and serving unit for your food entry.'
+            )}
+          </DialogDescription>
+          {isFoodFound ? (
+            <p className="text-sm text-red-500 mt-2">
+              {t(
+                'editFoodEntry.latestVariantNote',
+                'Note: Updating this entry will use the latest available variant details for the food, not the original snapshot.'
+              )}
+            </p>
+          ) : (
+            <p className="text-sm text-amber-600 dark:text-amber-400 mt-2">
+              {t(
+                'editFoodEntry.deletedFoodNote',
+                'This food is no longer in your food database. Showing details saved in this diary entry.'
+              )}
+            </p>
+          )}
+        </DialogHeader>
+
+        {loading ? (
+          <div>{t('dataTable.loading', 'Loading...')}</div>
+        ) : (
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold mb-2">
+                  {entry.food_name}
+                </h3>
+                {entry.brand_name && (
+                  <p className="text-sm text-gray-600 mb-4">
+                    {entry.brand_name}
+                  </p>
+                )}
+              </div>
+
+              <FoodEntryImageOverride
+                entry={entry}
+                items={imageDraft.items}
+                onItemsChange={imageDraft.setItems}
+                isSaving={imageDraft.isSaving}
+              />
+
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <Label htmlFor="quantity">
+                    {t('editFoodEntry.quantity', 'Quantity')}
+                  </Label>
+                  <NumericInput
+                    id="quantity"
+                    allowExpressions
+                    decimals={3}
+                    required
+                    step="any"
+                    min="0.01"
+                    value={quantity}
+                    ref={inputRef}
+                    onValueChange={(value) => setQuantity(value ?? 0)}
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="unit">
+                    {t('editFoodEntry.unit', 'Unit')}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={dropdownValue}
+                      onValueChange={handleUnitChange}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {variants.map(
+                          (variant) =>
+                            variant.id && (
+                              <SelectItem key={variant.id} value={variant.id}>
+                                <span className="flex items-center gap-1.5">
+                                  {formatServingLabel(variant)}
+                                  {variant.source === 'ai_estimate' &&
+                                    variant.ai_confidence && (
+                                      <Sparkles
+                                        className={`h-3 w-3 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[variant.ai_confidence as AiConfidence]]}`}
+                                        aria-label={getAiEstimateLabel(
+                                          t,
+                                          'editFoodEntry',
+                                          variant.ai_confidence as AiConfidence
+                                        )}
+                                      />
+                                    )}
+                                </span>
+                              </SelectItem>
+                            )
+                        )}
+                        {convertibleUnits.length > 0 && (
+                          <>
+                            <SelectSeparator />
+                            {convertibleUnits.map((u) => {
+                              const compatible = canAutoConvertToUnit(
+                                variants,
+                                selectedVariant,
+                                u
+                              );
+                              return (
+                                <SelectItem key={u} value={u}>
+                                  <span className="flex items-center gap-1.5">
+                                    {u}
+                                    {compatible && (
+                                      <Check className="h-3 w-3 text-green-500" />
+                                    )}
+                                  </span>
+                                </SelectItem>
+                              );
+                            })}
+                          </>
+                        )}
+                        <SelectSeparator />
+                        <SelectItem value="__custom__">
+                          {t('editFoodEntry.customUnit', 'Custom unit...')}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {selectedVariant?.source === 'ai_estimate' &&
+                      selectedVariant.ai_confidence && (
+                        <Sparkles
+                          className={`h-4 w-4 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[selectedVariant.ai_confidence as AiConfidence]]}`}
+                          aria-label={getAiEstimateLabel(
+                            t,
+                            'editFoodEntry',
+                            selectedVariant.ai_confidence as AiConfidence
+                          )}
+                        />
+                      )}
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="meal">
+                    {t('editFoodEntry.meal', 'Meal')}
+                  </Label>
+                  <Select value={mealId} onValueChange={setMealId}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableMealTypes.map((mealType) => (
+                        <SelectItem key={mealType.id} value={mealType.id}>
+                          {mealType.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="col-span-4 space-y-1 max-w-[280px]">
+                  <div className="flex items-center justify-between">
+                    <Label id="entryTime-label">
+                      {t('editFoodEntry.timeOptional', 'Time (optional)')}
+                    </Label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEntryTime('')}
+                        disabled={!entryTime}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                        title={t('editFoodEntry.clearTime', 'Clear time')}
+                      >
+                        <X className="h-4 w-4" />
+                        {t('editFoodEntry.clear', 'Clear')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const { hour, minute } = userHourMinute(timezone);
+                          setEntryTime(
+                            `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+                          );
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                        title={t(
+                          'editFoodEntry.setCurrentTime',
+                          'Set to current local time'
+                        )}
+                      >
+                        <Clock className="h-4 w-4" />
+                        {t('editFoodEntry.now', 'Now')}
+                      </button>
+                      {(() => {
+                        const selectedMeal = availableMealTypes.find(
+                          (m) => m.id === mealId
+                        );
+                        const defaultTime = selectedMeal?.default_time;
+                        return defaultTime ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEntryTime(toHourMinute(defaultTime) || '')
+                            }
+                            className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                            title={t('editFoodEntry.setMealDefault', {
+                              time: toHourMinute(defaultTime),
+                              defaultValue: `Set to meal default (${toHourMinute(defaultTime)})`,
+                            })}
+                          >
+                            <CalendarDays className="h-4 w-4" />
+                            {t('editFoodEntry.default', 'Default')}
+                          </button>
+                        ) : null;
+                      })()}
+                    </div>
+                  </div>
+                  <TimeInput
+                    id="entryTime"
+                    aria-labelledby="entryTime-label"
+                    value={entryTime}
+                    onChange={setEntryTime}
+                  />
+                </div>
+              </div>
+
+              {/* Custom unit name input */}
+              {pendingUnitIsCustom && (
+                <div className="border rounded-lg p-3 space-y-3 bg-muted/50">
+                  <div>
+                    <Label htmlFor="customUnitName">
+                      {t('editFoodEntry.unitName', 'Unit name')}
+                    </Label>
+                    <Input
+                      id="customUnitName"
+                      type="text"
+                      placeholder={t(
+                        'editFoodEntry.unitNamePlaceholder',
+                        'e.g. slice, bar, scoop'
+                      )}
+                      value={pendingUnit}
+                      onChange={(e) => {
+                        setPendingUnit(e.target.value);
+                        setConversionError('');
+                      }}
+                    />
+                  </div>
+                  {pendingUnit.trim() && (
+                    <div>
+                      <Label htmlFor="conversionFactor">
+                        1 {pendingUnit.trim()} ={' '}
+                        <span>{conversionBaseVariant?.serving_unit}</span>
+                      </Label>
+                      <Input
+                        id="conversionFactor"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        placeholder={t(
+                          'editFoodEntry.numberPlaceholder',
+                          'e.g. 1'
+                        )}
+                        value={conversionFactor}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setConversionFactor(val === '' ? '' : Number(val));
+                          setConversionError('');
+                        }}
+                      />
+                    </div>
+                  )}
+                  {conversionError && (
+                    <p className="text-sm text-destructive">
+                      {conversionError}
+                    </p>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={cancelConversion}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                </div>
+              )}
+
+              {/* Manual factor needed for incompatible standard units */}
+              {pendingUnit &&
+                !pendingUnitIsCustom &&
+                autoConversionFactor === null && (
+                  <div className="border rounded-lg p-3 space-y-3 bg-muted/50">
+                    <p className="text-sm text-muted-foreground">
+                      {t('editFoodEntry.manualConversion', {
+                        baseUnit: conversionBaseVariant?.serving_unit,
+                        unit: pendingUnit,
+                        defaultValue: `These units can't be converted automatically — enter how many ${conversionBaseVariant?.serving_unit} are in 1 ${pendingUnit}.`,
+                      })}
+                    </p>
+                    <div>
+                      <Label htmlFor="conversionFactor">
+                        1 {pendingUnit} = ?{' '}
+                        <span>{conversionBaseVariant?.serving_unit}</span>
+                      </Label>
+                      <Input
+                        id="conversionFactor"
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        placeholder={t(
+                          'editFoodEntry.numberPlaceholder',
+                          'e.g. 1'
+                        )}
+                        value={conversionFactor}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setConversionFactor(val === '' ? '' : Number(val));
+                          setConversionError('');
+                        }}
+                      />
+                    </div>
+                    {conversionError && (
+                      <p className="text-sm text-destructive">
+                        {conversionError}
+                      </p>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelConversion}
+                    >
+                      {t('common.cancel', 'Cancel')}
+                    </Button>
+                  </div>
+                )}
+
+              {nutrition && customNutrients && (
+                <div className="space-y-4">
+                  <NutrientGrid
+                    baseVariant={activeVariant}
+                    nutrition={nutrition}
+                    customNutrients={customNutrients}
+                    energyUnit={energyUnit}
+                    convertEnergy={convertEnergy}
+                    visibleNutrients={visibleNutrients}
+                  />
+                </div>
+              )}
+
+              {/*
+                Notes sit below the nutrition figures on purpose: the numbers are
+                what someone opens this dialog to check, and a long recipe above
+                them would push them off-screen.
+              */}
+              {foodData?.notes ? (
+                <div className="space-y-1">
+                  <Label>
+                    {t('editFoodEntry.aboutThisFood', 'About this food')}
+                  </Label>
+                  <div className="rounded-md border bg-muted/40 px-3 py-2 max-h-48 overflow-y-auto">
+                    <MarkdownView images={notePhotoCandidates}>
+                      {foodData.notes}
+                    </MarkdownView>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="space-y-1">
+                <Label htmlFor="entryNotes">
+                  {t(
+                    'editFoodEntry.entryNotes',
+                    'Note for this entry (optional)'
+                  )}
+                </Label>
+                <MarkdownEditor
+                  id="entryNotes"
+                  value={entryNotes}
+                  onChange={setEntryNotes}
+                  rows={3}
+                  imageOptions={entryImageOptions}
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 mt-6">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenChange(false)}
+                >
+                  {t('common.cancel', 'Cancel')}
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={
+                    createFoodVariantMutation.isPending ||
+                    (isConverting &&
+                      (!pendingUnit.trim() ||
+                        (autoConversionFactor === null &&
+                          (!conversionFactor || conversionFactor <= 0))))
+                  }
+                >
+                  {createFoodVariantMutation.isPending
+                    ? t('common.saving', 'Saving...')
+                    : t('common.saveChanges', 'Save Changes')}
+                </Button>
+              </div>
+            </div>
+          </form>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+export default EditFoodEntryDialog;

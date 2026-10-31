@@ -1,0 +1,287 @@
+import { log } from '../../config/logging.js';
+import exerciseRepository from '../../models/exercise.js';
+import exerciseEntryRepository from '../../models/exerciseEntry.js';
+import measurementRepository from '../../models/measurementRepository.js';
+import * as workoutTelemetryRepo from '../../models/workoutTelemetryRepository.js';
+import { todayInZone, instantToDay } from '@workspace/shared';
+import {
+  extractStravaTelemetryFields,
+  extractStravaLaps,
+} from './stravaTelemetryExtractors.js';
+
+interface StravaActivity {
+  id: number;
+  name: string;
+  sport_type?: string;
+  type?: string;
+  start_date_local?: string;
+  start_date?: string;
+  distance?: number;
+  moving_time?: number;
+  total_elevation_gain?: number;
+  average_heartrate?: number;
+  calories?: number;
+}
+/**
+ * Map Strava sport_type to a general exercise category
+ */
+function mapSportTypeToCategory(sportType: string) {
+  const categoryMap: Record<string, string> = {
+    // Cardio / Running
+    Run: 'Cardio',
+    TrailRun: 'Cardio',
+    VirtualRun: 'Cardio',
+    Walk: 'Cardio',
+    Hike: 'Cardio',
+    // Cycling
+    Ride: 'Cardio',
+    MountainBikeRide: 'Cardio',
+    GravelRide: 'Cardio',
+    EBikeRide: 'Cardio',
+    EMountainBikeRide: 'Cardio',
+    VirtualRide: 'Cardio',
+    Velomobile: 'Cardio',
+    Handcycle: 'Cardio',
+    // Swimming
+    Swim: 'Cardio',
+    // Water Sports
+    Canoeing: 'Cardio',
+    Kayaking: 'Cardio',
+    Rowing: 'Cardio',
+    Sail: 'Other',
+    StandUpPaddling: 'Cardio',
+    Surfing: 'Cardio',
+    Kitesurf: 'Cardio',
+    Windsurf: 'Cardio',
+    // Winter Sports
+    AlpineSki: 'Cardio',
+    BackcountrySki: 'Cardio',
+    NordicSki: 'Cardio',
+    Snowboard: 'Cardio',
+    Snowshoe: 'Cardio',
+    IceSkate: 'Cardio',
+    // Strength / Flexibility
+    WeightTraining: 'Strength',
+    Crossfit: 'Strength',
+    Yoga: 'Flexibility',
+    // Other
+    Elliptical: 'Cardio',
+    StairStepper: 'Cardio',
+    RockClimbing: 'Strength',
+    Skateboard: 'Other',
+    RollerSki: 'Cardio',
+    InlineSkate: 'Cardio',
+    Golf: 'Other',
+    Soccer: 'Cardio',
+    Wheelchair: 'Cardio',
+    Workout: 'Other',
+  };
+  return categoryMap[sportType] || 'Other';
+}
+/**
+ * Process Strava activities and create exercise entries
+ * @param {number} userId - User ID
+ * @param {number} createdByUserId - Acting user ID
+ * @param {Array} activities - List of SummaryActivity objects from Strava
+ * @param {Array} detailedActivities - Map of activityId -> DetailedActivity (with laps, GPS, etc.)
+ * @param {string} startDate - Start date of sync range (YYYY-MM-DD) for filtering
+ */
+async function processStravaActivities(
+  userId: number,
+  createdByUserId: number,
+  activities: StravaActivity[] = [],
+  detailedActivities: Record<string | number, unknown> = {},
+  startDate: string | null = null,
+  timezone = 'UTC'
+) {
+  if (!activities || activities.length === 0) return;
+  for (const activity of activities) {
+    try {
+      // Extract entry date from start_date_local (e.g., "2024-01-15T07:30:00Z")
+      const entryDate = activity.start_date_local
+        ? activity.start_date_local.substring(0, 10)
+        : activity.start_date
+          ? instantToDay(activity.start_date, timezone)
+          : todayInZone(timezone);
+
+      // Safety filter
+      if (startDate && entryDate < startDate) {
+        log(
+          'debug',
+          `[stravaDataProcessor] Skipping activity "${activity.name}" from ${entryDate} (before sync range ${startDate})`
+        );
+        continue;
+      }
+      const exerciseName = activity.name || 'Strava Activity';
+      const sportType = activity.sport_type || activity.type || 'Workout';
+      const category = mapSportTypeToCategory(sportType);
+      // Find or create exercise by name
+      let exercise = await exerciseRepository.findExerciseByNameAndUserId(
+        exerciseName,
+        userId
+      );
+      if (!exercise) {
+        exercise = await exerciseRepository.createExercise({
+          user_id: userId,
+          name: exerciseName,
+          category: category,
+          source: 'Strava',
+          is_custom: true,
+          shared_with_public: false,
+        });
+      }
+      // Unit conversions
+      // Strava: distance in meters -> convert to km
+      const distanceKm =
+        activity.distance !== null && activity.distance !== undefined
+          ? parseFloat((activity.distance / 1000).toFixed(2))
+          : null;
+      // Strava: moving_time in seconds -> convert to minutes
+      const durationSeconds =
+        activity.moving_time !== null && activity.moving_time !== undefined
+          ? Math.round(activity.moving_time)
+          : 0;
+      const durationMinutes = Math.round(durationSeconds / 60);
+      // Strava SummaryActivity often lacks calories, but DetailedActivity (if available) has it.
+      // Missing calories preserve existing values; new entries default to 0.
+      const detailedActivity = detailedActivities[activity.id] as
+        StravaActivity | undefined;
+      const caloriesAuto =
+        detailedActivity?.calories ?? activity.calories ?? undefined;
+      // This source skips the manual duplicate check, so without a source_id
+      // createExerciseEntry finds no existing entry and every re-sync would
+      // save the activity again.
+      const startedAt = activity.start_date ?? activity.start_date_local;
+      const sourceId = activity.id
+        ? activity.id.toString()
+        : startedAt
+          ? `strava-activity-${startedAt}`
+          : null;
+      const entryData = {
+        exercise_id: exercise.id,
+        entry_date: entryDate,
+        duration_minutes: durationMinutes,
+        calories_burned: caloriesAuto,
+        distance: distanceKm,
+        // Strava returns average_heartrate as a float (e.g. 126.9), but
+        // exercise_entries.avg_heart_rate is INTEGER → Postgres rejects the insert.
+        // Round before passing through. See issue #1256.
+        avg_heart_rate:
+          activity.average_heartrate !== null &&
+          activity.average_heartrate !== undefined
+            ? Math.round(activity.average_heartrate)
+            : null,
+        notes: `Synced from Strava. Type: ${sportType}${activity.moving_time ? `. Moving time: ${Math.round(activity.moving_time / 60)}min` : ''}${activity.total_elevation_gain ? `. Elevation: ${activity.total_elevation_gain}m` : ''}`,
+        entry_source: 'Strava',
+        source_id: sourceId,
+        sets: [
+          {
+            set_number: 1,
+            set_type: 'Working Set',
+            duration: durationSeconds,
+            notes: 'Automatically created from Strava sync summary',
+          },
+        ],
+      };
+      const newEntry = await exerciseEntryRepository.createExerciseEntry(
+        userId,
+        entryData,
+        createdByUserId,
+        'Strava',
+        null,
+        {
+          // A failed detail fetch must not replace a previously complete dump.
+          activityDetail: detailedActivity
+            ? {
+                provider_name: 'Strava',
+                detail_type: 'full_activity_data',
+                detail_data: detailedActivity,
+                created_by_user_id: String(createdByUserId),
+                updated_by_user_id: String(createdByUserId),
+              }
+            : undefined,
+        }
+      );
+      if (newEntry && newEntry.id) {
+        // Only the DetailedActivity response (fetched per-activity) carries laps and
+        // the fuller telemetry summary; a bare SummaryActivity has neither.
+        if (detailedActivity) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const detailedRecord = detailedActivity as any;
+          await exerciseEntryRepository.updateExerciseEntryTelemetryOnly(
+            newEntry.id,
+            String(userId),
+            extractStravaTelemetryFields(detailedRecord)
+          );
+          const laps = extractStravaLaps(detailedRecord);
+          if (laps.length > 0) {
+            await workoutTelemetryRepo.bulkInsertExerciseEntryLaps(
+              String(userId),
+              String(createdByUserId),
+              laps.map((lap) => ({
+                user_id: String(userId),
+                exercise_entry_id: newEntry.id,
+                entry_date: entryDate,
+                ...lap,
+              }))
+            );
+          }
+        }
+      }
+      log(
+        'info',
+        `[stravaDataProcessor] Processed activity "${exerciseName}" (${sportType}) for user ${userId} on ${entryDate}`
+      );
+    } catch (error) {
+      log(
+        'error',
+        `[stravaDataProcessor] Error processing activity "${activity.name || activity.id}": ${error instanceof Error ? error.message : String(error)}`
+      );
+      // Continue processing remaining activities
+    }
+  }
+}
+/**
+ * Process Strava athlete weight and store as check-in measurement
+ * @param {number} userId - User ID
+ * @param {number} createdByUserId - Acting user ID
+ * @param {Object} athlete - Strava athlete profile object
+ */
+async function processStravaAthleteWeight(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  userId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  createdByUserId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  athlete: any,
+  timezone = 'UTC'
+) {
+  if (!athlete || !athlete.weight || athlete.weight <= 0) return;
+  try {
+    const entryDate = todayInZone(timezone);
+    const measurementsToUpsert = { weight: athlete.weight }; // Already in kg
+    await measurementRepository.upsertCheckInMeasurements(
+      userId,
+      createdByUserId,
+      entryDate,
+      measurementsToUpsert
+    );
+    log(
+      'info',
+      `[stravaDataProcessor] Upserted Strava weight (${athlete.weight}kg) for user ${userId} on ${entryDate}`
+    );
+  } catch (error) {
+    log(
+      'error',
+      `[stravaDataProcessor] Error processing athlete weight: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+export { processStravaActivities };
+export { processStravaAthleteWeight };
+export { mapSportTypeToCategory };
+export default {
+  processStravaActivities,
+  processStravaAthleteWeight,
+  mapSportTypeToCategory,
+};

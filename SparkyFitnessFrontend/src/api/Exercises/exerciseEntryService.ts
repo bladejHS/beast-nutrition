@@ -1,0 +1,307 @@
+import { apiCall } from '@/api/api';
+import { debug } from '@/utils/logging';
+import { getUserLoggingLevel } from '@/utils/userPreferences';
+import type { ActivityDetailsResponse } from '@/types/exercises';
+import {
+  ExerciseSessionResponse,
+  exerciseSessionResponseSchema,
+  ExerciseEntryResponse,
+  CreateExerciseEntryRequest,
+  CreatePresetSessionRequest,
+  UpdateExerciseEntryRequest,
+  exerciseProgressResponseSchema,
+  ExerciseProgressResponse,
+  PresetSessionResponse,
+  presetSessionResponseSchema,
+  calorieLinkSuggestionsResponseSchema,
+  CalorieLinkSuggestionsResponse,
+  SetCalorieLinkRequest,
+} from '@workspace/shared';
+import z from 'zod';
+
+/** Synced workouts that may be the same session as this logged workout. */
+export const fetchCalorieLinkSuggestions = async (
+  entryId: string
+): Promise<CalorieLinkSuggestionsResponse> => {
+  const data = await apiCall(
+    `/exercise-entries/${encodeURIComponent(entryId)}/calorie-link/suggestions`,
+    { method: 'GET' }
+  );
+  return calorieLinkSuggestionsResponseSchema.parse(data);
+};
+
+export const setCalorieLink = async (
+  entryId: string,
+  body: SetCalorieLinkRequest
+): Promise<void> => {
+  await apiCall(
+    `/exercise-entries/${encodeURIComponent(entryId)}/calorie-link`,
+    {
+      method: 'PUT',
+      body,
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+};
+
+export const clearCalorieLink = async (entryId: string): Promise<void> => {
+  await apiCall(
+    `/exercise-entries/${encodeURIComponent(entryId)}/calorie-link`,
+    {
+      method: 'DELETE',
+    }
+  );
+};
+
+/** The user's own previously logged workout locations, most recent first. */
+export const fetchWorkoutLocations = async (): Promise<string[]> => {
+  const data: unknown = await apiCall('/exercise-preset-entries/locations', {
+    method: 'GET',
+  });
+  return Array.isArray(data)
+    ? data.filter((value): value is string => typeof value === 'string')
+    : [];
+};
+
+export const fetchExerciseEntries = async (
+  date: string,
+  userId?: string
+): Promise<ExerciseSessionResponse[]> => {
+  const params = new URLSearchParams({ selectedDate: date });
+  if (userId) {
+    params.append('userId', userId);
+  }
+  const response = await apiCall(
+    `/v2/exercise-entries/by-date?${params.toString()}`,
+    {
+      method: 'GET',
+    }
+  );
+  return z.array(exerciseSessionResponseSchema).parse(response);
+};
+
+export const createExerciseEntry = async (
+  payload: Omit<CreateExerciseEntryRequest, 'calories_burned'> & {
+    // Optional: when omitted the server estimates calories from the exercise.
+    calories_burned?: number;
+    imageFile: File | null;
+  }
+): Promise<void> => {
+  const { imageFile, ...entryData } = payload;
+
+  if (imageFile) {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+
+    // Append other data from the payload to formData
+    Object.entries(entryData).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        if (key === 'sets' && Array.isArray(value)) {
+          // The backend expects 'sets' to be a JSON string if it's part of FormData
+          formData.append(key, JSON.stringify(value));
+        } else if (typeof value === 'object' && !Array.isArray(value)) {
+          formData.append(key, JSON.stringify(value));
+        } else if (key === 'activity_details' && Array.isArray(value)) {
+          formData.append(key, JSON.stringify(value));
+        } else {
+          formData.append(key, String(value));
+        }
+      }
+    });
+
+    return apiCall('/exercise-entries', {
+      method: 'POST',
+      body: formData,
+      isFormData: true, // Explicitly mark as FormData
+    });
+  } else {
+    return apiCall('/exercise-entries', {
+      method: 'POST',
+      body: entryData,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+};
+
+export const logWorkoutPreset = async (
+  workoutPresetId: string | number,
+  entryDate: string,
+  workoutPlanAssignmentId?: number | string | null
+): Promise<void> => {
+  return apiCall('/exercise-preset-entries', {
+    method: 'POST',
+    body: JSON.stringify({
+      workout_preset_id: Number(workoutPresetId),
+      entry_date: entryDate,
+      ...(workoutPlanAssignmentId != null ? { workoutPlanAssignmentId } : {}),
+    }),
+  });
+};
+
+export const createPresetSession = async (
+  payload: CreatePresetSessionRequest
+): Promise<PresetSessionResponse> => {
+  return apiCall('/exercise-preset-entries', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' },
+  });
+};
+
+/**
+ * Fetches a grouped workout session (a strength/multi-exercise Garmin session, or any
+ * other preset-backed workout) with every child exercise entry, its sets, and its
+ * relational muscle snapshot (`exercise_snapshot.primary_muscles`/`secondary_muscles`).
+ * This is the relational replacement for parsing the raw provider JSON blob to build a
+ * session's exercise/muscle breakdown.
+ */
+export const getGroupedWorkoutSession = async (
+  presetEntryId: string
+): Promise<PresetSessionResponse> => {
+  const data = await apiCall(`/exercise-preset-entries/${presetEntryId}`, {
+    method: 'GET',
+  });
+  return presetSessionResponseSchema.parse(data);
+};
+
+export const deleteExerciseEntry = async (entryId: string): Promise<void> => {
+  return apiCall(`/exercise-entries/${entryId}`, {
+    method: 'DELETE',
+  });
+};
+
+export const deleteExercisePresetEntry = async (
+  presetEntryId: string
+): Promise<void> => {
+  return apiCall(`/exercise-preset-entries/${presetEntryId}`, {
+    method: 'DELETE',
+  });
+};
+
+export const updateExerciseEntry = async (
+  entryId: string,
+  payload: UpdateExerciseEntryRequest & { imageFile: File | null }
+): Promise<void> => {
+  const { imageFile, ...entryData } = payload;
+  const loggingLevel = getUserLoggingLevel();
+  debug(loggingLevel, 'updateExerciseEntry payload:', payload);
+  debug(loggingLevel, 'updateExerciseEntry entryData:', entryData);
+
+  if (imageFile) {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+
+    Object.entries(entryData).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        if (key === 'sets' && Array.isArray(value)) {
+          formData.append(key, JSON.stringify(value));
+        } else if (typeof value === 'object' && !Array.isArray(value)) {
+          formData.append(key, JSON.stringify(value));
+        } else if (key === 'activity_details' && Array.isArray(value)) {
+          formData.append(key, JSON.stringify(value));
+        } else {
+          formData.append(key, String(value));
+        }
+      }
+    });
+
+    // FormData cannot carry null; the server treats entry_time === '' as a
+    // clear, so an explicit null must still be sent on this path.
+    if (entryData.entry_time === null) {
+      formData.append('entry_time', '');
+    }
+
+    // Same contract for distance: omitting it would make the server derive
+    // from sets or preserve the old value instead of clearing.
+    if (entryData.distance === null) {
+      formData.append('distance', '');
+    }
+
+    // And for calories_applied: null means "count the estimate again".
+    if (entryData.calories_applied === null) {
+      formData.append('calories_applied', '');
+    }
+
+    return apiCall(`/exercise-entries/${entryId}`, {
+      method: 'PUT',
+      body: formData,
+      isFormData: true,
+    });
+  } else {
+    // Omit image_url when unchanged to avoid triggering server-side image deletion.
+    // Send image_url: null explicitly when the user cleared the image.
+    const { image_url, ...rest } = entryData;
+    const dataToSend = image_url === null ? { ...rest, image_url: null } : rest;
+    return apiCall(`/exercise-entries/${entryId}`, {
+      method: 'PUT',
+      body: dataToSend,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+};
+
+export const getExerciseProgressData = async (
+  exerciseId: string,
+  startDate: string,
+  endDate: string,
+  aggregationLevel: string = 'daily'
+): Promise<ExerciseProgressResponse[]> => {
+  const params = new URLSearchParams({
+    startDate,
+    endDate,
+    aggregationLevel,
+  });
+  const response = await apiCall(
+    `/exercise-entries/progress/${exerciseId}?${params.toString()}`,
+    {
+      method: 'GET',
+    }
+  );
+  return z.array(exerciseProgressResponseSchema).parse(response);
+};
+
+export const getExerciseHistory = async (
+  exerciseId: string,
+  limit: number = 5
+): Promise<ExerciseEntryResponse[]> => {
+  const params = new URLSearchParams({
+    limit: limit.toString(),
+  });
+  const response = await apiCall(
+    `/exercise-entries/history/${exerciseId}?${params.toString()}`,
+    {
+      method: 'GET',
+    }
+  );
+  return response;
+};
+
+export const fetchExerciseEntryById = async (
+  entryId: string
+): Promise<ExerciseEntryResponse> => {
+  return apiCall(`/exercise-entries/${entryId}`, {
+    method: 'GET',
+  });
+};
+
+// suppress404Toast means apiCall resolves to null when the provider has no
+// stored details, so the signature has to admit that.
+export const getActivityDetails = async (
+  exerciseEntryId: string,
+  providerName: string
+): Promise<ActivityDetailsResponse | null> => {
+  return apiCall(
+    `/exercises/activity-details/${exerciseEntryId}/${providerName}`,
+    {
+      method: 'GET',
+      suppress404Toast: true,
+    }
+  );
+};
+export async function fetchExerciseProgressionStats(exerciseId: string) {
+  const response = await fetch(`/api/v2/exercises/${exerciseId}/stats`, {
+    credentials: 'include',
+  });
+  if (!response.ok) return null;
+  return response.json();
+}

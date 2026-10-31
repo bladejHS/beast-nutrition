@@ -1,0 +1,3128 @@
+import i18n, { formatLocalizedNumber } from '../localization/i18n';
+import type { TFunction } from 'i18next';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState } from 'react-native';
+import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
+import {
+  type ExerciseEntryResponse,
+  type ExerciseEntrySetResponse,
+  type ExerciseModality,
+  type ExerciseCoachingSignal,
+  type ExerciseRecentSessionSet,
+  type ExerciseSnapshotResponse,
+  type IntervalEngineStep,
+  type IntervalPhase,
+  type PresetSessionResponse,
+  type WorkoutFormat,
+  type DropSetWeightUnit,
+  buildIntervalPhases,
+  calculateDropSetWeightsKg,
+  calculateWarmupSets,
+  type WarmupOptions,
+  isWarmupSetType,
+  WARMUP_REST_SEC,
+  shiftPhasesForPause,
+} from '@workspace/shared';
+import type { Exercise } from '../types/exercise';
+import {
+  captureResumedDurations,
+  describeActiveSetAssumed,
+  formatDurationSeconds,
+  getDefaultRestSec,
+  getSupersetRuns,
+  historyForExercise,
+  isCardioModality,
+  isDropSetType,
+  isDurationModality,
+  isWeightDistanceModality,
+  isWeightDurationModality,
+  isPrSet,
+  moveSessionExerciseItem,
+  normalizeSessionSupersetGroups,
+  resolveLiveAssumedSetValues,
+  resolveSnapshotModality,
+  seedPrFromSession,
+  supersetSessionExercises,
+  ungroupSessionExercise,
+} from '../utils/workoutSession';
+import type {
+  AssumedSetValues,
+  LiveExerciseConfig,
+  PrBaselineEntry,
+} from '../utils/workoutSession';
+import { newUuid } from '../utils/ids';
+import { buildExerciseReorderItems } from '../utils/workoutSupersets';
+import {
+  addNotificationResponseListener,
+  cancelScheduledNotification,
+  COMPLETE_SET_ACTION,
+  dismissDeliveredNotification,
+  fireRestCompleteCue,
+  scheduleRestNotification,
+} from '../services/notifications';
+import { fireSelectionHaptic, fireSuccessHaptic } from '../services/haptics';
+import { setRestKeepAlive } from '../services/sounds';
+import { useAppPreferencesStore } from './appPreferencesStore';
+import { addLog } from '../services/LogService';
+import WatchConnectivity from '../../modules/watch-connectivity';
+
+const STORAGE_KEY = '@SparkyFitness/active-workout';
+
+/**
+ * Freezes the watch cap while the phone interval is paused. Owned by the
+ * store so every pause path tells the watch, not only the HUD button.
+ * The revision only goes up and lives in the persisted store, so a JS
+ * restart does not send revision 1 against a watch that already applied more.
+ */
+export function syncWatchIntervalTiming(timing: {
+  paused: boolean;
+  pausedAtMs?: number;
+  pauseDurationMs?: number;
+}): void {
+  if (!WatchConnectivity?.isSupported()) return;
+  const state = useActiveWorkoutStore.getState();
+  if (state.sessionId == null) return;
+  const revision = state.watchIntervalRevision + 1;
+  const addedPauseMs = timing.paused
+    ? 0
+    : Math.max(0, timing.pauseDurationMs ?? 0);
+  const excludedPauseMs = state.watchExcludedPauseMs + addedPauseMs;
+  useActiveWorkoutStore.setState({
+    watchIntervalRevision: revision,
+    watchExcludedPauseMs: excludedPauseMs,
+  });
+  void WatchConnectivity.updateIntervalTiming({
+    sessionId: state.sessionId,
+    revision,
+    paused: timing.paused,
+    excludedPauseMs,
+    ...(timing.paused && timing.pausedAtMs != null
+      ? { pausedAt: new Date(timing.pausedAtMs).toISOString() }
+      : {}),
+  });
+}
+
+/** Monotonic counter used to reject stale async schedule resolutions. */
+let restInstanceCounter = 0;
+
+/** Sessions the user threw away, until the watch bridge has been told. */
+const discardedWorkoutIds = new Set<string>();
+
+/**
+ * True once if `sessionId` was cleared as a discard rather than a finish. The
+ * watch bridge reads it when the session ends.
+ */
+export function consumeWorkoutDiscarded(sessionId: string): boolean {
+  return discardedWorkoutIds.delete(sessionId);
+}
+
+export interface WorkoutStep {
+  exerciseId: string;
+  setId: string;
+  exerciseName: string;
+  exerciseImage: string | null;
+  restSec: number;
+}
+
+/**
+ * Completed set ids → epoch-ms timestamp of when the set was checked off.
+ * This map is the local source of truth for completion during an active
+ * workout; the autosave payload derives each set's `completed_at` from it.
+ */
+export type CompletedSetMap = Record<string, number>;
+
+/**
+ * Set ids (stringified) that earned a PR this session → `true`. Mirrors the
+ * `completedSetIds` map: seeded from the server's `is_pr` flags on start,
+ * merged into the autosave payload at build time (a missing key sends
+ * `false`, so unchecking a PR set clears it server-side).
+ */
+export type PrSetMap = Record<string, true>;
+
+/**
+ * Rest-timer state for the currently-active workout. The rest always
+ * represents "the rest period before `activeSetId`" — i.e., when the user
+ * completes a set, `activeSetId` immediately advances to the next set and
+ * `rest` starts counting down the break before that next set.
+ *
+ * - `ready`   — no rest timer running; user is ready to tap the active set
+ * - `resting` — rest timer counting down before the active set
+ * - `paused`  — rest timer paused before the active set
+ */
+export interface Rest {
+  state: 'ready' | 'resting' | 'paused';
+  durationSec: number;
+  /** Absolute deadline (ms since epoch). Non-null only while `state === 'resting'`. */
+  endsAt: number | null;
+  /** Remaining ms captured at pause. Non-null only while `state === 'paused'`. */
+  pausedRemainingMs: number | null;
+  scheduledNotificationId: string | null;
+  instanceToken: number;
+}
+
+const READY_REST: Rest = {
+  state: 'ready',
+  durationSec: 0,
+  endsAt: null,
+  pausedRemainingMs: null,
+  scheduledNotificationId: null,
+  instanceToken: 0,
+};
+
+export interface ActiveWorkoutState {
+  sessionId: string | null;
+  /**
+   * Full session snapshot for the currently-active workout. Persisted alongside
+   * `steps` so the HUD can reopen WorkoutDetail after a cold start or from
+   * screens where the history cache hasn't been warmed yet.
+   */
+  session: PresetSessionResponse | null;
+  /** Epoch ms when the workout was started. Drives the elapsed clock. */
+  startedAt: number | null;
+  steps: WorkoutStep[];
+  completedSetIds: CompletedSetMap;
+  /**
+   * The set the user is currently on — the cursor advances strictly forward
+   * through `steps`. `null` means the workout is finished (either every step
+   * has been completed or there are no steps). `rest` is the rest period
+   * before this set.
+   */
+  activeSetId: string | null;
+  rest: Rest;
+  /**
+   * Stamped when a rest countdown runs out on its own (not Skip / not
+   * dismiss), so the screen can move focus to the next set. Transient.
+   */
+  restExpiredAt: number | null;
+  /**
+   * Transient monotonic counter bumped on every local session edit (and on
+   * `reconcileWithSession`). The autosave hook captures it at send time and
+   * hands it back to `applyServerSession` so a response can tell whether
+   * edits landed while the request was in flight.
+   */
+  sessionRevision: number;
+  /**
+   * True while local session edits haven't been confirmed saved. Persisted so
+   * edits made just before a cold exit are flushed on next launch.
+   */
+  hasUnsavedChanges: boolean;
+  /**
+   * True when the session was created by a live-start flow (instant preset
+   * start / empty start) rather than pre-existing in the diary. Discarding
+   * such a workout deletes the session instead of leaving it behind.
+   * Persisted so the distinction survives a cold-start resume.
+   */
+  createdByLiveStart: boolean;
+  /**
+   * Per-exercise historical best captured once at the start of the session
+   * (keyed by `exercise_id`). Key absent = not yet captured; `null` = captured
+   * with no history (first-ever exercise). The PR baseline is a store snapshot
+   * because detection needs synchronous access; the stats query that fills it
+   * excludes this session server-side, so it stays historical. Persisted so a
+   * resumed workout keeps a clean baseline.
+   */
+  prBaseline: Record<string, PrBaselineEntry | null>;
+  /** Set ids that earned a PR this session. Persisted; see {@link PrSetMap}. */
+  prSetIds: PrSetMap;
+  /**
+   * Stored duration of each strength entry that already had completed sets
+   * when this run started (a resumed session), keyed by entry id. Captured
+   * once at start so autosaves add this run's time to it instead of
+   * replacing it. Persisted so a cold-start resume keeps it.
+   */
+  resumedDurationMinutes: Record<string, number>;
+  /**
+   * Current set id → stable React render key. A set's birth id is its render
+   * key, so a missing entry means "the id is its own key"; an entry appears
+   * only once a set's id has churned (a negative temp id replaced by the
+   * server-assigned id on the first autosave). Holding the key stable across
+   * that churn keeps the focused row's `TextInput` instance alive, so the
+   * keyboard and any uncommitted draft text survive the save.
+   *
+   * Transient — never persisted. Keys only need stability while the screen is
+   * mounted; keyboard focus doesn't survive a cold start anyway, and after a
+   * restart the map is empty so keys fall back to ids (correct).
+   *
+   * DISCIPLINE: any future set-keyed *UI* state (focus, expansion, animation,
+   * refs) must key on this render key, not the raw set id — the id is not
+   * stable across an autosave.
+   */
+  setRenderKeys: Record<string, string>;
+  /**
+   * Epoch ms a timed/hold set's stopwatch was started, by set id. Persisted so
+   * a running stopwatch survives the row unmounting, a collapsed card, and a
+   * cold start; remapped with the other set-keyed maps when autosave swaps
+   * temp ids for server ids.
+   */
+  setTimerStartedAt: Record<string, number>;
+  /**
+   * Planned weight/reps per set id, captured at live start from the preset
+   * before the create payload is stripped (see `stripPlannedSetValues`). A
+   * placeholder fallback only — never written back to sets except through
+   * completion adoption. Keys are birth server ids (live starts create every
+   * set server-side), so they survive autosaves. Persisted: the plan can't be
+   * recaptured after a cold start.
+   */
+  plannedSetValues: Record<string, AssumedSetValues>;
+  /**
+   * Each exercise's most recent prior-session sets (keyed by `exercise_id`),
+   * captured once per exercise from the stats query like `prBaseline`. This is
+   * the store-side copy placeholder adoption resolves against, so lock-screen
+   * completes (Live Activity, rest notification) assume the same values the
+   * row renders. Persisted so a cold-start resume keeps resolving.
+   */
+  previousSessionSets: Record<string, ExerciseRecentSessionSet[]>;
+  /**
+   * Preset progression and ramp settings per session exercise id, captured at
+   * live start — session entries on the server don't carry them. Persisted
+   * like `plannedSetValues`: the preset payload is gone after a cold start.
+   */
+  exerciseConfigs: Record<string, LiveExerciseConfig>;
+  /**
+   * Adaptive coaching signals per library `exercise_id` (issue #1560),
+   * captured once per exercise at live start like `previousSessionSets`.
+   * `null` = asked, no recent history. Persisted so a cold-start resume
+   * keeps suggesting the same values.
+   */
+  coachingSignals: Record<string, ExerciseCoachingSignal | null>;
+  /**
+   * Session exercise ids whose adaptive adjustment the lifter declined
+   * ("use my usual"); their placeholders fall back to plain progression.
+   */
+  declinedAdaptive: Record<string, true>;
+  /**
+   * The lifter's display unit, which ramp rounding and the progression engine
+   * work in. Kept current by the live cards (which render before any set can
+   * be completed) and kept across clears, so a lock-screen completion rounds
+   * the same way the row does.
+   */
+  weightUnit: 'kg' | 'lbs';
+  /**
+   * Preset this live workout was started from, plus the server config it
+   * lives on — preset ids are numeric and collide across configured servers,
+   * and switching the active server doesn't clear this store. Both feed the
+   * update-preset prompt on the completion screen. Persisted so the link
+   * survives a cold-start resume.
+   */
+  sourcePresetId: number | null;
+  sourceServerConfigId: string | null;
+
+  /** Interval / WOD format configuration & tracking */
+  workoutFormat: WorkoutFormat;
+  timeCapSeconds: number | null;
+  intervalPhases: IntervalPhase[];
+  intervalPhaseIndex: number;
+  isIntervalPaused: boolean;
+  intervalPauseStartedAt: number | null;
+  /**
+   * Watch cap snapshot. Persisted so a JS restart does not send revision 1
+   * against a watch that already applied a higher one, or forget pauses that
+   * already happened. The revision is a counter, never a wall-clock value.
+   */
+  watchIntervalRevision: number;
+  watchExcludedPauseMs: number;
+  /**
+   * `armedAt` (epoch ms) of the last `startWorkout` sent to the watch for this
+   * session, null until one is. Set targets are only sent once armed and
+   * carry it, so the watch can tell a re-armed saved session from the
+   * earlier arm that used the same session id. Persisted so a JS restart
+   * keeps syncing the plan the watch is still running.
+   */
+  watchArmedAt: number | null;
+  intervalRoundsCompleted: number;
+  intervalRepsCompleted: number;
+  intervalStatus: 'rx' | 'scaled';
+  intervalScalingNotes: string;
+
+  startWorkout: (
+    session: PresetSessionResponse,
+    opts?: {
+      createdByLiveStart?: boolean;
+      plannedSetValues?: AssumedSetValues[][];
+      /** Positional with `session.exercises`, like `plannedSetValues`. */
+      exerciseConfigs?: LiveExerciseConfig[];
+      sourcePresetId?: number;
+      sourceServerConfigId?: string;
+      workoutFormat?: WorkoutFormat;
+      timeCapSeconds?: number | null;
+    }
+  ) => void;
+  startWorkoutAtSet: (session: PresetSessionResponse, setId: string) => void;
+  incrementIntervalRound: () => void;
+  decrementIntervalRound: () => void;
+  setIntervalReps: (reps: number) => void;
+  setIntervalStatus: (status: 'rx' | 'scaled') => void;
+  setIntervalScalingNotes: (notes: string) => void;
+  pauseInterval: () => void;
+  resumeInterval: () => void;
+  updateIntervalPhaseIndex: (index: number) => void;
+  /**
+   * Capture the historical PR baseline for an exercise, once. No-op unless a
+   * live workout is active and the key is absent — so view/edit renders of the
+   * card (which also mount it) can't overwrite it, and idempotency holds even
+   * if the stats query resolves twice. `baseline` is the server best (session
+   * excluded) or `null` when the exercise has no history.
+   */
+  capturePrBaseline: (
+    exerciseId: string | null,
+    baseline: PrBaselineEntry | null
+  ) => void;
+  /**
+   * Capture an exercise's most recent prior-session sets for placeholder
+   * resolution, once. Same gating as {@link capturePrBaseline}: no-op unless a
+   * live workout is active and the key is absent. Pass `[]` for an exercise
+   * with no history — that still marks it captured.
+   */
+  capturePreviousSessionSets: (
+    exerciseId: string | null,
+    sets: ExerciseRecentSessionSet[]
+  ) => void;
+  /**
+   * Record adaptive signals for exercises not captured yet. No-op outside a
+   * live workout; an exercise already captured keeps its first signal so a
+   * suggestion doesn't shift mid-workout.
+   */
+  captureCoachingSignals: (
+    exerciseIds: readonly string[],
+    signals: readonly ExerciseCoachingSignal[]
+  ) => void;
+  /** Decline (or restore) the adaptive adjustment for one session exercise. */
+  setAdaptiveDeclined: (entryId: string, declined: boolean) => void;
+  /** Keep ramp rounding in step with a mid-workout unit preference change. */
+  setWeightUnit: (unit: 'kg' | 'lbs') => void;
+  /**
+   * Ends the live workout. `discarded` marks it as thrown away rather than
+   * finished, which the watch bridge reads (`consumeWorkoutDiscarded`) so the
+   * watch drops its workout instead of saving it to Health.
+   */
+  clearWorkout: (options?: { discarded?: boolean }) => void;
+  /**
+   * Complete any set — not just the cursor — and move the next-up highlight to
+   * the set right after it, starting the rest before that set. Sets log in any
+   * order, so this can leave earlier sets unchecked (holes); each hole stays
+   * re-loggable from its own row control.
+   * `completedAtMs` is the tap time when the watch logged the set. Omit it
+   * and the phone stamps now, which is the right time for a set logged here.
+   */
+  completeSet: (setId: string, completedAtMs?: number) => void;
+  /** Complete the current cursor set. Thin wrapper over {@link completeSet}. */
+  completeActiveSet: () => void;
+  /**
+   * Guarded {@link completeActiveSet} for lock-screen surfaces (the Live
+   * Activity button and the rest-notification action): a no-op while a rest
+   * is genuinely running or paused, so a press that races — or arrives stale
+   * from — a running rest can't complete the set after next. A rest whose
+   * deadline has passed counts as ready: backgrounding pauses JS timers, so
+   * the resting → ready flip is often still pending when a lock-screen press
+   * wakes the app. Returns whether a set was completed.
+   */
+  completeActiveSetIfReady: () => boolean;
+  /**
+   * Un-complete a set (undo): drop its completion timestamp and PR stamp. The
+   * cursor stays put — every set is independently loggable, so the reopened set
+   * is re-logged from its own row control — except when the workout had already
+   * finished (no active set), where reopening re-anchors the next-up onto it.
+   */
+  uncompleteSet: (setId: string) => void;
+  /**
+   * Un-complete every set of one exercise (checkmarks only; the sets and their
+   * values are kept). Restores the cursor invariant like {@link uncompleteSet}.
+   */
+  clearExerciseCompletions: (entryId: string) => void;
+  /** Un-complete every set in the workout and rewind the cursor to the first step. */
+  clearAllCompletions: () => void;
+  pauseRest: () => void;
+  resumeRest: () => void;
+  /**
+   * Add/remove seconds on the current rest. Resting → shifts the deadline and
+   * reschedules the notification; crossing zero behaves like `markRestReady`.
+   * Paused → adjusts the captured remaining time. Ready → no-op.
+   */
+  adjustRest: (deltaSec: number) => void;
+  /** Skip the current rest — clears to 'ready' without advancing the cursor. */
+  dismissRest: () => void;
+  /** Guarded transition fired by the HUD tick when `endsAt` passes. */
+  markRestReady: () => void;
+  reconcileWithSession: (session: PresetSessionResponse) => void;
+
+  /** Patch value fields on a set. Weight is in kg — UI converts before calling. */
+  updateSetField: (setId: string, patch: ActiveSetPatch) => void;
+  /**
+   * Start a timed/hold set's stopwatch. `startedAt` (epoch ms) is for a timer
+   * the watch already started; omitted, it starts now.
+   */
+  startSetTimer: (setId: string, startedAt?: number) => void;
+  /** Drop a set's stopwatch without writing a duration. */
+  clearSetTimer: (setId: string) => void;
+  /**
+   * Move a running stopwatch's start forward by `deltaMs`, so time spent
+   * paused (guided mode's Pause) is not counted. No-op when none is running.
+   */
+  shiftSetTimer: (setId: string, deltaMs: number) => void;
+  /**
+   * Stop a running stopwatch and write the elapsed whole seconds (min 1) as
+   * the set's duration. Returns the seconds written, or null if none ran.
+   */
+  stopSetTimer: (setId: string) => number | null;
+  /**
+   * Append an empty set to an exercise, cloning the last set's structure
+   * (rest/type/duration) but not its values. Uses a negative temp id.
+   */
+  addSetToExercise: (entryId: string) => void;
+  /**
+   * Append drop sets (3 × -20% by default) stepping down from the base working
+   * weight, rounded in the lifter's display unit. The new sets stay editable.
+   */
+  addDropSetsToExercise: (
+    entryId: string,
+    baseWeightKg: number,
+    unit: DropSetWeightUnit
+  ) => void;
+  /**
+   * Insert ramping warm-up sets (bar, then 50 / 70 / 85% of the working
+   * weight) ahead of the exercise's first working set. Warm-ups that have not
+   * been logged are replaced, so tapping again does not stack them; one that
+   * has been logged stops the action, since the ramp is already under way.
+   */
+  addWarmupSetsToExercise: (
+    entryId: string,
+    workingWeightKg: number,
+    unit: DropSetWeightUnit,
+    options?: WarmupOptions
+  ) => void;
+  /**
+   * Delete a set, renumbering the rest. Deleting an exercise's last remaining
+   * set removes the exercise from the session entirely.
+   */
+  deleteSet: (setId: string) => void;
+  /**
+   * Set rest_time on every set of an exercise. For a superset member the
+   * write covers every set of every member — rest is per-round, so the
+   * chips must stay in agreement.
+   */
+  setExerciseRest: (entryId: string, seconds: number) => void;
+  /**
+   * Rebase `startedAt` so the wall-clock span from start to the last completed
+   * set equals `minutes` — the end-of-workout "adjust duration" path for a
+   * workout left open across a long break. Duration stamping (and the calories
+   * the server derives from it) reads `startedAt` at flush time, so this one
+   * field is the whole correction. Marks the session dirty so the finish flush
+   * rewrites the server durations. No-op without a live session or a
+   * post-start completion.
+   */
+  setWorkoutDurationMinutes: (minutes: number) => void;
+  /**
+   * Rename the live session. A no-op for an empty or unchanged name; otherwise
+   * marks the session dirty so autosave persists the new name to the server.
+   */
+  renameSession: (name: string) => void;
+  /**
+   * Set the per-exercise note. A no-op if the entry is missing or the trimmed
+   * value is unchanged; an empty (or whitespace-only) string clears it to
+   * `null`. Marks the session dirty so autosave persists the note.
+   */
+  setExerciseNotes: (entryId: string, notes: string | null) => void;
+  /** Append a client-built exercise entry (client uuid) with one default set. */
+  addExercise: (exercise: Exercise) => void;
+  /**
+   * Delete an exercise entry entirely, reconciling steps, completion/PR maps,
+   * cursor, rest, and superset grouping (a leftover 1-member group dissolves).
+   */
+  removeExercise: (entryId: string) => void;
+  /**
+   * Swap an entry's exercise for another, resetting it to a single default set
+   * (the old sets no longer describe the new movement). The entry keeps its
+   * position and superset grouping.
+   */
+  replaceExercise: (entryId: string, exercise: Exercise) => void;
+  /**
+   * Superset `picked` with `current`: create a group of the two, or add
+   * `picked` as a member of current's existing group. `picked` moves to sit
+   * immediately after the last member of current's run, and every member's
+   * rest_time is harmonized to the anchor's (deliberately lossy — rest is
+   * per-round). `picked` must be ungrouped; grouped exercises must be
+   * ungrouped first.
+   */
+  supersetWith: (currentEntryId: string, pickedEntryId: string) => void;
+  /**
+   * Remove an exercise from its superset. A middle member also moves to
+   * just after the run so the remaining members stay adjacent; a remaining
+   * 1-member group is dissolved by normalization.
+   */
+  ungroupExercise: (entryId: string) => void;
+  /**
+   * Reorder exercises by draggable item — a solo exercise or a whole superset
+   * run, which moves as one indivisible block. `fromItemIndex`/`toItemIndex`
+   * index the item list from `buildExerciseReorderItems`. A no-op / out-of-range
+   * move or a null session leaves state untouched.
+   */
+  reorderExercises: (fromItemIndex: number, toItemIndex: number) => void;
+  /**
+   * Do an upcoming exercise now: it moves to sit just before the exercise the
+   * cursor is on, and the cursor moves to its first set still to do — for a
+   * machine that is taken, or a quick change of order. The exercise that was
+   * current comes straight after. A superset moves as one block, as in
+   * `reorderExercises`. No-op for the current exercise or an earlier one.
+   * `anchorEntryId` overrides "the current exercise" (the watch sends the
+   * one it is on).
+   */
+  doExerciseNow: (entryId: string, anchorEntryId?: string) => void;
+  /** Update session location */
+  setSessionLocation: (location: string | null) => void;
+  /**
+   * Fold an autosave response back into the store. `sentRevision` is the
+   * `sessionRevision` captured when the request's payload was built: if no
+   * edits landed mid-flight the server session is adopted wholesale (and the
+   * dirty flag cleared); otherwise only server ids are grafted positionally
+   * into the local session, which keeps its newer values and stays dirty.
+   * `sentEntryIds` is the exercise-entry id order captured at the same
+   * moment: a mid-flight reorder or delete breaks the positional graft, so
+   * the graft is skipped when the local prefix no longer matches (the still-
+   * dirty session is resent by the pending debounce or trailing save).
+   * `sentSetIds`, when captured, is each exercise's set-id order at that
+   * same moment. Inserting warm-ups (or any other set-order or set-count
+   * change) while the save is in flight would map the server ids onto the
+   * new sets, so the graft is skipped and the newer shape gets its own save.
+   */
+  applyServerSession: (
+    serverSession: PresetSessionResponse,
+    sentRevision: number,
+    sentEntryIds: string[],
+    sentSetIds?: string[][]
+  ) => void;
+}
+
+/** Fields the active-workout screen can edit on a set. */
+export type ActiveSetPatch = Partial<
+  Pick<
+    ExerciseEntrySetResponse,
+    | 'weight'
+    | 'reps'
+    | 'duration'
+    | 'distance'
+    | 'rpe'
+    | 'rir'
+    | 'set_type'
+    | 'notes'
+    | 'rest_time'
+  >
+>;
+
+const initialData: Pick<
+  ActiveWorkoutState,
+  | 'sessionId'
+  | 'session'
+  | 'startedAt'
+  | 'steps'
+  | 'completedSetIds'
+  | 'activeSetId'
+  | 'rest'
+  | 'restExpiredAt'
+  | 'sessionRevision'
+  | 'hasUnsavedChanges'
+  | 'createdByLiveStart'
+  | 'prBaseline'
+  | 'prSetIds'
+  | 'resumedDurationMinutes'
+  | 'setRenderKeys'
+  | 'setTimerStartedAt'
+  | 'plannedSetValues'
+  | 'previousSessionSets'
+  | 'exerciseConfigs'
+  | 'coachingSignals'
+  | 'declinedAdaptive'
+  | 'weightUnit'
+  | 'sourcePresetId'
+  | 'sourceServerConfigId'
+  | 'workoutFormat'
+  | 'timeCapSeconds'
+  | 'intervalPhases'
+  | 'intervalPhaseIndex'
+  | 'isIntervalPaused'
+  | 'intervalPauseStartedAt'
+  | 'watchIntervalRevision'
+  | 'watchExcludedPauseMs'
+  | 'watchArmedAt'
+  | 'intervalRoundsCompleted'
+  | 'intervalRepsCompleted'
+  | 'intervalStatus'
+  | 'intervalScalingNotes'
+> = {
+  sessionId: null,
+  session: null,
+  startedAt: null,
+  steps: [],
+  completedSetIds: {},
+  activeSetId: null,
+  rest: READY_REST,
+  restExpiredAt: null,
+  sessionRevision: 0,
+  hasUnsavedChanges: false,
+  createdByLiveStart: false,
+  prBaseline: {},
+  prSetIds: {},
+  resumedDurationMinutes: {},
+  setRenderKeys: {},
+  setTimerStartedAt: {},
+  plannedSetValues: {},
+  previousSessionSets: {},
+  exerciseConfigs: {},
+  coachingSignals: {},
+  declinedAdaptive: {},
+  weightUnit: 'kg',
+  sourcePresetId: null,
+  sourceServerConfigId: null,
+  workoutFormat: 'standard',
+  timeCapSeconds: null,
+  intervalPhases: [],
+  intervalPhaseIndex: 0,
+  isIntervalPaused: false,
+  intervalPauseStartedAt: null,
+  watchIntervalRevision: 0,
+  watchExcludedPauseMs: 0,
+  watchArmedAt: null,
+  intervalRoundsCompleted: 0,
+  intervalRepsCompleted: 0,
+  intervalStatus: 'rx',
+  intervalScalingNotes: '',
+};
+
+/**
+ * Flatten a session into the step sequence the cursor walks.
+ *
+ * Solo exercises contribute one step per set, each carrying its own set's
+ * configured `rest_time`. A preset can vary rest per set (e.g. shorter rest
+ * after warm-up sets), and every set must speak for itself rather than the
+ * exercise's first set standing in for all of them. Superset runs (adjacent
+ * 2+ exercises sharing a `superset_group`) are interleaved into rounds: round
+ * `n` is one set of each member in order (positional — members whose sets
+ * are exhausted drop out). `restSec` is the rest taken *before* a step, so
+ * each round's first step carries that round's group rest (the anchor
+ * member's same-round set) and the rest of the round carries 0 and rest
+ * happens after a full round, not between partners. Drop-set steps always
+ * carry 0: a drop continues the previous set with no pause.
+ */
+export function buildStepsFromSession(
+  session: PresetSessionResponse
+): WorkoutStep[] {
+  const steps: WorkoutStep[] = [];
+  const runByFirstEntryId = new Map(
+    getSupersetRuns(session.exercises).map((run) => [run.entryIds[0], run])
+  );
+  const byEntryId = new Map(session.exercises.map((e) => [e.id, e]));
+  const consumed = new Set<string>();
+
+  const pushStep = (
+    exercise: ExerciseEntryResponse,
+    set: ExerciseEntrySetResponse,
+    restSec: number
+  ) => {
+    steps.push({
+      exerciseId: exercise.id,
+      setId: String(set.id),
+      exerciseName:
+        exercise.exercise_snapshot?.name ??
+        i18n.t('workout.exercise', { defaultValue: 'Exercise' }),
+      exerciseImage: exercise.exercise_snapshot?.images?.[0] ?? null,
+      restSec: isDropSetType(set.set_type) ? 0 : restSec,
+    });
+  };
+
+  for (const exercise of session.exercises) {
+    if (consumed.has(exercise.id)) continue;
+
+    const run = runByFirstEntryId.get(exercise.id);
+    if (!run) {
+      for (const set of exercise.sets) {
+        pushStep(exercise, set, set.rest_time ?? getDefaultRestSec());
+      }
+      continue;
+    }
+
+    const members = run.entryIds.map((id) => byEntryId.get(id)!);
+    for (const id of run.entryIds) consumed.add(id);
+
+    // Rest is per-round; group actions harmonize every member's rest_time
+    // within a round, so the anchor's set for that round speaks for the
+    // whole group, but different rounds may still carry different rest.
+    const roundCount = Math.max(...members.map((m) => m.sets.length));
+    for (let round = 0; round < roundCount; round++) {
+      const groupRest =
+        members[0].sets[round]?.rest_time ?? getDefaultRestSec();
+      let firstInRound = true;
+      for (const member of members) {
+        const set = member.sets[round];
+        if (!set) continue;
+        pushStep(member, set, firstInRound ? groupRest : 0);
+        firstInRound = false;
+      }
+    }
+  }
+  return steps;
+}
+
+/**
+ * Map local set ids → server set ids by position (exercise index, set index).
+ *
+ * Valid because the autosave payload preserves order and the server recreates
+ * in order. A reorder of exercises (`supersetWith` / `ungroupExercise`), or
+ * a change in set order or count while a save is in flight (warm-ups
+ * prepended onto `[101, 102]`), does not. `applyServerSession` skips the
+ * graft when the local entry-id prefix no longer matches, or when a captured
+ * set-id snapshot differs. Callers that omit the snapshot keep grafting an
+ * append or a delete, which still share a prefix of the sets that were sent.
+ *
+ * Positions beyond the shorter side are unmapped — callers keep the local id
+ * (temp ids re-save on the next autosave; id churn only, no data loss).
+ */
+export function buildPositionalSetIdMap(
+  local: PresetSessionResponse,
+  server: PresetSessionResponse
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const exerciseCount = Math.min(
+    local.exercises.length,
+    server.exercises.length
+  );
+  for (let i = 0; i < exerciseCount; i++) {
+    const localSets = local.exercises[i].sets;
+    const serverSets = server.exercises[i].sets;
+    const setCount = Math.min(localSets.length, serverSets.length);
+    for (let j = 0; j < setCount; j++) {
+      map.set(String(localSets[j].id), String(serverSets[j].id));
+    }
+  }
+  return map;
+}
+
+/**
+ * Return a copy of `local` whose exercise and set ids are replaced by the ids
+ * the server assigned at the same positions. Local values (weight/reps/etc.)
+ * are kept untouched; entries beyond the server response length keep their
+ * (temp) ids. See `buildPositionalSetIdMap` for why positional is safe.
+ */
+export function graftServerSessionIds(
+  local: PresetSessionResponse,
+  server: PresetSessionResponse
+): PresetSessionResponse {
+  return {
+    ...local,
+    exercises: local.exercises.map((exercise, i) => {
+      const serverExercise = server.exercises[i];
+      if (!serverExercise) return exercise;
+      return {
+        ...exercise,
+        id: serverExercise.id,
+        sets: exercise.sets.map((set, j) => {
+          const serverSet = serverExercise.sets[j];
+          return serverSet ? { ...set, id: serverSet.id } : set;
+        }),
+      };
+    }),
+  };
+}
+
+/**
+ * Next negative placeholder id for a client-added set. Derived from the
+ * session (not a module counter) so ids stay unique across cold restarts
+ * while unsaved temp sets are still present.
+ *
+ * Also avoids any numeric value still held in `setRenderKeys`: after a churn
+ * frees a negative id from the session (e.g. `-1` → a server id), the freed
+ * `-1` lives on as a rendered row's birth key. Minting `-1` again would give
+ * two rows the same React key, so the next id sits below every render key too.
+ */
+function nextTempSetId(
+  session: PresetSessionResponse,
+  setRenderKeys: Record<string, string>
+): number {
+  let min = 0;
+  for (const exercise of session.exercises) {
+    for (const set of exercise.sets) {
+      if (set.id < min) min = set.id;
+    }
+  }
+  for (const key of Object.values(setRenderKeys)) {
+    const n = Number(key);
+    if (Number.isInteger(n) && n < min) min = n;
+  }
+  return min - 1;
+}
+
+function makeDefaultSet(
+  id: number,
+  setNumber: number,
+  modality: ExerciseModality
+): ExerciseEntrySetResponse {
+  return {
+    id,
+    set_number: setNumber,
+    set_type: 'normal',
+    reps: null,
+    weight: null,
+    duration: null,
+    distance: null,
+    // Cardio efforts carry no between-set rest; a nonzero value would both
+    // start the rest timer and inflate the server's set-derived duration.
+    rest_time: isCardioModality(modality) ? 0 : getDefaultRestSec(),
+    notes: null,
+    rpe: null,
+    completed_at: null,
+    is_pr: false,
+  };
+}
+
+/**
+ * Locate a set's owning exercise and its index within that exercise. The index
+ * doubles as the superset round the set belongs to (round `n` is the `n`th set
+ * of each member). Returns null when the id isn't in the session.
+ */
+function locateSet(
+  session: PresetSessionResponse,
+  setId: string
+): { exercise: ExerciseEntryResponse; setIndex: number } | null {
+  for (const exercise of session.exercises) {
+    const setIndex = exercise.sets.findIndex((s) => String(s.id) === setId);
+    if (setIndex >= 0) return { exercise, setIndex };
+  }
+  return null;
+}
+
+/**
+ * Hevy-style completion adoption: a set logged with empty weight/reps commits
+ * its assumed (placeholder) values, so what the user saw grayed-in is exactly
+ * what gets recorded. Returns the session with the target set patched, or the
+ * input session unchanged when there's nothing to adopt. Runs before PR
+ * detection so an adopted weight can earn a record, and before the rest
+ * notification is built so the next set's cascade sees the adopted values.
+ */
+function adoptAssumedSetValues(
+  state: Pick<
+    ActiveWorkoutState,
+    | 'session'
+    | 'previousSessionSets'
+    | 'plannedSetValues'
+    | 'exerciseConfigs'
+    | 'coachingSignals'
+    | 'declinedAdaptive'
+    | 'weightUnit'
+    | 'workoutFormat'
+  >,
+  setId: string
+): PresetSessionResponse | null {
+  const session = state.session;
+  if (!session) return session;
+  const located = locateSet(session, setId);
+  if (!located) return session;
+  const { exercise, setIndex } = located;
+  const target = exercise.sets[setIndex];
+
+  // Only the fields the modality renders adopt: a duration set must not be
+  // stamped with legacy isometric reps from history, and a weighted set must
+  // not inherit a duration. Cardio renders duration + distance, so both adopt.
+  const modality = resolveSnapshotModality(exercise.exercise_snapshot);
+  const durationLike = isDurationModality(modality);
+  const cardio = isCardioModality(modality);
+  const weightDuration = isWeightDurationModality(modality);
+  const weightDistance = isWeightDistanceModality(modality);
+  const relevantFilled = cardio
+    ? target.duration != null && target.distance != null
+    : durationLike
+      ? target.duration != null
+      : weightDuration
+        ? target.weight != null && target.duration != null
+        : weightDistance
+          ? target.weight != null && target.distance != null
+          : modality === 'reps_only'
+            ? target.reps != null
+            : target.weight != null && target.reps != null;
+  if (relevantFilled) return session;
+
+  const assumed = resolveLiveAssumedSetValues(
+    exercise,
+    historyForExercise(state.previousSessionSets, exercise.exercise_id),
+    state
+  )[setIndex];
+  const patch: ActiveSetPatch = cardio
+    ? {
+        duration: target.duration ?? assumed.duration ?? null,
+        distance: target.distance ?? assumed.distance ?? null,
+      }
+    : durationLike
+      ? { duration: target.duration ?? assumed.duration ?? null }
+      : weightDuration
+        ? {
+            weight: target.weight ?? assumed.weight,
+            duration: target.duration ?? assumed.duration ?? null,
+          }
+        : weightDistance
+          ? {
+              weight: target.weight ?? assumed.weight,
+              distance: target.distance ?? assumed.distance ?? null,
+            }
+          : modality === 'reps_only'
+            ? { reps: target.reps ?? assumed.reps }
+            : {
+                weight: target.weight ?? assumed.weight,
+                reps: target.reps ?? assumed.reps,
+              };
+  if (Object.values(patch).every((v) => v == null)) return session;
+
+  return {
+    ...session,
+    exercises: session.exercises.map((e) =>
+      e.id !== exercise.id
+        ? e
+        : {
+            ...e,
+            sets: e.sets.map((s, i) =>
+              i === setIndex ? { ...s, ...patch } : s
+            ),
+          }
+    ),
+  };
+}
+
+/**
+ * The rest to run before `nextSetId` given that `completedSetId` was just
+ * logged. Rest is per-round: superset partners in the same round go
+ * back-to-back (0), and the group rest is taken before moving on to a new
+ * round or exercise. The step-baked `restSec` also encodes this, but only for
+ * the planned interleaving — out-of-order logging makes the cursor land on an
+ * interior partner (baked 0) when a real between-rounds rest is actually owed,
+ * so derive the rest from the true relationship between the two sets instead.
+ * Rest recovers from the work just done: the completed set's own `rest_time`
+ * speaks for it (not another set's — a preset can vary rest per set), so the
+ * timer after an exercise's final set still uses that set's own rest, not the
+ * next one's.
+ * Drop sets take no rest before them regardless of what was just logged.
+ */
+function restSecBeforeNextSet(
+  session: PresetSessionResponse,
+  completedSetId: string,
+  nextSetId: string
+): number {
+  const to = locateSet(session, nextSetId);
+  if (!to) return getDefaultRestSec();
+  if (isDropSetType(to.exercise.sets[to.setIndex]?.set_type)) return 0;
+
+  const from = locateSet(session, completedSetId);
+  if (!from)
+    return to.exercise.sets[to.setIndex]?.rest_time ?? getDefaultRestSec();
+
+  // Back-to-back superset partners: same run, different member, same round.
+  const toRun = getSupersetRuns(session.exercises).find((r) =>
+    r.entryIds.includes(to.exercise.id)
+  );
+  if (
+    toRun != null &&
+    toRun.entryIds.includes(from.exercise.id) &&
+    from.exercise.id !== to.exercise.id &&
+    from.setIndex === to.setIndex
+  ) {
+    return 0;
+  }
+  return from.exercise.sets[from.setIndex]?.rest_time ?? getDefaultRestSec();
+}
+
+/**
+ * Seed the completion map from server-persisted `completed_at` timestamps so
+ * a workout started from a session with prior progress resumes where it left
+ * off. Missing or unparseable timestamps count as not completed. Also used by
+ * read-only session views to derive done/upcoming per set.
+ */
+export function seedCompletionFromSession(
+  session: PresetSessionResponse
+): CompletedSetMap {
+  const seeded: CompletedSetMap = {};
+  for (const exercise of session.exercises) {
+    for (const s of exercise.sets) {
+      if (s.completed_at == null) continue;
+      const ms = Date.parse(s.completed_at);
+      if (!Number.isNaN(ms)) seeded[String(s.id)] = ms;
+    }
+  }
+  return seeded;
+}
+
+/**
+ * Session-level wrapper over `normalizeSessionSupersetGroups` — the one choke
+ * point that dissolves 1-member remainders after ungroup/member deletion and
+ * scrubs stale values from external edits. Returns the input object unchanged
+ * when nothing needs clearing.
+ *
+ * Note this also *preserves* any adjacent 2+ run: making stale same-value
+ * singletons adjacent would fuse them into a group here. The reorder helpers
+ * (`moveSessionExerciseItem`/`moveDraftExerciseItem`) pre-clear such stale
+ * values before moving, so a drag reorder can't trigger that fusion; any future
+ * insert-in-middle feature would need the same guard.
+ */
+function normalizeSupersetGroups(
+  session: PresetSessionResponse
+): PresetSessionResponse {
+  const exercises = normalizeSessionSupersetGroups(session.exercises);
+  if (exercises === session.exercises) return session;
+  return { ...session, exercises };
+}
+
+/**
+ * `prev` when `next` holds exactly the same keys and values, otherwise
+ * `next`. The session rebuilds below recreate the per-set maps on every edit;
+ * keeping the old object when nothing in it changed lets the memoized
+ * consumers (exercise cards, the rail) skip a value-only edit's re-render.
+ */
+function keepIfUnchanged<T extends Record<string, unknown>>(
+  prev: T,
+  next: T
+): T {
+  const keys = Object.keys(prev);
+  if (keys.length !== Object.keys(next).length) return next;
+  for (const key of keys) {
+    if (!Object.hasOwn(next, key) || next[key] !== prev[key]) return next;
+  }
+  return prev;
+}
+
+/**
+ * Shared tail of every session-edit action: rebuild steps from the edited
+ * session, prune/repoint completion and cursor (same rules as
+ * `reconcileWithSession`), bump the revision, and mark unsaved changes.
+ * Returns the partial state for the caller to `set()`.
+ */
+function buildSessionEditState(
+  state: Pick<
+    ActiveWorkoutState,
+    'completedSetIds' | 'prSetIds' | 'activeSetId' | 'rest' | 'sessionRevision'
+  >,
+  editedSession: PresetSessionResponse
+): Partial<ActiveWorkoutState> {
+  const nextSession = normalizeSupersetGroups(editedSession);
+  const newSteps = buildStepsFromSession(nextSession);
+  const newSetIds = new Set(newSteps.map((s) => s.setId));
+
+  const nextCompleted: CompletedSetMap = {};
+  for (const id of Object.keys(state.completedSetIds)) {
+    if (newSetIds.has(id)) nextCompleted[id] = state.completedSetIds[id];
+  }
+
+  // Prune PR stamps alongside completions: a set removed from the session (or
+  // whose temp id was re-minted) must not resurrect a stale `is_pr: true` into
+  // the next payload.
+  const nextPr: PrSetMap = {};
+  for (const id of Object.keys(state.prSetIds)) {
+    if (newSetIds.has(id)) nextPr[id] = true;
+  }
+
+  // If the cursor's set was deleted (or the workout was finished and a new
+  // set appeared), fall back to the first uncompleted step.
+  let nextActiveSetId = state.activeSetId;
+  if (nextActiveSetId == null || !newSetIds.has(nextActiveSetId)) {
+    const fallback = newSteps.find((s) => !nextCompleted[s.setId]);
+    nextActiveSetId = fallback?.setId ?? null;
+  }
+
+  let nextRest = state.rest;
+  if (nextActiveSetId !== state.activeSetId) {
+    cancelCurrentRestNotification(state.rest);
+    nextRest = READY_REST;
+  }
+
+  return {
+    session: nextSession,
+    steps: newSteps,
+    completedSetIds: keepIfUnchanged(state.completedSetIds, nextCompleted),
+    prSetIds: keepIfUnchanged(state.prSetIds, nextPr),
+    activeSetId: nextActiveSetId,
+    rest: nextRest,
+    sessionRevision: state.sessionRevision + 1,
+    hasUnsavedChanges: true,
+  };
+}
+
+/**
+ * Cancel any pending notification attached to the current rest. Safe to call
+ * from any action that replaces or clears the rest state.
+ */
+function cancelCurrentRestNotification(rest: Rest): void {
+  if (rest.scheduledNotificationId) {
+    void cancelScheduledNotification(rest.scheduledNotificationId);
+  }
+}
+
+/**
+ * Build the rest-complete notification's title/body from the upcoming set, so
+ * the alert says what's next (exercise, set N of M, rep target) instead of just
+ * the exercise name.
+ */
+export function buildRestNotificationContent(
+  t: TFunction,
+  session: PresetSessionResponse | null,
+  setId: string | null,
+  fallbackExerciseName: string
+): { title: string; body: string } {
+  // Assumed-aware so an upcoming set with empty fields still announces its
+  // placeholder rep target, matching what the row shows grayed-in.
+  const desc = describeActiveSetAssumed(
+    session,
+    setId,
+    useActiveWorkoutStore.getState()
+  );
+  if (desc != null) {
+    const name = desc.exerciseName ?? fallbackExerciseName;
+    const setProgress = t('notifications.rest.bodySetProgress', {
+      defaultValue: '{{name}} · Set {{setNumber}} of {{setCount}}',
+      name,
+      setNumber: desc.setNumber,
+      setCount: desc.setCount,
+    });
+    let body: string;
+    if (desc.durationSec != null) {
+      body = t('notifications.rest.bodySetProgressDuration', {
+        defaultValue: '{{setProgress}} · {{duration}} target',
+        setProgress,
+        duration: formatDurationSeconds(desc.durationSec),
+      });
+    } else if (desc.reps != null) {
+      body = t('notifications.rest.bodySetProgressReps', {
+        defaultValue: '{{setProgress}} · {{formattedCount}} reps target',
+        defaultValue_one: '{{setProgress}} · {{formattedCount}} rep target',
+        defaultValue_other: '{{setProgress}} · {{formattedCount}} reps target',
+        setProgress,
+        count: desc.reps,
+        formattedCount: formatLocalizedNumber(desc.reps, {
+          maximumFractionDigits: 0,
+        }),
+      });
+    } else {
+      body = setProgress;
+    }
+    return {
+      title: t('notifications.rest.nextSetTitle', {
+        defaultValue: 'Rest complete: next set up',
+      }),
+      body,
+    };
+  }
+  return {
+    title: t('notifications.rest.title', { defaultValue: 'Rest complete' }),
+    body: fallbackExerciseName,
+  };
+}
+
+/**
+ * Schedule the rest-complete notification for the rest identified by `token`,
+ * writing the notification id back into state only if that exact rest is still
+ * running by the time the async schedule resolves. Otherwise (paused, cleared,
+ * dismissed, or replaced) the late-arriving OS notification is cancelled.
+ */
+function scheduleGuardedRestNotification(
+  exerciseName: string,
+  seconds: number,
+  token: number,
+  content?: { title?: string; body?: string }
+): void {
+  void scheduleRestNotification(exerciseName, seconds, content).then(
+    (notifId) => {
+      if (!notifId) return;
+      const current = useActiveWorkoutStore.getState().rest;
+      if (
+        current.instanceToken === token &&
+        current.state === 'resting' &&
+        current.scheduledNotificationId === null
+      ) {
+        useActiveWorkoutStore.setState({
+          rest: { ...current, scheduledNotificationId: notifId },
+        });
+      } else {
+        void cancelScheduledNotification(notifId);
+      }
+    }
+  );
+}
+
+/**
+ * Schedule the rest-complete notification for the rest identified by `token`,
+ * `seconds` from now, describing the active set: the path every running rest
+ * other than a fresh start goes through (resume, ±15s, a settings change).
+ */
+function scheduleActiveSetRestNotification(
+  state: Pick<ActiveWorkoutState, 'steps' | 'activeSetId' | 'session'>,
+  seconds: number,
+  token: number
+): void {
+  const { steps, activeSetId } = state;
+  const step =
+    activeSetId != null ? steps.find((s) => s.setId === activeSetId) : null;
+  const exerciseName = step?.exerciseName ?? 'Rest';
+  const content = buildRestNotificationContent(
+    i18n.getFixedT(i18n.language),
+    state.session,
+    activeSetId,
+    exerciseName
+  );
+  scheduleGuardedRestNotification(exerciseName, seconds, token, content);
+}
+
+/**
+ * Start a rest timer for the step identified by `setId`, scheduling the local
+ * notification and wiring up the stale-resolution guard on the returned
+ * promise. Returns the new Rest value the caller should commit to state.
+ */
+function startRestForStep(
+  steps: WorkoutStep[],
+  setId: string,
+  session: PresetSessionResponse | null,
+  durationSecOverride?: number,
+  /**
+   * When the rest began, if before now: a set the watch logged is only
+   * reported once the wearer picks an effort, and the watch's rest has been
+   * running since the tap. Starting this one from "now" would put its end
+   * later than the watch's and restart the watch's timer.
+   */
+  startedAtMs?: number
+): Rest {
+  const step = steps.find((s) => s.setId === setId);
+  const durationSec =
+    durationSecOverride ?? step?.restSec ?? getDefaultRestSec();
+  const now = Date.now();
+  const startedAt =
+    startedAtMs != null && Number.isFinite(startedAtMs) && startedAtMs < now
+      ? startedAtMs
+      : now;
+  const endsAt = startedAt + durationSec * 1000;
+  // The break is already over: nothing to count down.
+  if (endsAt <= now) return READY_REST;
+  const remainingSec = Math.max(1, Math.ceil((endsAt - now) / 1000));
+  const token = ++restInstanceCounter;
+
+  const rest: Rest = {
+    state: 'resting',
+    durationSec,
+    endsAt,
+    pausedRemainingMs: null,
+    scheduledNotificationId: null,
+    instanceToken: token,
+  };
+
+  const exerciseName = step?.exerciseName ?? 'Rest';
+  const content = buildRestNotificationContent(
+    i18n.getFixedT(i18n.language),
+    session,
+    setId,
+    exerciseName
+  );
+  scheduleGuardedRestNotification(exerciseName, remainingSec, token, content);
+
+  return rest;
+}
+
+export const useActiveWorkoutStore = create<ActiveWorkoutState>()(
+  persist(
+    (set, get) => ({
+      ...initialData,
+
+      startWorkout: (session, opts) => {
+        cancelCurrentRestNotification(get().rest);
+        const steps = buildStepsFromSession(session);
+        // Server-persisted completions seed the map, and the cursor lands on
+        // the first uncompleted step (null = every step already done). The
+        // store stays clean — the server already knows these completions.
+        const completedSetIds = seedCompletionFromSession(session);
+        // Key the live-start plan (positional, from the stripped create
+        // payload) to the created session's set ids — same exercise and set
+        // order by construction.
+        const plannedSetValues: Record<string, AssumedSetValues> = {};
+        opts?.plannedSetValues?.forEach((plannedSets, exerciseIndex) => {
+          session.exercises[exerciseIndex]?.sets.forEach((s, setIndex) => {
+            const planned = plannedSets[setIndex];
+            if (
+              planned != null &&
+              (planned.weight != null ||
+                planned.reps != null ||
+                planned.duration != null ||
+                planned.distance != null)
+            ) {
+              plannedSetValues[String(s.id)] = planned;
+            }
+          });
+        });
+
+        const exerciseConfigs: Record<string, LiveExerciseConfig> = {};
+        opts?.exerciseConfigs?.forEach((config, exerciseIndex) => {
+          const exercise = session.exercises[exerciseIndex];
+          if (exercise != null) exerciseConfigs[String(exercise.id)] = config;
+        });
+
+        const workoutFormat = opts?.workoutFormat ?? 'standard';
+        const timeCapSeconds = opts?.timeCapSeconds ?? null;
+        const startedMs = Date.now();
+        let intervalPhases: IntervalPhase[] = [];
+        if (workoutFormat !== 'standard') {
+          let engineSteps: IntervalEngineStep[] = [];
+          if (workoutFormat === 'tabata' || workoutFormat === 'emom') {
+            engineSteps = session.exercises.map((ex) => {
+              const firstSet = ex.sets[0];
+              return {
+                exerciseName: ex.exercise_snapshot?.name || 'Exercise',
+                durationSec:
+                  firstSet?.duration ??
+                  (workoutFormat === 'tabata' ? 20 : null),
+                restSec:
+                  firstSet?.rest_time ??
+                  (workoutFormat === 'tabata' ? 10 : null),
+                reps: firstSet?.reps ?? null,
+              };
+            });
+          } else {
+            engineSteps = steps.map((s) => {
+              const loc = locateSet(session, s.setId);
+              const durationSec =
+                loc?.exercise.sets[loc.setIndex]?.duration ?? null;
+              const restSec = s.restSec;
+              const reps = loc?.exercise.sets[loc.setIndex]?.reps ?? null;
+              return {
+                exerciseName: s.exerciseName,
+                durationSec,
+                restSec,
+                reps,
+              };
+            });
+          }
+          intervalPhases = buildIntervalPhases(
+            {
+              format: workoutFormat,
+              timeCapSeconds,
+              steps: engineSteps,
+            },
+            startedMs
+          );
+        }
+
+        set({
+          sessionId: session.id,
+          session,
+          startedAt: startedMs,
+          steps,
+          completedSetIds,
+          resumedDurationMinutes: captureResumedDurations(
+            session,
+            completedSetIds,
+            startedMs
+          ),
+          activeSetId:
+            steps.find((s) => completedSetIds[s.setId] == null)?.setId ?? null,
+          rest: READY_REST,
+          sessionRevision: 0,
+          hasUnsavedChanges: false,
+          createdByLiveStart: opts?.createdByLiveStart ?? false,
+          // Baseline is captured lazily per exercise by the live card; stamps
+          // resume from the server.
+          prBaseline: {},
+          prSetIds: seedPrFromSession(session),
+          // A fresh start has no id churn yet — every set keys by its own id.
+          setRenderKeys: {},
+          setTimerStartedAt: {},
+          plannedSetValues,
+          // Previous-session sets are captured lazily per exercise by the
+          // live card, like the PR baseline.
+          previousSessionSets: {},
+          exerciseConfigs,
+          // Adaptive signals are fetched after start, like the history.
+          coachingSignals: {},
+          declinedAdaptive: {},
+          sourcePresetId: opts?.sourcePresetId ?? null,
+          sourceServerConfigId: opts?.sourceServerConfigId ?? null,
+          workoutFormat,
+          timeCapSeconds,
+          intervalPhases,
+          intervalPhaseIndex: 0,
+          isIntervalPaused: false,
+          intervalPauseStartedAt: null,
+          watchIntervalRevision: 0,
+          watchExcludedPauseMs: 0,
+          watchArmedAt: null,
+          intervalRoundsCompleted: 0,
+          intervalRepsCompleted: 0,
+          intervalStatus: 'rx',
+          intervalScalingNotes: '',
+        });
+      },
+
+      startWorkoutAtSet: (session, setId) => {
+        cancelCurrentRestNotification(get().rest);
+        const steps = buildStepsFromSession(session);
+        const targetIndex = steps.findIndex((s) => s.setId === setId);
+        if (targetIndex < 0) return;
+
+        // Server-persisted completions are preserved wholesale — restarting
+        // at a middle set resumes with holes rather than clearing later
+        // checkmarks. Priors the server doesn't know about are stamped now,
+        // and only those make the session dirty.
+        const completedSetIds = seedCompletionFromSession(session);
+        // Backfilled priors are stamped at the start, so only the saved
+        // completions mark an entry as resumed.
+        const savedCompletedSetIds = { ...completedSetIds };
+        let addedPriors = false;
+        for (let i = 0; i < targetIndex; i++) {
+          const id = steps[i].setId;
+          if (completedSetIds[id] == null) {
+            completedSetIds[id] = Date.now();
+            addedPriors = true;
+          }
+        }
+        const startedMs = Date.now();
+
+        set({
+          sessionId: session.id,
+          session,
+          startedAt: startedMs,
+          steps,
+          completedSetIds,
+          resumedDurationMinutes: captureResumedDurations(
+            session,
+            savedCompletedSetIds,
+            startedMs
+          ),
+          activeSetId: setId,
+          rest: READY_REST,
+          sessionRevision: addedPriors ? 1 : 0,
+          hasUnsavedChanges: addedPriors,
+          createdByLiveStart: false,
+          // Backfilled priors are never PRs (detection lives only in
+          // completeActiveSet); stamps resume from the server.
+          prBaseline: {},
+          prSetIds: seedPrFromSession(session),
+          // A fresh start has no id churn yet — every set keys by its own id.
+          setRenderKeys: {},
+          setTimerStartedAt: {},
+          // A resumed diary workout has no live-start plan; its set values
+          // are real. Previous-session sets re-capture lazily.
+          plannedSetValues: {},
+          previousSessionSets: {},
+          // Nor its preset progression/ramp settings — same as the plan.
+          exerciseConfigs: {},
+          coachingSignals: {},
+          declinedAdaptive: {},
+          // Nor was it started from a preset this session — no update-preset
+          // prompt on finish.
+          sourcePresetId: null,
+          sourceServerConfigId: null,
+          workoutFormat: 'standard',
+          timeCapSeconds: null,
+          intervalPhases: [],
+          intervalPhaseIndex: 0,
+          isIntervalPaused: false,
+          intervalPauseStartedAt: null,
+          watchIntervalRevision: 0,
+          watchExcludedPauseMs: 0,
+          watchArmedAt: null,
+          intervalRoundsCompleted: 0,
+          intervalRepsCompleted: 0,
+          intervalStatus: 'rx',
+          intervalScalingNotes: '',
+        });
+      },
+
+      incrementIntervalRound: () => {
+        const state = get();
+        const nextRounds = state.intervalRoundsCompleted + 1;
+        const session = state.session;
+
+        if (!session || session.exercises.length === 0) {
+          set({ intervalRoundsCompleted: nextRounds });
+          return;
+        }
+
+        const renderKeys = { ...state.setRenderKeys };
+        let runningSession: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises,
+        };
+
+        const updatedExercises = session.exercises.map((exercise) => {
+          const roundSetsCount = Math.max(
+            1,
+            Math.round(
+              exercise.sets.length / (state.intervalRoundsCompleted + 1)
+            )
+          );
+          const templateSets = exercise.sets.slice(-roundSetsCount);
+          const sources =
+            templateSets.length > 0
+              ? templateSets
+              : [exercise.sets[exercise.sets.length - 1]!];
+
+          const newSets: ExerciseEntrySetResponse[] = sources.map(
+            (set, idx) => {
+              const tempId = nextTempSetId(runningSession, renderKeys);
+              // Update runningSession so nextTempSetId advances
+              runningSession = {
+                ...runningSession,
+                exercises: runningSession.exercises.map((e) =>
+                  e.id === exercise.id
+                    ? {
+                        ...e,
+                        sets: [
+                          ...e.sets,
+                          {
+                            ...set,
+                            id: tempId,
+                            set_number: exercise.sets.length + idx + 1,
+                          },
+                        ],
+                      }
+                    : e
+                ),
+              };
+              return {
+                ...set,
+                id: tempId,
+                set_number: exercise.sets.length + idx + 1,
+                completed_at: null,
+                is_pr: false,
+              };
+            }
+          );
+
+          return {
+            ...exercise,
+            sets: [...exercise.sets, ...newSets],
+          };
+        });
+
+        const nextSession: PresetSessionResponse = {
+          ...session,
+          exercises: updatedExercises,
+        };
+
+        const sessionEditState = buildSessionEditState(state, nextSession);
+        set({
+          ...sessionEditState,
+          intervalRoundsCompleted: nextRounds,
+        });
+      },
+
+      decrementIntervalRound: () => {
+        const state = get();
+        if (state.intervalRoundsCompleted <= 0) return;
+        const nextRounds = state.intervalRoundsCompleted - 1;
+        const session = state.session;
+
+        if (!session || session.exercises.length === 0) {
+          set({ intervalRoundsCompleted: nextRounds });
+          return;
+        }
+
+        const updatedExercises = session.exercises.map((exercise) => {
+          const roundSetsCount = Math.max(
+            1,
+            Math.round(
+              exercise.sets.length / (state.intervalRoundsCompleted + 1)
+            )
+          );
+          if (exercise.sets.length > roundSetsCount) {
+            return {
+              ...exercise,
+              sets: exercise.sets.slice(0, -roundSetsCount),
+            };
+          }
+          return exercise;
+        });
+
+        const nextSession: PresetSessionResponse = {
+          ...session,
+          exercises: updatedExercises,
+        };
+
+        const sessionEditState = buildSessionEditState(state, nextSession);
+        set({
+          ...sessionEditState,
+          intervalRoundsCompleted: nextRounds,
+        });
+      },
+
+      setIntervalReps: (reps) => {
+        set({ intervalRepsCompleted: reps });
+      },
+
+      setIntervalStatus: (status) => {
+        set({ intervalStatus: status });
+      },
+
+      setIntervalScalingNotes: (notes) => {
+        set({ intervalScalingNotes: notes });
+      },
+
+      pauseInterval: () => {
+        const state = get();
+        if (state.isIntervalPaused || state.workoutFormat === 'standard')
+          return;
+        const pausedAt = Date.now();
+        set({
+          isIntervalPaused: true,
+          intervalPauseStartedAt: pausedAt,
+        });
+        syncWatchIntervalTiming({ paused: true, pausedAtMs: pausedAt });
+      },
+
+      resumeInterval: () => {
+        const state = get();
+        if (!state.isIntervalPaused || state.intervalPauseStartedAt == null)
+          return;
+        const pauseDurationMs = Math.max(
+          0,
+          Date.now() - state.intervalPauseStartedAt
+        );
+        const nextPhases = shiftPhasesForPause(
+          state.intervalPhases,
+          state.intervalPhaseIndex,
+          pauseDurationMs
+        );
+        set({
+          isIntervalPaused: false,
+          intervalPauseStartedAt: null,
+          intervalPhases: nextPhases,
+        });
+        syncWatchIntervalTiming({ paused: false, pauseDurationMs });
+      },
+
+      updateIntervalPhaseIndex: (index) => {
+        set({ intervalPhaseIndex: index });
+      },
+
+      capturePrBaseline: (exerciseId, baseline) => {
+        const state = get();
+        // Only capture during a live workout, and only once per exercise —
+        // the store owns idempotency so view/edit card renders can't clobber
+        // it and a re-resolved stats query is a no-op. Not a session edit:
+        // no revision bump, no dirty flag.
+        // A deleted library exercise has no history to baseline against, so
+        // there is nothing to capture and it can never earn a PR.
+        if (exerciseId == null) return;
+        if (state.sessionId == null) return;
+        if (exerciseId in state.prBaseline) return;
+        set({ prBaseline: { ...state.prBaseline, [exerciseId]: baseline } });
+      },
+
+      capturePreviousSessionSets: (exerciseId, sets) => {
+        const state = get();
+        // Same gating as capturePrBaseline: live workout only, once per
+        // exercise, not a session edit.
+        // As above: no library row, no previous session to show.
+        if (exerciseId == null) return;
+        if (state.sessionId == null) return;
+        if (exerciseId in state.previousSessionSets) return;
+        set({
+          previousSessionSets: {
+            ...state.previousSessionSets,
+            [exerciseId]: sets,
+          },
+        });
+      },
+
+      captureCoachingSignals: (exerciseIds, signals) => {
+        const state = get();
+        if (state.sessionId == null) return;
+        const byId = new Map(signals.map((s) => [s.exercise_id, s]));
+        const next = { ...state.coachingSignals };
+        let changed = false;
+        for (const exerciseId of exerciseIds) {
+          if (exerciseId in next) continue;
+          next[exerciseId] = byId.get(exerciseId) ?? null;
+          changed = true;
+        }
+        if (changed) set({ coachingSignals: next });
+      },
+
+      setAdaptiveDeclined: (entryId, declined) => {
+        const state = get();
+        const isDeclined = state.declinedAdaptive[entryId] === true;
+        if (isDeclined === declined) return;
+        const { [entryId]: _removed, ...rest } = state.declinedAdaptive;
+        set({
+          declinedAdaptive: declined ? { ...rest, [entryId]: true } : rest,
+        });
+      },
+
+      setWeightUnit: (unit) => {
+        if (get().weightUnit !== unit) set({ weightUnit: unit });
+      },
+
+      clearWorkout: (options) => {
+        const endingSessionId = get().sessionId;
+        if (options?.discarded && endingSessionId != null) {
+          discardedWorkoutIds.add(endingSessionId);
+        }
+        cancelCurrentRestNotification(get().rest);
+        // The unit is a preference, not workout state; keep it across clears.
+        set({ ...initialData, weightUnit: get().weightUnit });
+      },
+
+      completeSet: (setId, completedAtMs) => {
+        const state = get();
+        const targetIndex = state.steps.findIndex((s) => s.setId === setId);
+        if (targetIndex < 0) return;
+        // Already logged — the done row owns its own un-complete control.
+        if (state.completedSetIds[setId] != null) return;
+
+        cancelCurrentRestNotification(state.rest);
+
+        // Logging a set with empty weight/reps adopts its assumed
+        // (placeholder) values — one choke point, so the row's Log control,
+        // the rest bar, the notification action, and the Live Activity button
+        // all record the same thing the user saw grayed-in.
+        const session = adoptAssumedSetValues(state, setId);
+
+        const completedSetIds: CompletedSetMap = {
+          ...state.completedSetIds,
+          [setId]:
+            completedAtMs != null && Number.isFinite(completedAtMs)
+              ? completedAtMs
+              : Date.now(),
+        };
+
+        // PR detection runs against the pre-completion map (the candidate is
+        // excluded internally). Sets logged within an interval/WOD session are saved as
+        // exercise entry sets for record-keeping but excluded from individual lift PRs.
+        // On a hit: stamp the set and fire the strong success haptic. A regular log fires
+        // only the light selection tick, so the PR buzz still stands out against it.
+        let prSetIds = state.prSetIds;
+        if (
+          state.workoutFormat === 'standard' &&
+          session != null &&
+          isPrSet(session, setId, state.completedSetIds, state.prBaseline)
+        ) {
+          prSetIds = { ...state.prSetIds, [setId]: true };
+          fireSuccessHaptic();
+        } else {
+          fireSelectionHaptic();
+        }
+
+        // Next-up follows the just-logged set: the first uncompleted step after
+        // it (its "next set"), else the earliest uncompleted hole anywhere (so
+        // logging the last set with earlier holes circles back to them), else
+        // null when every set is done.
+        const nextStep =
+          state.steps
+            .slice(targetIndex + 1)
+            .find((s) => completedSetIds[s.setId] == null) ??
+          state.steps.find((s) => completedSetIds[s.setId] == null) ??
+          null;
+
+        if (!nextStep) {
+          // No uncompleted step remains: workout is done. No final rest timer.
+          set({
+            session,
+            completedSetIds,
+            prSetIds,
+            activeSetId: null,
+            rest: READY_REST,
+            sessionRevision: state.sessionRevision + 1,
+            hasUnsavedChanges: true,
+          });
+          return;
+        }
+
+        // The rest is the break before the next-up set, derived from the true
+        // relationship between the two sets rather than the step-baked
+        // `restSec` — so out-of-order logging still rests between superset
+        // rounds instead of skipping the timer on an interior partner.
+        const restSec =
+          session != null
+            ? restSecBeforeNextSet(session, setId, nextStep.setId)
+            : nextStep.restSec;
+
+        set({
+          session,
+          completedSetIds,
+          prSetIds,
+          activeSetId: nextStep.setId,
+          // Zero rest (back-to-back superset partners, or an explicit rest_time
+          // of 0) advances straight to ready — no timer flash.
+          rest:
+            restSec > 0
+              ? startRestForStep(
+                  state.steps,
+                  nextStep.setId,
+                  session,
+                  restSec,
+                  completedSetIds[setId]
+                )
+              : READY_REST,
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      completeActiveSet: () => {
+        const { activeSetId } = get();
+        if (activeSetId != null) get().completeSet(activeSetId);
+      },
+
+      completeActiveSetIfReady: () => {
+        const { rest, activeSetId } = get();
+        if (activeSetId == null) return false;
+        // An expired rest can still read 'resting' here: the ready flip runs
+        // on a JS timer, which Android pauses while the app is backgrounded.
+        const restExpired =
+          rest.state === 'resting' &&
+          rest.endsAt != null &&
+          rest.endsAt <= Date.now();
+        if (rest.state !== 'ready' && !restExpired) return false;
+        get().completeSet(activeSetId);
+        return true;
+      },
+
+      uncompleteSet: (setId) => {
+        const state = get();
+        if (state.completedSetIds[setId] == null) return;
+        const next = { ...state.completedSetIds };
+        delete next[setId];
+        // Unchecking a set retracts its PR stamp too — a set that isn't
+        // completed can't hold a record.
+        const nextPr = { ...state.prSetIds };
+        delete nextPr[setId];
+
+        // The cursor stays where the user is working: every set is
+        // independently loggable, so the reopened set is re-logged from its own
+        // row control rather than needing the cursor to rewind onto it. The one
+        // exception is a finished workout (no active set) — reopening a set
+        // there re-anchors the next-up onto it so there's somewhere to resume.
+        // A running rest belongs to the cursor, which isn't moving here, so it
+        // is left untouched.
+        const nextActiveSetId = state.activeSetId ?? setId;
+
+        set({
+          completedSetIds: next,
+          prSetIds: nextPr,
+          activeSetId: nextActiveSetId,
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      clearExerciseCompletions: (entryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) => e.id === entryId);
+        if (!exercise) return;
+
+        const next = { ...state.completedSetIds };
+        const nextPr = { ...state.prSetIds };
+        let changed = false;
+        for (const s of exercise.sets) {
+          const id = String(s.id);
+          if (next[id] != null) {
+            delete next[id];
+            delete nextPr[id];
+            changed = true;
+          }
+        }
+        if (!changed) return;
+
+        // Same cursor invariant as uncompleteSet: land on the earliest
+        // uncompleted step, clearing a now-stale rest if the cursor moved.
+        const nextActiveSetId =
+          state.steps.find((s) => next[s.setId] == null)?.setId ?? null;
+        let nextRest = state.rest;
+        if (nextActiveSetId !== state.activeSetId) {
+          cancelCurrentRestNotification(state.rest);
+          nextRest = READY_REST;
+        }
+
+        set({
+          completedSetIds: next,
+          prSetIds: nextPr,
+          activeSetId: nextActiveSetId,
+          rest: nextRest,
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      clearAllCompletions: () => {
+        const state = get();
+        if (Object.keys(state.completedSetIds).length === 0) return;
+        cancelCurrentRestNotification(state.rest);
+        set({
+          completedSetIds: {},
+          prSetIds: {},
+          // Rewind the cursor to the first step and drop any running rest.
+          activeSetId: state.steps[0]?.setId ?? null,
+          rest: READY_REST,
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      pauseRest: () => {
+        const { rest } = get();
+        if (rest.state !== 'resting' || rest.endsAt == null) return;
+        cancelCurrentRestNotification(rest);
+        set({
+          rest: {
+            ...rest,
+            state: 'paused',
+            endsAt: null,
+            pausedRemainingMs: Math.max(0, rest.endsAt - Date.now()),
+            scheduledNotificationId: null,
+          },
+        });
+      },
+
+      resumeRest: () => {
+        const state = get();
+        const { rest } = state;
+        if (rest.state !== 'paused' || rest.pausedRemainingMs == null) return;
+
+        const remainingMs = rest.pausedRemainingMs;
+        const endsAt = Date.now() + remainingMs;
+        const token = ++restInstanceCounter;
+
+        set({
+          rest: {
+            ...rest,
+            state: 'resting',
+            endsAt,
+            pausedRemainingMs: null,
+            scheduledNotificationId: null,
+            instanceToken: token,
+          },
+        });
+
+        scheduleActiveSetRestNotification(
+          state,
+          Math.max(1, Math.ceil(remainingMs / 1000)),
+          token
+        );
+      },
+
+      adjustRest: (deltaSec) => {
+        const state = get();
+        const { rest } = state;
+        const deltaMs = deltaSec * 1000;
+
+        if (rest.state === 'resting' && rest.endsAt != null) {
+          const newEndsAt = rest.endsAt + deltaMs;
+          if (newEndsAt <= Date.now()) {
+            // Shrunk past zero — same outcome as the countdown hitting zero.
+            cancelCurrentRestNotification(rest);
+            set({ rest: READY_REST });
+            fireRestCompleteCue();
+            return;
+          }
+
+          cancelCurrentRestNotification(rest);
+          const token = ++restInstanceCounter;
+          set({
+            rest: {
+              ...rest,
+              durationSec: Math.max(1, rest.durationSec + deltaSec),
+              endsAt: newEndsAt,
+              scheduledNotificationId: null,
+              instanceToken: token,
+            },
+          });
+
+          scheduleActiveSetRestNotification(
+            state,
+            Math.max(1, Math.ceil((newEndsAt - Date.now()) / 1000)),
+            token
+          );
+          return;
+        }
+
+        if (rest.state === 'paused' && rest.pausedRemainingMs != null) {
+          const newRemainingMs = rest.pausedRemainingMs + deltaMs;
+          if (newRemainingMs <= 0) {
+            set({ rest: READY_REST });
+            fireRestCompleteCue();
+            return;
+          }
+          set({
+            rest: {
+              ...rest,
+              durationSec: Math.max(1, rest.durationSec + deltaSec),
+              pausedRemainingMs: newRemainingMs,
+            },
+          });
+        }
+        // 'ready' → no-op.
+      },
+
+      markRestReady: () => {
+        const { rest } = get();
+        if (
+          rest.state !== 'resting' ||
+          rest.endsAt == null ||
+          Date.now() < rest.endsAt
+        ) {
+          return;
+        }
+        // The ping is due this instant: cancelling it off screen races the OS
+        // delivery and can swallow the only cue there is. In the foreground
+        // the chime and haptic own the flip, so the redundant ping goes.
+        if (AppState.currentState === 'active') {
+          cancelCurrentRestNotification(rest);
+        }
+        set({ rest: READY_REST, restExpiredAt: Date.now() });
+        fireRestCompleteCue();
+      },
+
+      dismissRest: () => {
+        const { rest } = get();
+        if (rest.state === 'ready') return;
+        cancelCurrentRestNotification(rest);
+        set({ rest: READY_REST });
+      },
+
+      reconcileWithSession: (session) => {
+        const state = get();
+        if (session.id !== state.sessionId) return;
+
+        const newSteps = buildStepsFromSession(session);
+        const newSetIds = new Set(newSteps.map((s) => s.setId));
+
+        const nextCompleted: CompletedSetMap = {};
+        for (const id of Object.keys(state.completedSetIds)) {
+          if (newSetIds.has(id)) nextCompleted[id] = state.completedSetIds[id];
+        }
+
+        // Prune PR stamps to the surviving set ids, same as completions.
+        const nextPr: PrSetMap = {};
+        for (const id of Object.keys(state.prSetIds)) {
+          if (newSetIds.has(id)) nextPr[id] = true;
+        }
+
+        // Prune render keys the same way — reconcile keeps ids stable (no
+        // remap), so surviving entries carry over and dropped sets fall away.
+        const nextRenderKeys: Record<string, string> = {};
+        for (const id of Object.keys(state.setRenderKeys)) {
+          if (newSetIds.has(id)) nextRenderKeys[id] = state.setRenderKeys[id];
+        }
+
+        // If the cursor points at a set that no longer exists, fall back to
+        // the first uncompleted step. If every remaining step is already
+        // complete (or there are no steps), the workout is done → null.
+        let nextActiveSetId = state.activeSetId;
+        if (nextActiveSetId == null || !newSetIds.has(nextActiveSetId)) {
+          const fallback = newSteps.find((s) => !nextCompleted[s.setId]);
+          nextActiveSetId = fallback?.setId ?? null;
+        }
+
+        // If the cursor moved during reconcile, the old rest no longer
+        // belongs to the active step — clear it.
+        let nextRest = state.rest;
+        if (nextActiveSetId !== state.activeSetId) {
+          cancelCurrentRestNotification(state.rest);
+          nextRest = READY_REST;
+        }
+
+        set({
+          session,
+          steps: newSteps,
+          completedSetIds: keepIfUnchanged(
+            state.completedSetIds,
+            nextCompleted
+          ),
+          prSetIds: keepIfUnchanged(state.prSetIds, nextPr),
+          setRenderKeys: keepIfUnchanged(state.setRenderKeys, nextRenderKeys),
+          activeSetId: nextActiveSetId,
+          rest: nextRest,
+          // Reconcile is the second session writer (WorkoutDetail edit-save).
+          // Bumping the revision forces an in-flight autosave response into
+          // applyServerSession's graft branch instead of letting it adopt a
+          // stale server session wholesale over the newer reconciled one.
+          sessionRevision: state.sessionRevision + 1,
+        });
+      },
+
+      startSetTimer: (setId, startedAt) => {
+        const { setTimerStartedAt } = get();
+        if (setTimerStartedAt[setId] != null) return;
+        set({
+          setTimerStartedAt: {
+            ...setTimerStartedAt,
+            [setId]: startedAt ?? Date.now(),
+          },
+        });
+      },
+
+      clearSetTimer: (setId) => {
+        const { setTimerStartedAt } = get();
+        if (setTimerStartedAt[setId] == null) return;
+        const rest = { ...setTimerStartedAt };
+        delete rest[setId];
+        set({ setTimerStartedAt: rest });
+      },
+
+      shiftSetTimer: (setId, deltaMs) => {
+        const { setTimerStartedAt } = get();
+        const startedAt = setTimerStartedAt[setId];
+        if (startedAt == null || deltaMs <= 0) return;
+        set({
+          setTimerStartedAt: {
+            ...setTimerStartedAt,
+            [setId]: startedAt + deltaMs,
+          },
+        });
+      },
+
+      stopSetTimer: (setId) => {
+        const { setTimerStartedAt } = get();
+        const startedAt = setTimerStartedAt[setId];
+        if (startedAt == null) return null;
+        const elapsedSec = Math.max(
+          1,
+          Math.floor((Date.now() - startedAt) / 1000)
+        );
+        const rest = { ...setTimerStartedAt };
+        delete rest[setId];
+        set({ setTimerStartedAt: rest });
+        get().updateSetField(setId, { duration: elapsedSec });
+        return elapsedSec;
+      },
+
+      updateSetField: (setId, patch) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+
+        let changed = false;
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((exercise) => {
+            if (!exercise.sets.some((s) => String(s.id) === setId))
+              return exercise;
+            changed = true;
+            return {
+              ...exercise,
+              sets: exercise.sets.map((s) =>
+                String(s.id) === setId ? { ...s, ...patch } : s
+              ),
+            };
+          }),
+        };
+        if (!changed) return;
+        set(buildSessionEditState(state, next));
+      },
+
+      addSetToExercise: (entryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) => e.id === entryId);
+        if (!exercise) return;
+
+        const tempId = nextTempSetId(session, state.setRenderKeys);
+        const lastSet = exercise.sets[exercise.sets.length - 1];
+        // Clone the last set's structure (rest/type) but not its
+        // weight/reps — a new set starts empty and shows the row above's
+        // values as its gray placeholder — nor its outcomes
+        // (notes/rpe/completed_at/is_pr), which describe a performed set.
+        // On duration exercises the duration IS the value, so it empties like
+        // weight/reps; elsewhere it's invisible structure and clones along.
+        // Cardio distance is likewise a per-set value, never structure.
+        const modality = resolveSnapshotModality(exercise.exercise_snapshot);
+        const durationLike = isDurationModality(modality);
+        const newSet: ExerciseEntrySetResponse = lastSet
+          ? {
+              ...lastSet,
+              id: tempId,
+              set_number: exercise.sets.length + 1,
+              weight: null,
+              reps: null,
+              ...(durationLike || isWeightDurationModality(modality)
+                ? { duration: null }
+                : {}),
+              ...(isCardioModality(modality) ||
+              isWeightDistanceModality(modality)
+                ? { distance: null }
+                : {}),
+              notes: null,
+              rpe: null,
+              completed_at: null,
+              is_pr: false,
+            }
+          : makeDefaultSet(tempId, 1, modality);
+
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((e) =>
+            e.id === entryId ? { ...e, sets: [...e.sets, newSet] } : e
+          ),
+        };
+        set(buildSessionEditState(state, next));
+      },
+
+      addDropSetsToExercise: (entryId, baseWeightKg, unit) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) => e.id === entryId);
+        if (!exercise) return;
+
+        const dropWeights = calculateDropSetWeightsKg(baseWeightKg, unit);
+        if (dropWeights.length === 0) return;
+
+        // Mint ids against the whole session so they can't collide with
+        // unsaved temp sets in other exercises; count down from there.
+        let tempId = nextTempSetId(session, state.setRenderKeys);
+        const lastSet = exercise.sets[exercise.sets.length - 1];
+        const newSets = [...exercise.sets];
+        for (const dropWeight of dropWeights) {
+          newSets.push({
+            id: tempId,
+            set_number: newSets.length + 1,
+            set_type: 'drop',
+            weight: dropWeight,
+            reps: lastSet?.reps ?? null,
+            duration: null,
+            distance: null,
+            rest_time: lastSet?.rest_time ?? null,
+            notes: null,
+            rpe: null,
+            rir: null,
+            is_pr: false,
+            completed_at: null,
+          });
+          tempId -= 1;
+        }
+
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((e) =>
+            e.id === entryId ? { ...e, sets: newSets } : e
+          ),
+        };
+        set(buildSessionEditState(state, next));
+      },
+
+      addWarmupSetsToExercise: (entryId, workingWeightKg, unit, options) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) => e.id === entryId);
+        if (!exercise) return;
+
+        const warmups = calculateWarmupSets(workingWeightKg, unit, options);
+        if (warmups.length === 0) return;
+
+        const isLogged = (s: ExerciseEntrySetResponse) =>
+          state.completedSetIds[String(s.id)] != null || s.completed_at != null;
+        if (
+          exercise.sets.some((s) => isWarmupSetType(s.set_type) && isLogged(s))
+        )
+          return;
+
+        // None of the old warm-ups is logged (checked above), so all of them go
+        // and the new ramp leads the working sets.
+        const working = exercise.sets.filter(
+          (s) => !isWarmupSetType(s.set_type)
+        );
+
+        let tempId = nextTempSetId(session, state.setRenderKeys);
+        const warmupSets: ExerciseEntrySetResponse[] = warmups.map((w) => {
+          const created: ExerciseEntrySetResponse = {
+            id: tempId,
+            set_number: 0,
+            set_type: 'warmup',
+            weight: w.weightKg,
+            reps: w.reps,
+            duration: null,
+            distance: null,
+            rest_time: WARMUP_REST_SEC,
+            notes: null,
+            rpe: null,
+            rir: null,
+            is_pr: false,
+            completed_at: null,
+          };
+          tempId -= 1;
+          return created;
+        });
+
+        const sets = [...warmupSets, ...working].map((s, i) => ({
+          ...s,
+          set_number: i + 1,
+        }));
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((e) =>
+            e.id === entryId ? { ...e, sets } : e
+          ),
+        };
+        const edited = buildSessionEditState(state, next);
+        // The first working set is still in the session, so the shared edit
+        // tail would leave the cursor on it and skip the new warm-ups. Move
+        // onto the first warm-up, and drop any rest that belonged to the
+        // former cursor. A cursor on a later set, or another exercise, stays.
+        const firstWorkingId =
+          working.length > 0 ? String(working[0].id) : null;
+        if (
+          warmupSets.length > 0 &&
+          firstWorkingId != null &&
+          state.activeSetId === firstWorkingId
+        ) {
+          cancelCurrentRestNotification(state.rest);
+          edited.activeSetId = String(warmupSets[0].id);
+          edited.rest = READY_REST;
+        }
+        set(edited);
+      },
+
+      deleteSet: (setId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) =>
+          e.sets.some((s) => String(s.id) === setId)
+        );
+        if (!exercise) return;
+
+        // Deleting an exercise's last remaining set removes the exercise —
+        // this doubles as the escape hatch for a mistakenly added exercise.
+        const next: PresetSessionResponse =
+          exercise.sets.length <= 1
+            ? {
+                ...session,
+                exercises: session.exercises.filter(
+                  (e) => e.id !== exercise.id
+                ),
+              }
+            : {
+                ...session,
+                exercises: session.exercises.map((e) =>
+                  e.id !== exercise.id
+                    ? e
+                    : {
+                        ...e,
+                        sets: e.sets
+                          .filter((s) => String(s.id) !== setId)
+                          .map((s, idx) => ({ ...s, set_number: idx + 1 })),
+                      }
+                ),
+              };
+        set(buildSessionEditState(state, next));
+      },
+
+      setExerciseRest: (entryId, seconds) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        if (!session.exercises.some((e) => e.id === entryId)) return;
+
+        // Superset rest is per-round: a member's chip writes every member.
+        const run = getSupersetRuns(session.exercises).find((r) =>
+          r.entryIds.includes(entryId)
+        );
+        const targetIds = new Set(run ? run.entryIds : [entryId]);
+
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((e) =>
+            targetIds.has(e.id)
+              ? {
+                  ...e,
+                  sets: e.sets.map((s) => ({ ...s, rest_time: seconds })),
+                }
+              : e
+          ),
+        };
+        set(buildSessionEditState(state, next));
+      },
+
+      setWorkoutDurationMinutes: (minutes) => {
+        const state = get();
+        if (state.sessionId == null || state.startedAt == null) return;
+        let lastCompletedMs = 0;
+        for (const ms of Object.values(state.completedSetIds)) {
+          if (ms > lastCompletedMs) lastCompletedMs = ms;
+        }
+        if (lastCompletedMs <= state.startedAt) return;
+        set({
+          startedAt:
+            lastCompletedMs - Math.max(1, Math.round(minutes)) * 60_000,
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      renameSession: (name) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const trimmed = name.trim();
+        if (trimmed.length === 0 || trimmed === session.name) return;
+        set(buildSessionEditState(state, { ...session, name: trimmed }));
+      },
+
+      setExerciseNotes: (entryId, notes) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercise = session.exercises.find((e) => e.id === entryId);
+        if (!exercise) return;
+        // Empty/whitespace clears to null; a no-op guard skips a spurious
+        // revision bump when the note is unchanged.
+        const trimmed = notes?.trim() ?? '';
+        const nextNotes = trimmed.length === 0 ? null : trimmed;
+        if ((exercise.notes ?? null) === nextNotes) return;
+        set(
+          buildSessionEditState(state, {
+            ...session,
+            exercises: session.exercises.map((e) =>
+              e.id === entryId ? { ...e, notes: nextNotes } : e
+            ),
+          })
+        );
+      },
+
+      addExercise: (exercise) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+
+        const snapshot: ExerciseSnapshotResponse = {
+          id: exercise.id,
+          name: exercise.name,
+          category: exercise.category ?? null,
+          modality: exercise.modality ?? null,
+          images: exercise.images ?? null,
+          primary_muscles: exercise.primary_muscles ?? null,
+          secondary_muscles: exercise.secondary_muscles ?? null,
+          equipment: exercise.equipment ?? null,
+          instructions: exercise.instructions ?? null,
+          force: exercise.force ?? null,
+          level: exercise.level ?? null,
+          mechanic: exercise.mechanic ?? null,
+          calories_per_hour: exercise.calories_per_hour ?? null,
+        };
+
+        const entry: ExerciseEntryResponse = {
+          // A client-minted uuid gives the entry a stable identity from birth:
+          // the server adopts it via reconcile-create instead of reassigning
+          // ids, so the card never collapses on the first autosave after an add.
+          id: newUuid(),
+          exercise_id: exercise.id,
+          duration_minutes: 0,
+          calories_burned: 0,
+          entry_date: session.entry_date,
+          notes: null,
+          distance: null,
+          avg_heart_rate: null,
+          source: null,
+          superset_group: null,
+          exercise_snapshot: snapshot,
+          activity_details: [],
+          sets: [
+            makeDefaultSet(
+              nextTempSetId(session, state.setRenderKeys),
+              1,
+              resolveSnapshotModality(snapshot)
+            ),
+          ],
+        };
+
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: [...session.exercises, entry],
+        };
+        set(buildSessionEditState(state, next));
+      },
+
+      removeExercise: (entryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        if (!session.exercises.some((e) => e.id === entryId)) return;
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.filter((e) => e.id !== entryId),
+        };
+        set(buildSessionEditState(state, next));
+      },
+
+      replaceExercise: (entryId, exercise) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        if (!session.exercises.some((e) => e.id === entryId)) return;
+
+        const snapshot: ExerciseSnapshotResponse = {
+          id: exercise.id,
+          name: exercise.name,
+          category: exercise.category ?? null,
+          modality: exercise.modality ?? null,
+          images: exercise.images ?? null,
+          primary_muscles: exercise.primary_muscles ?? null,
+          secondary_muscles: exercise.secondary_muscles ?? null,
+          equipment: exercise.equipment ?? null,
+          instructions: exercise.instructions ?? null,
+          force: exercise.force ?? null,
+          level: exercise.level ?? null,
+          mechanic: exercise.mechanic ?? null,
+          calories_per_hour: exercise.calories_per_hour ?? null,
+        };
+
+        // Same modality: keep the set structure and the planned weight/reps/
+        // duration/distance so a swap doesn't mean re-entering them. What the
+        // old movement's sets recorded (notes, rpe, completion, PR) doesn't
+        // carry over. A different modality can't reuse the values (a duration
+        // set's null reps, a weight_reps set's stale duration), so it resets to
+        // one default set — the old sets no longer describe the new movement.
+        // `?? null` on distance/heart_rate keeps the entry valid.
+        const replaced = session.exercises.find((e) => e.id === entryId);
+        const newModality = resolveSnapshotModality(snapshot);
+        const preserveSets =
+          replaced != null &&
+          replaced.sets.length > 0 &&
+          resolveSnapshotModality(replaced.exercise_snapshot) === newModality;
+        const preservedIds = new Set(
+          preserveSets ? replaced.sets.map((s) => String(s.id)) : []
+        );
+        const sets: ExerciseEntrySetResponse[] = preserveSets
+          ? replaced.sets.map((s) => ({
+              ...s,
+              notes: null,
+              rpe: null,
+              rir: null,
+              completed_at: null,
+              is_pr: false,
+            }))
+          : [
+              makeDefaultSet(
+                nextTempSetId(session, state.setRenderKeys),
+                1,
+                newModality
+              ),
+            ];
+        const next: PresetSessionResponse = {
+          ...session,
+          exercises: session.exercises.map((e) =>
+            e.id === entryId
+              ? {
+                  ...e,
+                  exercise_id: exercise.id,
+                  exercise_snapshot: snapshot,
+                  sets,
+                }
+              : e
+          ),
+        };
+        // Preserved sets keep their ids, so clear their completion and PR
+        // stamps here or the edit would still treat them as performed.
+        const completedSetIds = { ...state.completedSetIds };
+        const prSetIds = { ...state.prSetIds };
+        // A running set timer was started on the old exercise; keeping it
+        // would write that time as the new exercise's duration on stop.
+        const setTimerStartedAt = { ...state.setTimerStartedAt };
+        let clearedCompletion = false;
+        for (const id of replaced?.sets.map((s) => String(s.id)) ?? []) {
+          delete setTimerStartedAt[id];
+        }
+        for (const id of preservedIds) {
+          if (completedSetIds[id] != null) clearedCompletion = true;
+          delete completedSetIds[id];
+          delete prSetIds[id];
+        }
+        // The entry keeps its id, so drop the replaced exercise's preset
+        // progression/ramp settings rather than applying them to the new one.
+        const { [entryId]: _replaced, ...exerciseConfigs } =
+          state.exerciseConfigs;
+        // Same for a declined adaptive suggestion: it was about the old
+        // exercise (#1560).
+        const { [entryId]: _declined, ...declinedAdaptive } =
+          state.declinedAdaptive;
+        set({
+          ...buildSessionEditState(
+            {
+              ...state,
+              completedSetIds,
+              prSetIds,
+              // Un-logged sets are due again, so send the cursor back to the
+              // first one still to do.
+              activeSetId: clearedCompletion ? null : state.activeSetId,
+            },
+            next
+          ),
+          exerciseConfigs,
+          declinedAdaptive,
+          setTimerStartedAt,
+        });
+      },
+
+      supersetWith: (currentEntryId, pickedEntryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercises = supersetSessionExercises(
+          session.exercises,
+          currentEntryId,
+          pickedEntryId
+        );
+        // Identity return = invalid pick (unknown ids, already grouped):
+        // leave state untouched so no spurious revision bump is triggered.
+        if (exercises === session.exercises) return;
+        set(buildSessionEditState(state, { ...session, exercises }));
+      },
+
+      ungroupExercise: (entryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const exercises = ungroupSessionExercise(session.exercises, entryId);
+        if (exercises === session.exercises) return;
+        // buildSessionEditState's normalize pass dissolves a 1-member remainder.
+        set(buildSessionEditState(state, { ...session, exercises }));
+      },
+
+      reorderExercises: (fromItemIndex, toItemIndex) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        const moved = moveSessionExerciseItem(
+          session.exercises,
+          fromItemIndex,
+          toItemIndex
+        );
+        // Identity return = no-op / out-of-range move: leave state untouched so
+        // no spurious revision bump or autosave is triggered.
+        if (moved === session.exercises) return;
+        set(buildSessionEditState(state, { ...session, exercises: moved }));
+      },
+
+      doExerciseNow: (entryId, anchorEntryId) => {
+        const state = get();
+        const session = state.session;
+        if (!session || state.activeSetId == null) return;
+        const currentEntryId =
+          anchorEntryId ??
+          session.exercises.find((e) =>
+            e.sets.some((s) => String(s.id) === state.activeSetId)
+          )?.id;
+        if (currentEntryId == null) return;
+        const items = buildExerciseReorderItems(session.exercises);
+        const from = items.findIndex((i) => i.entryIds.includes(entryId));
+        const to = items.findIndex((i) => i.entryIds.includes(currentEntryId));
+        if (from < 0 || to < 0 || from <= to) return;
+        const edit = buildSessionEditState(state, {
+          ...session,
+          exercises: moveSessionExerciseItem(session.exercises, from, to),
+        });
+        const picked = edit.session?.exercises.find((e) => e.id === entryId);
+        const firstToDo = picked?.sets
+          .map((s) => String(s.id))
+          .find((id) => edit.completedSetIds?.[id] == null);
+        if (firstToDo != null && firstToDo !== edit.activeSetId) {
+          // The rest was the break before the set that was due; the picked
+          // exercise starts fresh.
+          cancelCurrentRestNotification(state.rest);
+          edit.activeSetId = firstToDo;
+          edit.rest = READY_REST;
+        }
+        set(edit);
+      },
+
+      setSessionLocation: (location) => {
+        const state = get();
+        const session = state.session;
+        if (!session) return;
+        if (session.location === location) return;
+        set({
+          session: { ...session, location },
+          sessionRevision: state.sessionRevision + 1,
+          hasUnsavedChanges: true,
+        });
+      },
+
+      applyServerSession: (
+        serverSession,
+        sentRevision,
+        sentEntryIds,
+        sentSetIds
+      ) => {
+        const state = get();
+        // The workout may have been cleared or replaced while the save was in
+        // flight — a response for a different (or no) session is dropped.
+        if (state.sessionId == null || serverSession.id !== state.sessionId)
+          return;
+        const local = state.session;
+        if (!local) return;
+
+        const setIdMap = buildPositionalSetIdMap(local, serverSession);
+
+        if (state.sessionRevision !== sentRevision) {
+          // Edits landed after the payload was built. If they reordered or
+          // deleted exercise entries, the positional assumption behind the
+          // graft is broken — compare against the *sent* order (an
+          // exercise_id comparison would false-pass when the same exercise
+          // appears twice and gets swapped). Skipping leaves the session
+          // dirty at the bumped revision; the pending debounce or trailing
+          // save resends the current shape, whose response grafts cleanly.
+          const prefixLength = Math.min(
+            local.exercises.length,
+            sentEntryIds.length
+          );
+          for (let i = 0; i < prefixLength; i++) {
+            if (local.exercises[i].id !== sentEntryIds[i]) return;
+          }
+          if (local.exercises.length < sentEntryIds.length) return;
+
+          // A set inserted, deleted, or reordered after the payload was built
+          // (warm-ups prepended onto [101, 102]) would take the server ids of
+          // the sets that used to sit there. Skip; the newer shape is resent.
+          if (sentSetIds) {
+            const comparable = Math.min(
+              local.exercises.length,
+              sentEntryIds.length
+            );
+            for (let i = 0; i < comparable; i++) {
+              const sent = sentSetIds[i];
+              const localIds = local.exercises[i].sets.map((s) => String(s.id));
+              if (
+                sent == null ||
+                sent.length !== localIds.length ||
+                sent.some((id, j) => id !== localIds[j])
+              ) {
+                return;
+              }
+            }
+          }
+
+          // Keep the newer local values; only graft the server-assigned ids
+          // into place. Every logical set survives this, so the rest timer
+          // is never touched.
+          const grafted = graftServerSessionIds(local, serverSession);
+          const newSteps = buildStepsFromSession(grafted);
+
+          const nextCompleted: CompletedSetMap = {};
+          for (const id of Object.keys(state.completedSetIds)) {
+            nextCompleted[setIdMap.get(id) ?? id] = state.completedSetIds[id];
+          }
+          const nextPr: PrSetMap = {};
+          for (const id of Object.keys(state.prSetIds)) {
+            nextPr[setIdMap.get(id) ?? id] = true;
+          }
+          const nextTimers: Record<string, number> = {};
+          for (const id of Object.keys(state.setTimerStartedAt)) {
+            nextTimers[setIdMap.get(id) ?? id] = state.setTimerStartedAt[id];
+          }
+
+          // Carry render keys across the graft: re-key each entry to its
+          // server id, and give a churned set with no prior entry its birth
+          // (pre-churn local) id as its stable key — that keeps the just-added
+          // set's focused row keyed identically before and after the save, so
+          // its TextInput instance (keyboard + draft) survives. Building fresh
+          // from the original map keeps this order-independent, like
+          // nextCompleted; the graft keeps the local session, so no prune.
+          const nextRenderKeys: Record<string, string> = {};
+          for (const id of Object.keys(state.setRenderKeys)) {
+            nextRenderKeys[setIdMap.get(id) ?? id] = state.setRenderKeys[id];
+          }
+          for (const [oldId, newId] of setIdMap) {
+            if (oldId !== newId && !(newId in nextRenderKeys)) {
+              nextRenderKeys[newId] = oldId;
+            }
+          }
+
+          const nextActiveSetId =
+            state.activeSetId == null
+              ? null
+              : (setIdMap.get(state.activeSetId) ?? state.activeSetId);
+
+          set({
+            session: grafted,
+            steps: newSteps,
+            completedSetIds: keepIfUnchanged(
+              state.completedSetIds,
+              nextCompleted
+            ),
+            prSetIds: keepIfUnchanged(state.prSetIds, nextPr),
+            setRenderKeys: keepIfUnchanged(state.setRenderKeys, nextRenderKeys),
+            setTimerStartedAt: nextTimers,
+            activeSetId: nextActiveSetId,
+            // hasUnsavedChanges stays true — the newer edits still need a save.
+          });
+          return;
+        }
+
+        // No edits landed mid-flight: adopt the server session wholesale.
+        const newSteps = buildStepsFromSession(serverSession);
+        const newSetIds = new Set(newSteps.map((s) => s.setId));
+
+        const nextCompleted: CompletedSetMap = {};
+        for (const id of Object.keys(state.completedSetIds)) {
+          const mapped = setIdMap.get(id) ?? id;
+          if (newSetIds.has(mapped))
+            nextCompleted[mapped] = state.completedSetIds[id];
+        }
+
+        const nextPr: PrSetMap = {};
+        for (const id of Object.keys(state.prSetIds)) {
+          const mapped = setIdMap.get(id) ?? id;
+          if (newSetIds.has(mapped)) nextPr[mapped] = true;
+        }
+        const nextTimers: Record<string, number> = {};
+        for (const id of Object.keys(state.setTimerStartedAt)) {
+          const mapped = setIdMap.get(id) ?? id;
+          if (newSetIds.has(mapped))
+            nextTimers[mapped] = state.setTimerStartedAt[id];
+        }
+
+        // Carry render keys, pruned to the adopted session's set ids so the
+        // map can't grow unboundedly: re-key each surviving entry to its
+        // server id, and give a churned set its birth id as its stable key.
+        const nextRenderKeys: Record<string, string> = {};
+        for (const id of Object.keys(state.setRenderKeys)) {
+          const mapped = setIdMap.get(id) ?? id;
+          if (newSetIds.has(mapped))
+            nextRenderKeys[mapped] = state.setRenderKeys[id];
+        }
+        for (const [oldId, newId] of setIdMap) {
+          if (
+            oldId !== newId &&
+            newSetIds.has(newId) &&
+            !(newId in nextRenderKeys)
+          ) {
+            nextRenderKeys[newId] = oldId;
+          }
+        }
+
+        // Remap the cursor in place: an id change that still points at the
+        // same logical set must NOT clear a running rest. Only when the
+        // logical target set is gone does the cursor fall back (and the rest
+        // clear with it).
+        let nextActiveSetId =
+          state.activeSetId == null
+            ? null
+            : (setIdMap.get(state.activeSetId) ?? state.activeSetId);
+        let nextRest = state.rest;
+        if (nextActiveSetId != null && !newSetIds.has(nextActiveSetId)) {
+          const fallback = newSteps.find((s) => !nextCompleted[s.setId]);
+          nextActiveSetId = fallback?.setId ?? null;
+          cancelCurrentRestNotification(state.rest);
+          nextRest = READY_REST;
+        }
+
+        set({
+          session: serverSession,
+          steps: newSteps,
+          completedSetIds: keepIfUnchanged(
+            state.completedSetIds,
+            nextCompleted
+          ),
+          prSetIds: keepIfUnchanged(state.prSetIds, nextPr),
+          setRenderKeys: keepIfUnchanged(state.setRenderKeys, nextRenderKeys),
+          setTimerStartedAt: nextTimers,
+          activeSetId: nextActiveSetId,
+          rest: nextRest,
+          hasUnsavedChanges: false,
+        });
+      },
+    }),
+    {
+      name: STORAGE_KEY,
+      version: 5,
+      storage: createJSONStorage(() => AsyncStorage),
+      partialize: (state) => ({
+        sessionId: state.sessionId,
+        session: state.session,
+        startedAt: state.startedAt,
+        steps: state.steps,
+        completedSetIds: state.completedSetIds,
+        activeSetId: state.activeSetId,
+        rest: state.rest,
+        // A running set stopwatch survives a cold start.
+        setTimerStartedAt: state.setTimerStartedAt,
+        // Persisted so edits made just before a cold exit are flushed on the
+        // next launch. sessionRevision is deliberately transient.
+        hasUnsavedChanges: state.hasUnsavedChanges,
+        createdByLiveStart: state.createdByLiveStart,
+        // Baseline and stamps survive a cold-start resume.
+        prBaseline: state.prBaseline,
+        prSetIds: state.prSetIds,
+        resumedDurationMinutes: state.resumedDurationMinutes,
+        // Placeholder sources survive a cold start: the plan can't be
+        // recaptured (the create payload is gone), and lock-screen completes
+        // may adopt before any card remounts to re-capture history.
+        plannedSetValues: state.plannedSetValues,
+        previousSessionSets: state.previousSessionSets,
+        exerciseConfigs: state.exerciseConfigs,
+        coachingSignals: state.coachingSignals,
+        declinedAdaptive: state.declinedAdaptive,
+        weightUnit: state.weightUnit,
+        // The preset link feeds the finish prompt; survives a cold start.
+        sourcePresetId: state.sourcePresetId,
+        sourceServerConfigId: state.sourceServerConfigId,
+        workoutFormat: state.workoutFormat,
+        timeCapSeconds: state.timeCapSeconds,
+        intervalPhases: state.intervalPhases,
+        intervalPhaseIndex: state.intervalPhaseIndex,
+        isIntervalPaused: state.isIntervalPaused,
+        intervalPauseStartedAt: state.intervalPauseStartedAt,
+        watchIntervalRevision: state.watchIntervalRevision,
+        watchExcludedPauseMs: state.watchExcludedPauseMs,
+        watchArmedAt: state.watchArmedAt,
+        intervalRoundsCompleted: state.intervalRoundsCompleted,
+        intervalRepsCompleted: state.intervalRepsCompleted,
+        intervalStatus: state.intervalStatus,
+        intervalScalingNotes: state.intervalScalingNotes,
+      }),
+      migrate: (persistedState, version) => {
+        // v4 changed `completedSetIds` values from `true` to epoch-ms tap
+        // timestamps; v5 switched client-added exercise entries from `temp-N`
+        // string ids to real client uuids. A pre-v5 in-flight workout could
+        // still hold a `temp-N` entry id, which the request schema rejects
+        // (`id: uuid().optional()`) — its next autosave would 400 forever. The
+        // persisted state only holds local progress for an in-flight workout
+        // (the session itself lives on the server), so it is discarded rather
+        // than migrated.
+        if (version < 5) {
+          return { ...initialData } as ActiveWorkoutState;
+        }
+        return persistedState as ActiveWorkoutState;
+      },
+      merge: (persisted, current) => {
+        const merged = {
+          ...current,
+          ...(persisted as Partial<ActiveWorkoutState>),
+        };
+        // If rehydration brings back a running rest whose deadline has
+        // already passed, snap it to 'ready'. The OS notification either
+        // already fired or will never fire — no haptic here because the merge
+        // path runs on cold start and a phantom buzz would be confusing.
+        const r = merged.rest;
+        if (
+          r &&
+          r.state === 'resting' &&
+          r.endsAt != null &&
+          r.endsAt < Date.now()
+        ) {
+          merged.rest = { ...READY_REST };
+        }
+        return merged;
+      },
+    }
+  )
+);
+
+let restDeadlineTimerId: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Keep exactly one JS timer pointed at the current rest deadline so the
+ * resting → ready flip (notification cancel + haptic/sound cue) happens in the store,
+ * independent of which screens are mounted. The callback re-checks live state:
+ * a timer that fires early (clock drift) reschedules for the remainder instead
+ * of stranding the rest in 'resting'.
+ */
+function syncRestDeadlineTimer(rest: Rest): void {
+  if (restDeadlineTimerId != null) {
+    clearTimeout(restDeadlineTimerId);
+    restDeadlineTimerId = null;
+  }
+  const running = rest.state === 'resting' && rest.endsAt != null;
+  // Keeps this timer firing off screen when the background chime is on.
+  setRestKeepAlive(running);
+  if (!running || rest.endsAt == null) return;
+  restDeadlineTimerId = setTimeout(
+    () => {
+      restDeadlineTimerId = null;
+      const current = useActiveWorkoutStore.getState().rest;
+      if (current.state !== 'resting' || current.endsAt == null) return;
+      if (Date.now() < current.endsAt) {
+        syncRestDeadlineTimer(current);
+        return;
+      }
+      useActiveWorkoutStore.getState().markRestReady();
+    },
+    Math.max(0, rest.endsAt - Date.now())
+  );
+}
+
+// Every rest transition replaces the `rest` object, so a reference check is
+// enough to keep the deadline timer in sync (including persist rehydration).
+useActiveWorkoutStore.subscribe((state, prevState) => {
+  if (state.rest !== prevState.rest) syncRestDeadlineTimer(state.rest);
+});
+
+// The rest notification's sound and the background keep-alive are decided
+// when a rest is scheduled, from the rest-chime settings. Changing those
+// mid-rest reschedules the running rest's notification for the time left, so
+// it doesn't stay silent for a chime that will no longer play (or ding on top
+// of one that now will). Replacing `rest` also re-runs the keep-alive via the
+// deadline timer sync above.
+useAppPreferencesStore.subscribe((prefs, prevPrefs) => {
+  if (
+    prefs.restChimeThroughSilent === prevPrefs.restChimeThroughSilent &&
+    prefs.restTimerSoundEnabled === prevPrefs.restTimerSoundEnabled
+  ) {
+    return;
+  }
+  const state = useActiveWorkoutStore.getState();
+  const { rest } = state;
+  if (rest.state !== 'resting' || rest.endsAt == null) return;
+  const remainingMs = rest.endsAt - Date.now();
+  if (remainingMs <= 0) return;
+  cancelCurrentRestNotification(rest);
+  const token = ++restInstanceCounter;
+  useActiveWorkoutStore.setState({
+    rest: { ...rest, scheduledNotificationId: null, instanceToken: token },
+  });
+  scheduleActiveSetRestNotification(
+    state,
+    Math.max(1, Math.ceil(remainingMs / 1000)),
+    token
+  );
+});
+
+// JS timers pause while the app is backgrounded; re-sync on foreground return
+// so an expired rest flips promptly even if the queued timer lags.
+AppState.addEventListener('change', (status) => {
+  if (status === 'active') {
+    syncRestDeadlineTimer(useActiveWorkoutStore.getState().rest);
+  }
+});
+
+let notificationActionsSubscription: ReturnType<
+  typeof addNotificationResponseListener
+> | null = null;
+
+/**
+ * Wires the rest notification's "Complete Set" action to the store. The press
+ * is handled in the background — the app does not open — and the pressed
+ * notification is dismissed explicitly because Android leaves it in the tray
+ * after an action press. Called once from App startup; re-runs are no-ops.
+ */
+export function initWorkoutNotificationActions(): void {
+  if (notificationActionsSubscription != null) return;
+  notificationActionsSubscription = addNotificationResponseListener(
+    (response) => {
+      if (response.actionIdentifier !== COMPLETE_SET_ACTION) return;
+      const completed = useActiveWorkoutStore
+        .getState()
+        .completeActiveSetIfReady();
+      void addLog(
+        `[WorkoutNotificationAction] complete-set handled=${completed}`,
+        'DEBUG'
+      );
+      void dismissDeliveredNotification(
+        response.notification.request.identifier
+      );
+    }
+  );
+}
+
+/**
+ * Test-only helper — resets store state to initial data while preserving
+ * action references, and clears the persisted AsyncStorage entry.
+ */
+export function __resetActiveWorkoutStoreForTests(): void {
+  restInstanceCounter = 0;
+  notificationActionsSubscription?.remove();
+  notificationActionsSubscription = null;
+  useActiveWorkoutStore.setState({ ...initialData });
+  void AsyncStorage.removeItem(STORAGE_KEY);
+}

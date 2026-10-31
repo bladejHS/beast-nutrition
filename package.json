@@ -1,31 +1,17 @@
 {
-  "packageManager": "pnpm@10.33.4",
+  "name": "beast-nutrition",
+  "version": "2.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "husky",
-    "set-version": "node scripts/set-version.js",
-    "reset-dev": "./scripts/reset-dev.sh"
+    "dev": "vite",
+    "check": "tsc --noEmit",
+    "build": "npm run check && vite build && node scripts/sw.mjs",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "devDependencies": {
-    "husky": "^9.1.7",
-    "lint-staged": "^17.5.0",
-    "prettier": "3.9.10"
-  },
-  "lint-staged": {
-    "shared/**/*.{ts,json}": [
-      "npx prettier --write --log-level warn --ignore-path shared/.prettierignore"
-    ],
-    "SparkyFitnessFrontend/**/*.{ts,tsx}": [
-      "npx prettier --write --log-level warn --ignore-path SparkyFitnessFrontend/.prettierignore"
-    ],
-    "SparkyFitnessServer/**/*.{js,ts}": [
-      "npx prettier --write --log-level warn --ignore-path SparkyFitnessServer/.prettierignore"
-    ],
-    "SparkyFitnessMobile/**/*.{ts,tsx,js,jsx,mjs,cjs}": [
-      "npx prettier --write --log-level warn --ignore-path SparkyFitnessMobile/.prettierignore"
-    ]
-  },
-  "dependencies": {
-    "js-yaml": "^5.4.1"
+    "@types/node": "^24.19.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.5"
   }
 }

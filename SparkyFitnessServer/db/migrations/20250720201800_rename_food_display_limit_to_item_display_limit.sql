@@ -1,2 +1,0 @@
-ALTER TABLE user_preferences
-RENAME COLUMN food_display_limit TO item_display_limit;

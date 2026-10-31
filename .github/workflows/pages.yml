@@ -19,19 +19,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile --ignore-scripts --filter sparkyfitnessfrontend...
-      - run: pnpm exec vite build && cp dist/index.html dist/404.html
-        working-directory: SparkyFitnessFrontend
-        env:
-          VITE_BASE: /beast-nutrition/
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: SparkyFitnessFrontend/dist
+          path: dist
 
   deploy:
     needs: build

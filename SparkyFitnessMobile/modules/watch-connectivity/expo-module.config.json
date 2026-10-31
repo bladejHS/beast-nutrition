@@ -1,9 +1,0 @@
-{
-  "platforms": ["ios", "android"],
-  "ios": {
-    "modules": ["WatchConnectivityModule"]
-  },
-  "android": {
-    "modules": ["expo.modules.watchconnectivity.WatchConnectivityModule"]
-  }
-}

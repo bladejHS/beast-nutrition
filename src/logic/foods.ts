@@ -7,10 +7,14 @@ export interface Food {
   /** Per 100 g. */
   kcal: number; p: number; c: number; f: number; fiber: number; sugar: number; sat: number; sodium: number;
   portions: [string, number][];
-  source: 'usda' | 'off' | 'mine';
+  /** Per 100 g, in MICRO_KEYS order; null = no data, never zero. */
+  micro?: (number | null)[];
+  source: 'usda' | 'off' | 'mine' | 'spd';
+  /** Allergens printed by the producer. */
+  allergens?: string;
 }
 
-type Row = [number, string, number, number, number, number, number, number, number, number, number, [string, number][]];
+type Row = [number, string, number, number, number, number, number, number, number, number, number, [string, number][], (number | null)[]];
 interface Raw { cats: string[]; ro: [number, string][]; foods: Row[] }
 
 /** Romanian word to the USDA word it means, so Romanian search reaches all 7,793 foods. */
@@ -40,9 +44,20 @@ export function parseDb(raw: Raw): Food[] {
   const ro = new Map(raw.ro);
   const list = raw.foods.map((r): Food => ({
     id: `u${r[0]}`, name: ro.get(r[0]) ?? r[1], en: r[1], cat: raw.cats[r[2]] ?? '',
-    kcal: r[3], p: r[4], c: r[5], f: r[6], fiber: r[7], sugar: r[8], sat: r[9], sodium: r[10], portions: r[11], source: 'usda',
+    kcal: r[3], p: r[4], c: r[5], f: r[6], fiber: r[7], sugar: r[8], sat: r[9], sodium: r[10], portions: r[11], micro: r[12], source: 'usda',
   }));
   return list;
+}
+
+export interface MenuRow { n: string; k: number; p: number; c: number; f: number; s: number; z: number; sare: number; g: number | null; u: string; b: number | null; a: string }
+
+/** The Splendid Chicken menu: values per 100 g or ml, as declared by the restaurant. It declares no fiber. */
+export function parseMenu(rows: MenuRow[]): Food[] {
+  return rows.map((r, i) => ({
+    id: `s${i}`, name: r.n, cat: 'Splendid Chicken', kcal: r.k, p: r.p, c: r.c, f: r.f, fiber: 0, sugar: r.z, sat: r.s,
+    sodium: Math.round((r.sare / 2.5) * 1000), source: 'spd', allergens: r.a,
+    portions: r.g ? [[r.b && r.b > 1 ? `${r.b} buc. (${r.g} ${r.u})` : `1 porție (${r.g} ${r.u})`, r.g], ...(r.b && r.b > 1 ? [[`1 buc. (${Math.round(r.g / r.b)} ${r.u})`, Math.round(r.g / r.b)] as [string, number]] : [])] : [],
+  }));
 }
 
 export async function loadFoods(): Promise<Food[]> {
@@ -50,6 +65,8 @@ export async function loadFoods(): Promise<Food[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}foods.json`);
   if (!res.ok) throw new Error('Baza de alimente nu s-a încărcat.');
   db = parseDb(await res.json() as Raw);
+  const menu = await fetch(`${import.meta.env.BASE_URL}splendid.json`);
+  if (menu.ok) db = [...parseMenu(await menu.json() as MenuRow[]), ...db];
   return db;
 }
 

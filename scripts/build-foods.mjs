@@ -19,6 +19,9 @@ const UNITS = [[/^tbsp\b/i, 'lingură'], [/^tsp\b/i, 'linguriță'], [/^cups?\b/
   [/^pieces?\b/i, 'bucată'], [/^large\b/i, 'mare'], [/^medium\b/i, 'mediu'], [/^small\b/i, 'mic'],
   [/^serving\b/i, 'porție'], [/^fruit\b/i, 'bucată'], [/^egg\b/i, 'ou'], [/^bar\b/i, 'baton'], [/^scoop\b/i, 'măsură']];
 
+// Order must match MICRO_KEYS in src/logic/micros.ts; null = USDA has no value.
+const MICROS = ['320', '401', '328', '323', '430', '404', '405', '406', '415', '418', '417', '301', '304', '306', '307', '303', '309', '317', '305'];
+
 const src = JSON.parse(readFileSync(process.argv[2], 'utf8')).SRLegacyFoods;
 const round = (n, d = 1) => Math.round((n ?? 0) * 10 ** d) / 10 ** d;
 const cats = [...new Set(Object.values(CATS))];
@@ -44,7 +47,8 @@ const foods = src.map((f) => {
   return {
     desc: f.description,
     row: [f.ndbNumber, f.description, cats.indexOf(CATS[f.foodCategory.description]), round(kcal, 0), round(p), round(c),
-      round(g), round(nut(f, '291')), round(nut(f, '269')), round(nut(f, '606')), round(nut(f, '307'), 0), portions(f)],
+      round(g), round(nut(f, '291')), round(nut(f, '269')), round(nut(f, '606')), round(nut(f, '307'), 0), portions(f),
+      MICROS.map((id) => { const v = nut(f, id); return v == null ? null : round(v, 2); })],
   };
 });
 

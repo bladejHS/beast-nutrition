@@ -1,14 +1,16 @@
 import './styles.css';
 import { PRINCIPLES } from './content.ts';
 import {
-  bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, isBreakWeek, lbmKg, predictedMaintenance, shiftCarbsFat, targetFor,
+  bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, isBreakWeek, lbmKg, predictedMaintenance, shiftCarbsFat,
   type Pace, type Phase, type Profile, type Sex,
 } from './logic/calc.ts';
 import { byBarcode, isRomanian, loadFoods, search, searchBranded, type Food } from './logic/foods.ts';
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf, review, type CheckIn } from './logic/review.ts';
 import { dayMeals, entryFrom, load, MEALS, parseBackup, save, totals, type Entry, type State } from './logic/store.ts';
-
-type Tab = 'azi' | 'cantar' | 'plan' | 'minte';
+import { ctx, afterRender, type Tab } from './app.ts';
+import { dayFuel, fuelAction, fuelHtml, fuelBind, syncFuel } from './screens/fuel.ts';
+import { fastAction, fastChip, fastHtml, fastBind } from './screens/fast.ts';
+import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 
 const app = document.querySelector<HTMLElement>('#app')!;
 const sheet = document.querySelector<HTMLElement>('#sheet')!;
@@ -19,6 +21,7 @@ let tab: Tab = 'azi';
 const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 let date = localDate();
 let editing = false;
+let lastTab: Tab | '' = '';
 
 const esc = (v: unknown) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const n0 = (v: number) => Math.round(v).toLocaleString('ro-RO');
@@ -34,6 +37,7 @@ function toast(msg: string) {
 function commit() {
   if (!save(s)) toast('Browserul nu a putut salva. Fă un backup din Plan.');
 }
+ctx.get = () => s; ctx.commit = commit; ctx.toast = toast; ctx.render = () => render(); ctx.open = (h) => open(h); ctx.close = () => close(); ctx.today = () => localDate();
 
 const latestWeight = () => {
   const keys = Object.keys(s.weights).sort();
@@ -43,34 +47,38 @@ const latestWeight = () => {
 
 function render() {
   if (!s.profile || !s.plan || editing) { app.innerHTML = setupView(); bindSetup(); return; }
-  const views: Record<Tab, () => string> = { azi: todayView, cantar: scaleView, plan: planView, minte: mindView };
+  syncFuel();
+  const views: Record<Tab, () => string> = { azi: todayView, fuel: fuelHtml, post: fastHtml, cantar: () => scaleView() + bodyHtml(), plan: planView, minte: mindView };
+  const enter = tab !== lastTab;
+  lastTab = tab;
   app.innerHTML = `
     <header class="top">${wolf}<div><b>BEAST NUTRITION</b><small>${phaseName(s.plan.phase)}</small></div></header>
-    <main>${views[tab]()}</main>
-    <nav class="tabs">${(['azi', 'cantar', 'plan', 'minte'] as Tab[]).map((t) =>
-      `<button data-tab="${t}" class="${t === tab ? 'on' : ''}">${{ azi: 'Azi', cantar: 'Cântar', plan: 'Plan', minte: 'Mentalitate' }[t]}</button>`).join('')}</nav>`;
+    <main class="${enter ? 'enter' : ''}">${views[tab]()}</main>
+    <nav class="tabs">${(['azi', 'fuel', 'post', 'cantar', 'plan'] as Tab[]).map((t) =>
+      `<button data-tab="${t}" class="${t === tab || (t === 'plan' && tab === 'minte') ? 'on' : ''}">${{ azi: 'Azi', fuel: 'Fuel', post: 'Post', cantar: 'Corp', plan: 'Plan', minte: '' }[t]}</button>`).join('')}</nav>`;
+  afterRender(app);
+  fuelBind(); fastBind(); bodyBind();
 }
 
 const phaseName = (p: Phase) => ({ cut: 'Slăbire', maintain: 'Menținere', reverse: 'Reverse diet' }[p]);
 
 // ---- Today -----------------------------------------------------------------
 function bar(label: string, rank: number, val: number, min: number, max: number, unit: string, hint = '') {
-  const pct = Math.min(100, (val / (max || 1)) * 100);
+  const pct = Math.min(1, val / (max || 1));
   const done = val >= min;
   return `<div class="bar ${done ? 'done' : ''}"><div class="bar-h"><span><i>${rank}</i>${label}</span><b>${n0(val)}${min !== max ? ` / ${n0(min)}–${n0(max)}` : ` / ${n0(max)}`} ${unit}</b></div>
-    <div class="track"><div style="width:${pct}%"></div></div>${hint ? `<p class="hint">${hint}</p>` : ''}</div>`;
+    <div class="track"><div data-bar="${label}" data-to="${pct}"></div></div>${hint ? `<p class="hint">${hint}</p>` : ''}</div>`;
 }
 
 /** Calories of the current week compared to what the plan gave so far. */
 function weekBank() {
-  const plan = s.plan!;
   const start = mondayOf(date);
   let planned = 0, eaten = 0, logged = 0;
   for (let i = 0; i < 7; i++) {
     const d = addDays(start, i);
     if (d > localDate()) break;
     const k = totals(dayMeals(s, d)).kcal;
-    if (k > 0 || d === localDate()) { planned += targetFor(plan, d).kcal; eaten += k; logged++; }
+    if (k > 0 || d === localDate()) { planned += dayFuel(d).kcal; eaten += k; logged++; }
   }
   return { planned, eaten, logged, diff: eaten - planned };
 }
@@ -83,9 +91,8 @@ function coachLine(left: number, proteinLeft: number) {
 }
 
 function todayView() {
-  const plan = s.plan!;
-  const t = targetFor(plan, date);
-  const meals = dayMeals(s, date);
+  const t = dayFuel(date);
+  const meals = dayMeals(s, date).slice(0, Math.max(s.fuel.prefs.meals, ...dayMeals(s, date).map((m, i) => (m.length ? i + 1 : 0))));
   const sum = totals(meals);
   const left = t.kcal - sum.kcal;
   const pct = Math.min(1, sum.kcal / t.kcal);
@@ -95,8 +102,8 @@ function todayView() {
   <div class="datebar"><button data-day="-1" aria-label="Ziua anterioară">‹</button><span>${date === localDate() ? 'Azi, ' : ''}${esc(dayName(date))}</span><button data-day="1" aria-label="Ziua următoare">›</button></div>
   <section class="hero">
     <svg viewBox="0 0 120 120" class="ring" role="img" aria-label="${n0(sum.kcal)} din ${n0(t.kcal)} kcal"><circle cx="60" cy="60" r="52"/><circle class="v ${left < 0 ? 'over' : ''}" cx="60" cy="60" r="52" stroke-dasharray="${C * pct} ${C}"/></svg>
-    <div class="ring-t"><b>${n0(Math.abs(left))}</b><span>${left < 0 ? 'kcal peste' : 'kcal rămase'}</span></div>
-    <p class="tag ${t.kind}">${esc(t.label)} · ${n0(t.kcal)} kcal</p>
+    <div class="ring-t"><b data-count="left" data-to="${Math.abs(left)}">${n0(Math.abs(left))}</b><span>${left < 0 ? 'kcal peste' : 'kcal rămase'}</span></div>
+    <p class="tag ${t.kind}">${esc(t.label)} · ${n0(t.kcal)} kcal</p>${fastChip(date)}
   </section>
   <section class="card">
     ${bar('Calorii', 1, sum.kcal, t.kcal, t.kcal, 'kcal')}
@@ -134,7 +141,7 @@ function openAdd(i: number) {
   meal = i; mode = 'db';
   open(`<h2>${MEALS[i]}</h2>
     <div class="seg"><button data-mode="db" class="on">Alimente</button><button data-mode="brand">Produse de marcă</button></div>
-    <input id="q" type="search" placeholder="Caută: piept de pui, ovăz, banană…" autocomplete="off">
+    <input id="q" type="search" placeholder="Caută: piept de pui, ovăz, Chicken Tenders…" autocomplete="off">
     <div class="tools"><button class="ghost" data-scan>Cod de bare</button><button class="ghost" data-manual>Introdu manual</button></div>
     <div id="res"></div>`);
   showRecent();
@@ -175,7 +182,8 @@ function openQuantity(f: Food) {
     <label class="field">Cantitate (g)<input id="g" type="number" inputmode="decimal" value="${f.portions[0]?.[1] ?? 100}" min="1"></label>
     <div class="chips">${chips.map(([l, g]) => `<button data-g="${g}">${esc(l)}</button>`).join('')}</div>
     <div id="pv" class="preview"></div>
-    <p class="hint">Pe 100 g: ${n0(f.kcal)} kcal · fibre ${f.fiber} g · zahăr ${f.sugar} g · sare ${(f.sodium * 2.5 / 1000).toFixed(1)} g</p>
+    <p class="hint">Pe 100 g: ${n0(f.kcal)} kcal · ${f.source === 'spd' ? 'fibre nedeclarate' : `fibre ${f.fiber} g`} · zahăr ${f.sugar} g · sare ${(f.sodium * 2.5 / 1000).toFixed(1)} g</p>
+    ${f.allergens ? `<p class="warn">Alergeni: ${esc(f.allergens)}</p>` : ''}
     <button class="primary wide" id="addgo">Adaugă la ${MEALS[meal]}</button>`);
   const input = document.querySelector<HTMLInputElement>('#g')!;
   const paint = () => {
@@ -333,10 +341,11 @@ function planView() {
   <section class="card"><h2>Faza următoare</h2><p class="hint">Dieta nu se termină, se schimbă faza. Caloriile pornesc de la menținerile tale reale.</p>
     <div class="seg">${(['cut', 'maintain', 'reverse'] as Phase[]).filter((x) => x !== plan.phase).map((x) => `<button data-phase="${x}">${phaseName(x)}</button>`).join('')}</div></section>
   ${plan.adjustments.length ? `<section class="card"><h2>Ajustări</h2>${[...plan.adjustments].reverse().map((a) => `<div class="line"><span>${esc(a.date)} · ${esc(a.note)}</span><b>${a.pct > 0 ? '+' : ''}${a.pct}%</b><em>${n0(a.to)} kcal</em></div>`).join('')}</section>` : ''}
+  <button class="ghost wide" data-tab="minte">Mentalitate: cele 12 principii</button>
   <section class="card"><h2>Datele tale</h2><p class="hint">Totul stă doar în acest browser, fără cont și fără server. Ține un backup.</p>
     <div class="tools"><button class="ghost" data-export>Descarcă backup</button><label class="ghost file">Încarcă backup<input type="file" id="imp" accept="application/json"></label></div></section>
   <section class="card src"><h2>Surse</h2><p>Metoda: <i>Fat Loss Forever</i>, Layne Norton &amp; Peter Baker. Aplicația nu este afiliată autorilor.</p>
-    <p>Alimente: USDA FoodData Central, SR Legacy (domeniu public). Produse de marcă: Open Food Facts (ODbL).</p>
+    <p>Alimente: USDA FoodData Central, SR Legacy (domeniu public). Produse de marcă: Open Food Facts (ODbL). Meniul Splendid Chicken: declarația nutrițională SC Danadi SRL.</p>
     <p>Limita minimă de calorii (1.200/1.500 kcal) e o protecție a aplicației. Nu înlocuiește un medic sau un dietetician.</p></section>`;
 }
 
@@ -431,6 +440,7 @@ document.addEventListener('click', (ev) => {
   const el = (ev.target as HTMLElement).closest<HTMLElement>('button, [data-close]');
   if (!el) { if (ev.target === sheet) close(); return; }
   const d = el.dataset;
+  if (fuelAction(el) || fastAction(el) || bodyAction(el)) return;
   if (d['tab']) { tab = d['tab'] as Tab; render(); scrollTo(0, 0); }
   else if (d['day']) { date = addDays(date, Number(d['day'])); render(); }
   else if (d['add'] != null) openAdd(Number(d['add']));

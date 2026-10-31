@@ -127,7 +127,7 @@ test('maintenance from data', () => {
 
 const db = parseDb({
   cats: ['Băuturi', 'Lactate'], ro: [[1, 'Lapte 2%']],
-  foods: [[1, 'Milk, reduced fat', 1, 50, 3, 5, 2, 0, 5, 1, 40, []], [2, 'Milk, chocolate', 1, 80, 3, 10, 2, 1, 9, 1, 60, []], [3, 'Coffee, brewed', 0, 1, 0, 0, 0, 0, 0, 0, 2, []]],
+  foods: [[1, 'Milk, reduced fat', 1, 50, 3, 5, 2, 0, 5, 1, 40, [], []], [2, 'Milk, chocolate', 1, 80, 3, 10, 2, 1, 9, 1, 60, [], []], [3, 'Coffee, brewed', 0, 1, 0, 0, 0, 0, 0, 0, 2, [], []]],
 });
 
 test('Romanian search reaches USDA names and ranks Romanian names first', () => {

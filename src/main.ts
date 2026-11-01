@@ -337,6 +337,7 @@ function planView() {
     ${plan.phase === 'cut' ? `<div class="line"><span>Ritm țintă</span><b>${plan.ratePct}% / săpt.</b></div>` : ''}
     ${plan.breaks ? `<div class="line"><span>Pauze de dietă</span><b>${plan.breaks.on} săpt. deficit + ${plan.breaks.off} mențineri</b></div>` : ''}
     ${blocked ? `<p class="warn">${esc(blocked)} Cartea recomandă întâi un reverse diet.</p>` : ''}
+    ${plan.phase === 'cut' && cutSetup(p, plan.maintenance, plan.ratePct).floored ? `<p class="warn">Ținta a ajuns la limita minimă a aplicației: ritmul de ${plan.ratePct}% e prea mare pentru menținerile de ${n0(plan.maintenance)} kcal. Alege un ritm mai mic sau corectează menținerile.</p>` : ''}
     ${plan.phase === 'cut' && isBreakWeek(plan, localDate()) ? '<p class="coach">Săptămâna asta e pauză: mănânci la mențineri.</p>' : ''}
     <button class="ghost wide" data-edit>Schimbă datele și planul</button></section>
   <section class="card"><h2>Faza următoare</h2><p class="hint">Dieta nu se termină, se schimbă faza. Caloriile pornesc de la menținerile tale reale.</p>

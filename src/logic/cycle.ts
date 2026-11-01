@@ -1,7 +1,7 @@
 /* The week as the app sees it: the real training rated day by day, and the carbs of the protected plan shared
    out accordingly. Pure, so the rules about history can be tested. Past days never move. */
 import { targetFor, type DayTarget, type Plan, type Sex } from './calc.ts';
-import { weekFuel, type Factors, type FuelDay } from './carbs.ts';
+import { weekFuel, type Factors, type Frozen, type FuelDay } from './carbs.ts';
 import { addDays, mondayOf } from './review.ts';
 import type { Snap } from './store.ts';
 import { dayPlan, type DayPlan, type Demand, type Limits, type Training } from './training.ts';
@@ -22,8 +22,13 @@ export function plansFor(x: CycleIn, monday: string): Record<string, DayPlan> {
 
 export function cycleWeek(x: CycleIn, monday: string): { days: FuelDay[]; plans: Record<string, DayPlan> } {
   const plans = plansFor(x, monday);
-  const locked: Record<string, number> = {};
-  for (const d of Object.keys(plans)) if (d < x.today) locked[d] = x.snap[d]?.c ?? targetFor(x.plan, d).c;
+  const locked: Record<string, Frozen> = {};
+  for (const d of Object.keys(plans)) {
+    if (d >= x.today) continue;
+    const s = x.snap[d];
+    const c = targetFor(x.plan, d).c;
+    locked[d] = s ? { c: s.c, base: s.b ?? s.c, p: s.p, f: s.f } : { c, base: c };
+  }
   const demand = (d: string) => (d < x.today && x.snap[d]?.demand) || plans[d]!.rating.demand;
   return { plans, days: weekFuel(x.plan, monday, demand, x.factors, x.sex, locked) };
 }
@@ -42,7 +47,7 @@ export function freeze(x: CycleIn): { snaps: Record<string, Snap>; sig: string }
   const snaps: Record<string, Snap> = {};
   for (const d of days) {
     if (d.date > x.today || (d.date < x.today && x.snap[d.date])) continue;
-    snaps[d.date] = { c: d.c, kcal: d.kcal, p: d.p, f: d.f, demand: plans[d.date]!.rating.demand, reason: plans[d.date]!.rating.reason };
+    snaps[d.date] = { c: d.c, kcal: d.kcal, p: d.p, f: d.f, b: d.planC, demand: plans[d.date]!.rating.demand, reason: plans[d.date]!.rating.reason };
   }
   return { snaps, sig: days.filter((d) => d.date >= x.today).map((d) => `${d.date}:${d.demand}`).join('|') };
 }

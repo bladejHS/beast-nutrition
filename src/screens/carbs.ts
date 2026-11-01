@@ -1,6 +1,6 @@
 /* Carb Cycling: today's strategy first, then the week, then the engine behind it. */
 import { ctx, dayShort, esc, n0 } from '../app.ts';
-import { reconcile, type FuelDay } from '../logic/carbs.ts';
+import { dayBand, reconcile, type FuelDay } from '../logic/carbs.ts';
 import { status, windowFor } from '../logic/fasting.ts';
 import { weekday } from '../logic/calc.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
@@ -136,7 +136,7 @@ export function carbsHtml() {
   <section class="card"><label class="switch"><input type="checkbox" id="cyc" ${s.fuel.cycling ? 'checked' : ''}><i></i><span>Folosește distribuția în ținta zilnică</span></label>
     <p class="hint">${s.fuel.cycling ? `Pornit: caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal, se mută doar carbohidrații.` : `Oprit: ținta rămâne cea din plan. Pornit, azi ai avea ${day.c} g carbo.`} Nu e o metodă Layne Norton, e un calcul al aplicației peste metoda lui.</p></section>
   ${sessionCard(plans[today]!)}${around(today)}${calendar(shown.days, shown.plans)}
-  <p class="recon ${ok ? 'ok' : ''}">Săptămâna: ${n0(r.kcalFuel)} din ${n0(r.kcalPlan)} kcal și ${n0(r.carbsFuel)} din ${n0(r.carbsPlan)} g carbo. Proteine și grăsimi ${r.proteinSame && r.fatSame ? 'neschimbate' : 'diferite'}.</p>
+  <p class="recon ${ok ? 'ok' : ''}">Săptămâna: ${n0(r.kcalFuel)} din ${n0(r.kcalPlan)} kcal și ${n0(r.carbsFuel)} din ${n0(r.carbsPlan)} g carbo. Proteine și grăsimi ${r.proteinSame && r.fatSame ? 'neschimbate' : 'diferite'}.${ok ? '' : ' Diferența rămasă nu se mai recuperează, ca să nu încarce o singură zi.'}</p>
   <button class="ghost wide" data-f="sub" data-v="engine">Performance Fuel Engine</button>`;
 }
 
@@ -145,6 +145,7 @@ export function engineHtml() {
   const { days, plans } = fuelWeek(mondayOf(ctx.today()));
   const { r } = verify(days);
   const F = s.fuel.factors;
+  const band = dayBand(F);
   return `${back()}${banner('engine', 'Fuel Engine', 'Regulile care transformă antrenamentul în carbohidrați.')}
   <section class="card"><h2>Încărcarea săptămânii</h2>
     ${days.map((d) => `<div class="line"><span class="cap">${esc(dayShort(d.date))}</span><b>${plans[d.date]!.rating.load}</b><em><span class="dm ${d.demand}">${DEMAND_LABEL[d.demand]}</span></em></div>`).join('')}
@@ -152,7 +153,7 @@ export function engineHtml() {
   <section class="card"><h2>Praguri</h2><div class="grid2">
     <label class="field">HIGH de la<input type="number" min="10" max="200" data-limit="high" value="${s.fuel.limits.high}"></label>
     <label class="field">MODERATE de la<input type="number" min="5" max="150" data-limit="moderate" value="${s.fuel.limits.moderate}"></label></div></section>
-  <section class="card"><h2>Factori</h2><p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii.</p>
+  <section class="card"><h2>Factori</h2><p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii. Nicio zi nu iese din intervalul ${String(band.lo.toFixed(2)).replace('.', ',')}–${String(band.hi.toFixed(2)).replace('.', ',')} × carbohidrații din plan.</p>
     <div class="grid2">${LEVELS.map((k) => `<label class="field">${DEMAND_LABEL[k]}<input type="number" step="0.05" min="0.3" max="2" data-factor="${k}" value="${F[k]}"></label>`).join('')}</div>
     <label class="field">Ora obișnuită de antrenament<input type="time" id="thour" value="${s.fuel.trainingHour}"></label></section>
   <section class="card"><h2>Verificare</h2>

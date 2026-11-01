@@ -76,7 +76,7 @@ test('it also reconciles with high days and break weeks', () => {
 test('past days stay locked when the rest of the week is recalculated', () => {
   const p = plan();
   const before = weekFuel(p, '2026-11-02', demandOf, DEFAULT_FACTORS, 'm');
-  const locked = { '2026-11-02': before[0]!.c, '2026-11-03': before[1]!.c };
+  const locked = { '2026-11-02': { c: before[0]!.c, base: before[0]!.planC }, '2026-11-03': { c: before[1]!.c, base: before[1]!.planC } };
   const after = weekFuel(p, '2026-11-02', () => 'rest', DEFAULT_FACTORS, 'm', locked);
   assert.equal(after[0]!.c, before[0]!.c);
   assert.equal(after[1]!.c, before[1]!.c);

@@ -14,8 +14,8 @@ export interface Entry {
   from?: string;
 }
 
-/** What a day's fuel target was, frozen once the day is over. */
-export interface Snap { c: number; kcal: number; p: number; f: number; demand: Demand; reason: string }
+/** What a day's fuel target was, frozen once the day is over. `b`: the plan's carbs that day, missing on older snapshots. */
+export interface Snap { c: number; kcal: number; p: number; f: number; b?: number; demand: Demand; reason: string }
 
 export interface Fuel {
   cycling: boolean;

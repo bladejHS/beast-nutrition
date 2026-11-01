@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPlan, targetFor, type Plan, type Profile } from './calc.ts';
-import { DEFAULT_FACTORS, mealCarbShares, reconcile } from './carbs.ts';
+import { dayBand, DEFAULT_FACTORS, mealCarbShares, reconcile, weekFuel } from './carbs.ts';
 import { cycleWeek, freeze, targetOn, type CycleIn } from './cycle.ts';
 import { generateDay, macros, mealOptions, regenerate, type Meal, type Prefs } from './mealplan.ts';
 import { entryFrom, relog, totals, type Entry, type Snap } from './store.ts';
@@ -179,4 +179,88 @@ test('changing a logged meal changes the journal and what remains, and leaves th
   const gone = relog(smaller, 'meal-1', [], 0, true)!;
   assert.equal(gone.flat().length, 1);
   assert.equal(relog(base, 'older-meal', [a], 0, true), null, 'a meal logged without a link is not guessed at');
+});
+
+const WEEK = ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08'];
+const SUNDAY = WEEK[6]!;
+const planAt = (maintenance: number) => buildPlan(man, { phase: 'cut', startDate: '2026-10-26', ratePct: 0.6, carbShare: 0.7, maintenance, highDays: [], breaks: null, pace: 'c' });
+/** Lives the days up to `until` one by one, freezing each, as the app does when it is opened. */
+function live(until: string, base: Partial<CycleIn>): Record<string, Snap> {
+  const snap: Record<string, Snap> = {};
+  for (const today of WEEK.filter((d) => d <= until)) Object.assign(snap, freeze(input({ ...base, today, snap })).snaps);
+  return snap;
+}
+const inBand = (d: { c: number; planC: number }) => d.c >= d.planC * dayBand(DEFAULT_FACTORS).lo - 1 && d.c <= d.planC * dayBand(DEFAULT_FACTORS).hi + 1;
+
+test('raising the plan on Sunday does not pour the week into Sunday', () => {
+  const low = planAt(2300), mid = planAt(2800);
+  const snap = live(WEEK[5]!, { plan: low });
+  const days = cycleWeek(input({ plan: mid, today: SUNDAY, snap }), MONDAY).days;
+  assert.ok(days[6]!.c < 400, `Sunday ${days[6]!.c}`);
+  assert.ok(inBand(days[6]!));
+  assert.deepEqual(days.slice(0, 6).map((d) => d.c), WEEK.slice(0, 6).map((d) => snap[d]!.c), 'finished days stay');
+});
+
+test('lowering the plan on Sunday never gives a negative or starvation day', () => {
+  const mid = planAt(2800), low = planAt(2300);
+  const snap = live(WEEK[5]!, { plan: mid });
+  const sunday = cycleWeek(input({ plan: low, today: SUNDAY, snap }), MONDAY).days[6]!;
+  assert.ok(sunday.c > 100 && sunday.kcal >= 1500, JSON.stringify(sunday));
+  assert.ok(inBand(sunday));
+});
+
+test('finished days keep their own macros in the calendar after a plan change', () => {
+  const low = planAt(2300), mid = planAt(2800);
+  const snap = live(MONDAY, { plan: low });
+  const monday = cycleWeek(input({ plan: mid, today: '2026-11-03', snap }), MONDAY).days[0]!;
+  assert.deepEqual([monday.c, monday.kcal, monday.p, monday.f], [snap[MONDAY]!.c, snap[MONDAY]!.kcal, snap[MONDAY]!.p, snap[MONDAY]!.f]);
+});
+
+test('the week reconciles with the plan in force on each day, also across a plan change', () => {
+  const low = planAt(2300), mid = planAt(2800);
+  const snap = live(WEEK[3]!, { plan: low });
+  const r = reconcile(mid, cycleWeek(input({ plan: mid, today: WEEK[4]!, snap }), MONDAY).days);
+  assert.equal(r.carbsFuel, r.carbsPlan);
+  assert.equal(r.kcalFuel, r.kcalPlan);
+});
+
+test('snapshots saved before this rule are not paid back, so the current week heals at once', () => {
+  const mid = planAt(2800);
+  const old: Record<string, Snap> = {};
+  for (const d of WEEK.slice(0, 6)) old[d] = { c: 150, kcal: 1780, p: 185, f: 50, demand: 'low', reason: '' };
+  const sunday = cycleWeek(input({ plan: mid, today: SUNDAY, snap: old }), MONDAY).days[6]!;
+  assert.equal(sunday.c, mid.macros.c);
+});
+
+test('an ordinary week lived day by day stays on plan and inside the band', () => {
+  const snap = live(SUNDAY, {});
+  const days = cycleWeek(input({ today: '2026-11-09', snap }), MONDAY).days;
+  const r = reconcile(plan, days);
+  assert.equal(r.carbsFuel, r.carbsPlan);
+  assert.equal(r.kcalFuel, r.kcalPlan);
+  assert.ok(days.every(inBand), days.map((d) => d.c).join(' '));
+});
+
+test('no open day leaves its band, and what does not fit stays unplaced instead of landing on one day', () => {
+  const huge = { [WEEK[0]!]: { c: 900, base: 265 }, [WEEK[1]!]: { c: 900, base: 265 } };
+  const under = weekFuel(plan, MONDAY, () => 'moderate', DEFAULT_FACTORS, 'm', huge);
+  assert.ok(under.slice(2).every(inBand), under.map((d) => d.c).join(' '));
+  assert.ok(reconcile(plan, under).carbsFuel > reconcile(plan, under).carbsPlan);
+  const tiny = { [WEEK[0]!]: { c: 0, base: 265 }, [WEEK[1]!]: { c: 0, base: 265 } };
+  assert.ok(weekFuel(plan, MONDAY, () => 'moderate', DEFAULT_FACTORS, 'm', tiny).slice(2).every(inBand));
+});
+
+test('overrides changing every day, with the plan edited on the way, never give a silly day', () => {
+  const levels = ['high', 'moderate', 'low', 'rest'] as const;
+  for (let seed = 1; seed < 400; seed++) {
+    let n = seed;
+    const pick = (m: number) => { n = (n * 7919 + 13) % 104729; return n % m; };
+    const snap: Record<string, Snap> = {};
+    const plans = [planAt(2300), planAt(2800), planAt(3300)];
+    for (const today of WEEK) {
+      const x = input({ plan: plans[pick(3)]!, today, snap, overrides: Object.fromEntries(WEEK.map((d) => [d, levels[pick(4)]!])) });
+      for (const d of cycleWeek(x, MONDAY).days.filter((y) => !y.fixed)) assert.ok(d.c > 0 && d.kcal >= 1500 && inBand(d), `${seed} ${today} ${d.date} ${d.c} of ${d.planC}`);
+      Object.assign(snap, freeze(x).snaps);
+    }
+  }
 });

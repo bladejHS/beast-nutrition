@@ -74,6 +74,8 @@ export interface State {
   suppLog: Record<string, string[]>;
   measures: Measure[];
   reports: Record<string, Report>;
+  /** Date of the last backup downloaded. */
+  backedUp: string;
 }
 
 const KEY = 'beast-nutrition:v2';
@@ -82,7 +84,7 @@ export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, 
   fast: freshFasting(),
   fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [],
     mode: 'auto', sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, prefuel: true, cancelled: {}, feedback: {} },
-  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {} });
+  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '' });
 
 /** Saved states from older versions get the fields added since. */
 function withDefaults(d: Partial<State>): State {
@@ -91,13 +93,19 @@ function withDefaults(d: Partial<State>): State {
 }
 
 export function load(): State {
+  let raw: string | null = null;
   try {
-    const raw = localStorage.getItem(KEY);
+    raw = localStorage.getItem(KEY);
     return raw ? withDefaults(JSON.parse(raw) as Partial<State>) : empty();
   } catch {
+    // A damaged save is kept aside, so the empty state that follows cannot overwrite it.
+    try { if (raw) localStorage.setItem(`${KEY}:damaged`, raw); } catch { /* storage refused: nothing more can be done */ }
     return empty();
   }
 }
+
+/** True when a damaged save was set aside. */
+export const hasDamagedSave = () => { try { return localStorage.getItem(`${KEY}:damaged`) != null; } catch { return false; } };
 
 /** False when the browser refused to save. */
 export function save(s: State): boolean {
@@ -109,9 +117,14 @@ export function save(s: State): boolean {
   }
 }
 
+/** Refuses a file that would leave the app unusable, before it replaces anything. */
 export function parseBackup(text: string): State {
-  const data = JSON.parse(text) as Partial<State>;
-  if (data.v !== 1 || typeof data.days !== 'object') throw new Error('Fișierul nu este un backup BEAST NUTRITION.');
+  let data: Partial<State>;
+  try { data = JSON.parse(text) as Partial<State>; } catch { throw new Error('Fișierul nu este un backup BEAST NUTRITION.'); }
+  if (data?.v !== 1 || typeof data.days !== 'object' || data.days === null) throw new Error('Fișierul nu este un backup BEAST NUTRITION.');
+  const macros = data.plan?.macros, who = data.profile;
+  if (data.plan != null && !(macros && macros.kcal > 0 && macros.p > 0)) throw new Error('Backup-ul nu are un plan valid.');
+  if (who != null && !(who.age > 0 && who.weightKg > 0 && who.bf > 0)) throw new Error('Backup-ul nu are un profil valid.');
   return withDefaults(data);
 }
 

@@ -137,7 +137,7 @@ test('timing splits the day\'s own macros and never adds to them', () => {
 
 test('the pre-workout advice follows tolerance, the meal gap and personal settings', () => {
   assert.equal(timing({ ...base, tolerance: 'low' }).pre!.idealGap, 180);
-  assert.match(timing({ ...base, tolerance: 'low' }).pre!.note, /mai mică/);
+  assert.match(timing({ ...base, tolerance: 'low' }).pre!.note, /ușor de digerat/);
   assert.equal(timing({ ...base, gap: 60 }).pre!.idealGap, 60);
   const close = timing({ ...base, start: '15:30' }).pre!;
   assert.ok(close.tooClose);
@@ -155,7 +155,9 @@ test('training before the first meal has no pre-workout meal and the first meal 
 
 test('recovery looks at tomorrow and at the user\'s real sweat rate', () => {
   assert.equal(timing(base).post!.urgent, false);
-  assert.equal(timing({ ...base, tomorrow: 'high' }).post!.urgent, true);
+  assert.equal(timing({ ...base, tomorrow: 'high' }).post!.urgent, false, 'a day away is not a hurry');
+  assert.equal(timing({ ...base, tomorrow: 'high', nextGapMin: 1400 }).post!.urgent, false);
+  assert.equal(timing({ ...base, tomorrow: 'high', nextGapMin: 420 }).post!.urgent, true);
   assert.equal(timing(base).post!.litres, null);
   assert.equal(timing({ ...base, sweatRate: 1 }).post!.litres, 0.9);
   assert.equal(timing({ ...base, trainingMeal: null }).pre, null);

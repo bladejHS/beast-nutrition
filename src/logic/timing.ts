@@ -16,6 +16,31 @@ export function mealTimes(start: string, eatMin: number, n: number): string[] {
   return Array.from({ length: n }, (_, i) => toTime(Math.round((toMin(start) + (n > 1 ? (eatMin * 0.9 * i) / (n - 1) : 0)) / 5) * 5));
 }
 
+/** How far apart meals stay when training pushes one of them later, in minutes. */
+const MEAL_SPACING = 90;
+
+/**
+ * A meal that would fall during training moves to just after it, and the meals behind it keep their order.
+ * `moved`: the first meal that had to move, null when none did.
+ */
+export function aroundSession(times: string[], start: string, minutes: number): { times: string[]; moved: number | null } {
+  const from = toMin(start), to = from + minutes;
+  const out = [...times];
+  let moved: number | null = null;
+  for (let i = 0; i < out.length; i++) {
+    const at = toMin(out[i]!);
+    if (at > from && at < to + 15) { out[i] = toTime(Math.ceil((to + 20) / 5) * 5); moved ??= i; }
+    else if (moved != null && at < toMin(out[i - 1]!) + MEAL_SPACING) out[i] = toTime(toMin(out[i - 1]!) + MEAL_SPACING);
+  }
+  return { times: out, moved };
+}
+
+/** What one meal gets of the day: protein evenly, carbs and fat by their shares. */
+export function mealGoal(day: { p: number; c: number; f: number }, n: number, i: number, shares: number[], fatShares?: number[]) {
+  const p = Math.round(day.p / n), c = Math.round(day.c * shares[i]!), f = Math.round(day.f * (fatShares?.[i] ?? 1 / n));
+  return { p, c, f, kcal: p * 4 + c * 4 + f * 9 };
+}
+
 /** Water in the hours before training, from body weight: 5–7 ml/kg (ACSM, Sawka 2007). */
 export const waterBefore = (kg: number) => [Math.round((kg * 5) / 50) * 50, Math.round((kg * 7) / 50) * 50] as const;
 
@@ -29,7 +54,7 @@ export function sportRows(day: { p: number; c: number; f: number }, kg: number, 
   const dose = day.p / meals;
   return [
     { label: 'Carbohidrați', value: `${per(day.c)} g/kg`, ref: `${lo}–${hi} g/kg`, ok: day.c / kg >= lo },
-    { label: 'Proteină pe masă', value: `${Math.round(dose)} g`, ref: `peste ${Math.round(kg * 0.25)} g`, ok: dose >= kg * 0.25 },
+    { label: 'Proteină pe masă', value: `${Math.round(dose)} g`, ref: `peste ${Math.round(kg * 0.4)} g`, ok: dose >= kg * 0.4 },
     { label: 'Grăsimi', value: `${per(day.f)} g/kg`, ref: 'peste 0,5 g/kg', ok: day.f / kg >= 0.5 },
   ];
 }
@@ -41,7 +66,7 @@ export function intraAdvice(sessions: Session[], tolerance: Tolerance, weights?:
   const minutes = sessions.filter((s) => weight(s, weights) >= 0.6).reduce((a, s) => a + s.min, 0);
   const none = (level: Intra['level'], text: string): Intra => ({ level, minutes, gLow: 0, gHigh: 0, total: 0, text });
   if (minutes < 45) return none('none', 'Sub 45 de minute solicitante nu ai nevoie de carbohidrați în timpul efortului. Apă.');
-  if (minutes < 75) return none('small', 'Nu sunt necesari. Dacă simți că te ajută, ajung cantități mici sau o clătire a gurii cu o băutură cu carbohidrați.');
+  if (minutes < 75) return none('small', 'Nu sunt necesari. Dacă ultima masă a fost acum mult timp, ajung cantități mici.');
   const gHigh = minutes < 90 || tolerance === 'low' ? 30 : 60;
   const total = Math.round((gHigh * minutes) / 60);
   if (minutes < 90) return { level: 'optional', minutes, gLow: 0, gHigh, total, text: `Opțional: până la ${gHigh} g pe oră, dacă îi tolerezi bine.` };
@@ -60,6 +85,8 @@ export interface TimingIn {
   tolerance: Tolerance; gap: number;
   /** Class of tomorrow, null when unknown. */
   tomorrow: Demand | null;
+  /** Minutes from the end of this session to the next hard one, when known. */
+  nextGapMin?: number | null;
   /** Average sweat rate in L/h, from the user's own tests. */
   sweatRate: number | null;
   weights?: Weights;
@@ -72,7 +99,7 @@ export function timing(x: TimingIn): Timing {
   const start = toMin(x.start);
   const end = start + minutes;
   const n = x.times.length;
-  const slot = (i: number) => ({ p: Math.round(x.day.p / n), c: Math.round(x.day.c * x.shares[i]!), f: Math.round(x.day.f * (x.fatShares?.[i] ?? 1 / n)), slot: i, mealTime: x.times[i]! });
+  const slot = (i: number) => { const { p, c, f } = mealGoal(x.day, n, i, x.shares, x.fatShares); return { p, c, f, slot: i, mealTime: x.times[i]! }; };
   const base = { start: x.start, end: toTime(end), minutes, intra: intraAdvice(x.sessions, x.tolerance, x.weights), hasSession: real.length > 0 };
   if (x.trainingMeal == null) return { ...base, pre: null, post: null };
   const tm = x.trainingMeal;
@@ -86,17 +113,18 @@ export function timing(x: TimingIn): Timing {
     const snackC = far ? Math.min(30, Math.round(s.c * 0.4)) : 0;
     const note = tooClose ? 'Masa e prea aproape de antrenament: mut-o mai devreme sau alege varianta ușoară.'
       : far ? 'Masa e departe de antrenament: o gustare ușoară înainte ajută, iar carbohidrații ei ies din ținta zilei.'
-        : gapMin < idealGap ? 'Alege o masă mai mică și ușor de digerat, cu puține grăsimi și fibre.'
+        : gapMin < idealGap ? 'Alege ceva ușor de digerat, cu puține grăsimi și fibre.'
           : 'Timp suficient pentru o masă normală, ușor de digerat.';
     pre = { ...s, gapMin, idealGap, snackTime: far ? toTime(start - 45) : null, snackC, tooClose, note };
   }
   let post: Post | null = null;
   if (tm + 1 < n) {
     const s = slot(tm + 1);
-    const urgent = x.tomorrow === 'high';
+    // A fast refill only matters when the next hard session is under 8 hours away; over a day the total decides.
+    const urgent = x.tomorrow === 'high' && (x.nextGapMin ?? Infinity) < 480;
     post = {
       ...s, afterMin: toMin(s.mealTime) - end, urgent,
-      note: urgent ? 'Mâine urmează o zi HIGH, așa că nu sări această masă: proteină și carbohidrați cât mai curând după antrenament.' : 'Nu e nevoie de grabă: contează totalul zilei, iar următoarea masă normală e suficientă.',
+      note: urgent ? 'Următoarea sesiune grea e la mai puțin de 8 ore, așa că nu sări această masă: proteină și carbohidrați cât mai curând.' : 'Nu e nevoie de grabă: contează totalul zilei, iar următoarea masă normală e suficientă.',
       litres: x.sweatRate != null ? Math.round((x.sweatRate * minutes) / 6) / 10 : null,
     };
   }

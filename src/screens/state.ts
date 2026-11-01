@@ -6,8 +6,8 @@ import { cycleWeek, freeze, rateDay, targetOn, type CycleIn } from '../logic/cyc
 import { windowFor } from '../logic/fasting.ts';
 import { loadFoods, type Food } from '../logic/foods.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
-import { mealTimes, timing, type Timing } from '../logic/timing.ts';
-import { readTraining, type DayPlan, type Demand, type Rules, type Training } from '../logic/training.ts';
+import { aroundSession, mealTimes, timing, type Timing } from '../logic/timing.ts';
+import { readTraining, weight, type DayPlan, type Demand, type Rules, type Session, type Training } from '../logic/training.ts';
 import { trainingFluid } from '../logic/wellness.ts';
 
 /** One reading per render: a long training log takes real time to parse, and the screens ask for it many times. */
@@ -69,7 +69,7 @@ export function syncFuel() {
   const changed = Object.entries(snaps).some(([d, v]) => JSON.stringify(s.fuel.snap[d]) !== JSON.stringify(v));
   Object.assign(s.fuel.snap, snaps);
   if (changed) { ctx.commit(); freshFuel(); }
-  if (s.fuel.sig && s.fuel.sig.slice(0, 10) === sig.slice(0, 10) && s.fuel.sig !== sig) notice.text = 'Antrenamentele s-au schimbat, așa că zilele rămase au fost recalculate. Totalul săptămânii e același.';
+  if (s.fuel.sig && s.fuel.sig.slice(0, 10) === sig.slice(0, 10) && s.fuel.sig !== sig) notice.text = 'Antrenamentele s-au schimbat, așa că zilele rămase au fost recalculate.';
   if (s.fuel.sig !== sig) { s.fuel.sig = sig; ctx.commit(); }
 }
 
@@ -77,34 +77,49 @@ export const latestKg = () => { const s = ctx.get(); return Object.entries(s.wei
 
 export const trainingTime = (date: string) => { const f = ctx.get().fuel; return f.times[weekday(date)] || f.trainingHour; };
 
-/** Meal times, the meal before training (-1 = training comes first), its tags and each meal's share of the carbs. */
+/** The sessions of a day that really count: not cancelled, with a duration and an effort. */
+export function sessionsOn(date: string, t = training()): Session[] {
+  const s = ctx.get();
+  const off = s.fuel.cancelled[date] ?? [];
+  return dayRating(date, t).planned.filter((x) => !off.includes(x.id) && x.min > 0 && weight(x, s.fuel.weights) > 0);
+}
+
+/**
+ * Meal times, the meal before training (-1 = training comes first), its tags and each meal's share of the carbs.
+ * A meal that would fall during a hard session moves to just after it. `outside`: that pushed it past the fasting window.
+ */
 export function mealSlots(date: string) {
   const s = ctx.get();
-  const n = s.fuel.prefs.meals;
+  const n = Math.min(4, s.fuel.prefs.meals);
   const w = windowFor(s.fast, weekday(date));
-  const times = mealTimes(w?.start ?? '08:00', w ? w.eatMin : 720, n);
   const demand: Demand = (s.fuel.cycling ? fuelWeek(mondayOf(date)).days.find((d) => d.date === date)?.demand : undefined) ?? dayRating(date).rating.demand;
   const start = trainingTime(date);
+  const easy = demand === 'rest' || demand === 'low';
+  const placed = aroundSession(mealTimes(w?.start ?? '08:00', w ? w.eatMin : 720, n), start, easy ? 0 : sessionsOn(date).reduce((a, x) => a + x.min, 0));
+  const times = placed.times;
   const before = times.reduce((best, x, i) => (x <= start ? i : best), -1);
-  const trainingMeal = demand === 'rest' || demand === 'low' ? null : before;
+  const trainingMeal = easy ? null : before;
   const tags = times.map((_, i) => (trainingMeal == null ? '' : i === trainingMeal ? 'Înainte de antrenament' : i === trainingMeal + 1 ? 'După antrenament' : ''));
-  return { times, tags, demand, trainingMeal, shares: mealCarbShares(n, trainingMeal, demand), fatShares: mealFatShares(n, trainingMeal, demand) };
+  return { times, tags, demand, trainingMeal, shares: mealCarbShares(n, trainingMeal, demand), fatShares: mealFatShares(n, trainingMeal, demand), outside: !!w && placed.moved != null && times.some((x) => x > w.end) };
 }
 
 export function timingFor(date: string): Timing {
   const s = ctx.get();
   const t = training();
   const sl = mealSlots(date);
-  const off = s.fuel.cancelled[date] ?? [];
   const next = addDays(date, 1);
+  const [h = 0, m = 0] = trainingTime(date).split(':').map(Number);
+  const [nh = 0, nm = 0] = trainingTime(next).split(':').map(Number);
+  const minutes = sessionsOn(date, t).reduce((a, x) => a + x.min, 0);
   return timing({
-    start: trainingTime(date), sessions: dayRating(date, t).planned.filter((x) => !off.includes(x.id)), demand: sl.demand, day: dayFuel(date), times: sl.times, shares: sl.shares, fatShares: sl.fatShares, trainingMeal: sl.trainingMeal,
+    nextGapMin: nh * 60 + nm + 1440 - (h * 60 + m + minutes),
+    start: trainingTime(date), sessions: sessionsOn(date, t), demand: sl.demand, day: dayFuel(date), times: sl.times, shares: sl.shares, fatShares: sl.fatShares, trainingMeal: sl.trainingMeal,
     tolerance: s.fuel.tolerance, gap: s.fuel.preGap, tomorrow: fuelWeek(mondayOf(next), t).days.find((d) => d.date === next)?.demand ?? null, sweatRate: trainingFluid(60, s.sweat)?.rate ?? null, weights: s.fuel.weights,
   });
 }
 
 /** The food database, loaded once when first needed. */
-export const pantry = { foods: [] as Food[], map: new Map<string, Food>() };
+export const pantry = { foods: [] as Food[], map: new Map<string, Food>(), failed: false };
 export async function loadPantry() {
   if (pantry.foods.length) return;
   pantry.foods = await loadFoods();

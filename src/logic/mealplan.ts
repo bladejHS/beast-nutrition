@@ -23,13 +23,13 @@ const TEMPLATES: Template[] = [
   { name: 'Ovăz cu whey și fructe', sweet: true, cook: 5, steps: 'Fierbe ovăzul în apă, ia-l de pe foc, amestecă whey-ul, adaugă fructele și nucile.', protein: ['Whey (proteină din zer)'], carb: ['Ovăz fulgi, crud'], fat: ['Nuci', 'Migdale'], veg: ['Afine', 'Banană', 'Căpșuni'] },
   { name: 'Iaurt grecesc cu fructe', sweet: true, cook: 3, steps: 'Pune iaurtul într-un bol, adaugă fructele, mierea și semințele.', protein: ['Iaurt grecesc degresat', 'Iaurt grecesc 2%'], carb: ['Miere', 'Banană'], fat: ['Semințe de chia', 'Migdale'], veg: ['Zmeură', 'Afine', 'Căpșuni'] },
   { name: 'Omletă cu pâine și legume', sweet: false, cook: 10, steps: 'Bate albușurile cu ouăle, gătește-le în tigaie cu uleiul, servește cu pâine și legume.', protein: ['Albuș de ou'], carb: ['Pâine integrală', 'Pâine de secară'], fat: ['Ou întreg, crud', 'Ulei de măsline'], veg: ['Roșii', 'Ardei gras roșu', 'Spanac crud'] },
-  { name: 'Pui cu orez și broccoli', sweet: false, cook: 25, steps: 'Fierbe orezul, gătește puiul la tigaie sau la cuptor, fierbe broccoli, adaugă uleiul la final. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Piept de pui, gătit'], carb: ['Orez alb fiert', 'Orez brun fiert'], fat: ['Ulei de măsline'], veg: ['Broccoli fiert', 'Fasole verde'] },
+  { name: 'Pui cu orez și legume', sweet: false, cook: 25, steps: 'Fierbe orezul, gătește puiul la tigaie sau la cuptor, fierbe legumele, adaugă uleiul la final. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Piept de pui, gătit'], carb: ['Orez alb fiert', 'Orez brun fiert'], fat: ['Ulei de măsline'], veg: ['Broccoli fiert', 'Fasole verde'] },
   { name: 'Curcan cu cartofi și salată', sweet: false, cook: 30, steps: 'Coace curcanul și cartofii, amestecă salata cu uleiul. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Piept de curcan, gătit'], carb: ['Cartofi la cuptor', 'Cartofi fierți', 'Cartofi dulci la cuptor'], fat: ['Ulei de măsline'], veg: ['Salată verde', 'Castraveți', 'Roșii'] },
   { name: 'Vită cu paste și legume', sweet: false, cook: 20, heavy: true, steps: 'Fierbe pastele, rumenește carnea, adaugă legumele și amestecă.', protein: ['Carne tocată de vită 90%, gătită'], carb: ['Paste fierte'], fat: ['Parmezan', 'Ulei de măsline'], veg: ['Dovlecei', 'Ardei gras roșu', 'Ciuperci'] },
-  { name: 'Somon cu cartofi și legume', sweet: false, cook: 25, heavy: true, steps: 'Coace somonul și cartofii, fierbe legumele la abur.', protein: ['Somon gătit'], carb: ['Cartofi fierți', 'Cuscus fiert'], fat: [], veg: ['Broccoli fiert', 'Conopidă', 'Morcovi'] },
-  { name: 'Ton cu quinoa și legume', sweet: false, cook: 15, steps: 'Fierbe quinoa, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa fiartă', 'Orez alb fiert'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
+  { name: 'Somon cu garnitură și legume', sweet: false, cook: 25, heavy: true, steps: 'Coace somonul, pregătește garnitura, fierbe legumele la abur.', protein: ['Somon gătit'], carb: ['Cartofi fierți', 'Cuscus fiert'], fat: [], veg: ['Broccoli fiert', 'Conopidă', 'Morcovi'] },
+  { name: 'Ton cu garnitură și legume', sweet: false, cook: 15, steps: 'Fierbe garnitura, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa fiartă', 'Orez alb fiert'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
   { name: 'Brânză de vaci cu pâine și legume', sweet: false, cook: 5, steps: 'Pune brânza pe farfurie, servește cu pâine și legume proaspete.', protein: ['Brânză de vaci'], carb: ['Pâine integrală'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Roșii', 'Castraveți'] },
-  { name: 'Linte cu pui și orez', sweet: false, cook: 25, heavy: true, steps: 'Fierbe lintea și orezul, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, gătit'], carb: ['Linte fiartă', 'Năut fiert'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
+  { name: 'Pui cu leguminoase', sweet: false, cook: 25, heavy: true, steps: 'Fierbe leguminoasele, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, gătit'], carb: ['Linte fiartă', 'Năut fiert'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
 ];
 
 export const PAIRS: Record<Role, string[]> = {
@@ -214,9 +214,24 @@ export function substitute(meal: Meal, index: number, next: Food, db: Map<string
   return { ...meal, items: solve(items, { p: old.p, c: old.c, f: old.f }, db) };
 }
 
-export function alternatives(role: Role, current: string, foods: Food[], prefs: Prefs): Food[] {
+/** Foods that belong in a sweet bowl, and foods that belong next to meat and vegetables. */
+const SWEET = new Set(['Ovăz fulgi, crud', 'Banană', 'Miere', 'Whey (proteină din zer)', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Afine', 'Căpșuni', 'Zmeură', 'Nuci', 'Migdale', 'Semințe de chia']);
+const OATS = 'Ovăz fulgi, crud';
+const WHEY = 'Whey (proteină din zer)';
+
+/**
+ * What can replace a food in a meal. The user's rules hold here too: oats only next to whey, and a meal stays
+ * sweet or savory. `inMeal`: the foods the meal keeps, by name.
+ */
+export function alternatives(role: Role, current: string, foods: Food[], prefs: Prefs, inMeal: string[] = []): Food[] {
   const words = banned(prefs);
-  return PAIRS[role].map((n) => foods.find((f) => f.name === n)).filter((f): f is Food => !!f && f.id !== current && allowed(f, words));
+  const sweetMeal = inMeal.some((n) => SWEET.has(n)) && inMeal.every((n) => SWEET.has(n));
+  const fits = (n: string) => {
+    if (n === OATS && !inMeal.includes(WHEY)) return false;
+    if (inMeal.includes(OATS) && role === 'protein') return n === WHEY;
+    return !inMeal.length || SWEET.has(n) === sweetMeal;
+  };
+  return PAIRS[role].filter(fits).map((n) => foods.find((f) => f.name === n)).filter((f): f is Food => !!f && f.id !== current && allowed(f, words));
 }
 
 export function shoppingList(days: Meal[][], db: Map<string, Food>) {

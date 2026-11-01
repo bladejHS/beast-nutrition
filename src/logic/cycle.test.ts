@@ -156,9 +156,9 @@ test('with every meal logged nothing is regenerated', () => {
 
 test('options for a meal are sized to the same macros and keep the exclusions', () => {
   const goal = { p: 45, c: 80, f: 12 };
-  const list = mealOptions(goal, pantry, prefs, '16:00', 'Înainte de antrenament', 1, 'Pui cu orez și broccoli');
+  const list = mealOptions(goal, pantry, prefs, '16:00', 'Înainte de antrenament', 1, 'Pui cu orez și legume');
   assert.ok(list.length >= 2);
-  assert.ok(list.every((m) => m.name !== 'Pui cu orez și broccoli' && m.tag === 'Înainte de antrenament' && m.time === '16:00'));
+  assert.ok(list.every((m) => m.name !== 'Pui cu orez și legume' && m.tag === 'Înainte de antrenament' && m.time === '16:00'));
   const best = macros(list[0]!.items, db);
   assert.ok(Math.abs(best.p - goal.p) < 8 && Math.abs(best.c - goal.c) < 12, JSON.stringify(best));
   const safe = mealOptions(goal, pantry, { ...prefs, allergies: 'somon, curcan' }, '16:00', '', 1);

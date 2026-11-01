@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#05070b">
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex, nofollow">
-<meta name="description" content="Nutriție după Layne Norton: calorii, proteine, fibre, media săptămânii și ajustări din date.">
+<meta name="description" content="Nutriție pentru performanță: ce mănânci azi, cum urmează antrenamentele și ajustări din datele tale.">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Beast Nutrition">
@@ -15,10 +15,11 @@
 <link rel="icon" href="favicon.ico">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preload" href="splash/emblem.webp" as="image" type="image/webp">
-<link rel="preload" href="fonts/barlow-condensed-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/barlow-condensed-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/barlow-500.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-@font-face{font-family:'Barlow Condensed';font-style:normal;font-display:swap;font-weight:700 900;src:url(fonts/barlow-condensed-latin-800-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F}
-@font-face{font-family:'Montserrat';font-style:normal;font-display:swap;font-weight:100 900;src:url(fonts/montserrat-latin-wght-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F}
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-display:swap;font-weight:700;src:url(fonts/barlow-condensed-700.woff2) format('woff2')}
+@font-face{font-family:'Barlow';font-style:normal;font-display:swap;font-weight:600;src:url(fonts/barlow-600.woff2) format('woff2')}
 html,body{margin:0;background:#05070b;color:#f2f6fc}
 /* BEAST AWAKENING, the Beast Nutrition cut, about 2.5 s. 0–.4 darkness, navy smoke, slow dust; .4–.9 an electric streak reveals the wolf;
    .9–1.5 the wolf comes up while the fuel ring fills with the plan's own protein, carbs and fat; 1.5–2 BEAST NUTRITION and the tagline;
@@ -56,14 +57,14 @@ html,body{margin:0;background:#05070b;color:#f2f6fc}
 .sp-sparks i{position:absolute;width:15px;height:1.5px;border-radius:2px;background:linear-gradient(90deg,transparent,#48cfff);opacity:0;transform:rotate(var(--a))}
 .sp-go .sp-sparks i{animation:sp-spark .42s ease-out var(--d) both}
 .sp-id{position:relative;display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px)}
-.sp-name{margin:0;font:800 clamp(30px,10vw,66px)/.95 'Barlow Condensed','Arial Narrow',Impact,sans-serif;letter-spacing:.1em;margin-right:-.1em;text-transform:uppercase;white-space:nowrap;background:linear-gradient(180deg,#f2f6fc 28%,#9fb0c6 92%);-webkit-background-clip:text;background-clip:text;color:transparent;opacity:0;clip-path:inset(0 100% 0 0)}
+.sp-name{margin:0;font:700 clamp(30px,10vw,66px)/.95 'Barlow Condensed','Arial Narrow',Impact,sans-serif;letter-spacing:.1em;margin-right:-.1em;text-transform:uppercase;white-space:nowrap;background:linear-gradient(180deg,#f2f6fc 28%,#9fb0c6 92%);-webkit-background-clip:text;background-clip:text;color:transparent;opacity:0;clip-path:inset(0 100% 0 0)}
 .sp-name span{background:linear-gradient(180deg,#48cfff,#1677ff 78%);-webkit-background-clip:text;background-clip:text}
 .sp-rule{display:block;width:min(62vw,340px);height:1px;background:linear-gradient(90deg,transparent,#1677ff 22%,#48cfff 50%,#1677ff 78%,transparent);transform:scaleX(0);opacity:0}
-.sp-tag{margin:0;font:700 clamp(10.5px,2.9vw,14px)/1.2 'Montserrat',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#8b97a8;white-space:nowrap;opacity:0;transform:translateY(6px)}
+.sp-tag{margin:0;font:600 clamp(11px,3vw,14px)/1.2 'Barlow',system-ui,sans-serif;letter-spacing:.16em;margin-right:-.16em;color:#b9c3d0;white-space:nowrap;opacity:0;transform:translateY(6px)}
 .sp-go .sp-name{animation:sp-name .36s cubic-bezier(.2,.8,.2,1) 1.5s forwards}
 .sp-go .sp-rule{animation:sp-rule .34s cubic-bezier(.2,.8,.2,1) 1.62s forwards}
 .sp-go .sp-tag{animation:sp-tag .28s ease-out 1.72s forwards}
-.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));padding:10px 12px;border:0;background:none;color:#8b97a8;font:700 11px/1 'Montserrat',system-ui,sans-serif;letter-spacing:.18em;cursor:pointer;opacity:0;transition:opacity .3s}
+.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));padding:10px 12px;border:0;background:none;color:#b9c3d0;font:600 13px/1 'Barlow',system-ui,sans-serif;letter-spacing:.06em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
 .sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
 .sp-skip:focus-visible{outline:2px solid #48cfff;opacity:1}
 /* reduced motion or the short intro: the finished picture, only faded */
@@ -74,7 +75,7 @@ html,body{margin:0;background:#05070b;color:#f2f6fc}
 #splash.sp-exit{animation:sp-wipe .46s cubic-bezier(.7,0,.2,1) forwards;pointer-events:none}
 #sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(22,119,255,.5) 34%,#1677ff 47%,#bfe6ff 50%,#1677ff 53%,rgba(22,119,255,.34) 68%,transparent)}
 #sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
-.sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 15px/1.4 'Montserrat',system-ui,sans-serif;color:#f2f6fc}
+.sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Barlow',system-ui,sans-serif;color:#f2f6fc}
 .sp-fail a{color:#48cfff;font-weight:700}
 @keyframes sp-in{to{opacity:1}}
 @keyframes sp-drift1{to{transform:translate(9vmax,-3vmax)}}
@@ -127,18 +128,18 @@ html,body{margin:0;background:#05070b;color:#f2f6fc}
     <div class="sp-id">
       <p class="sp-name">Beast <span>Nutrition</span></p>
       <i class="sp-rule" aria-hidden="true"></i>
-      <p class="sp-tag">FUEL. PERFORMANCE. RECOVERY.</p>
+      <p class="sp-tag">ENERGIE. PERFORMANȚĂ. RECUPERARE.</p>
     </div>
   </div>
   <div class="sp-sparks" aria-hidden="true"><i style="--a:-24deg;--l:44vmin;--d:520ms"></i><i style="--a:-20deg;--l:58vmin;--d:560ms"></i><i style="--a:-28deg;--l:38vmin;--d:600ms"></i><i style="--a:156deg;--l:36vmin;--d:580ms"></i><i style="--a:152deg;--l:46vmin;--d:640ms"></i><i style="--a:-16deg;--l:34vmin;--d:660ms"></i></div>
-  <button class="sp-skip" type="button" aria-label="Sari peste intro">SARI</button>
+  <button class="sp-skip" type="button" aria-label="Sari peste intro">Sari</button>
 </div>
 <div id="sp-slash" aria-hidden="true"></div>
 <div id="app"></div>
 <div id="sheet"></div>
-<div id="toast" role="status"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
-// Plays on a fresh launch only: the page stays loaded while you move around the app, and a reload in the same session skips it.
+// Plays on the first launch of the day by default, never on a reload in the same session, and a tap skips it.
 // The session key is this app's own: both apps share an origin, and opening one must not silence the other.
 // main.ts builds the dashboard underneath at the same time, so the exit only waits if that is genuinely not ready.
 (function () {
@@ -155,9 +156,10 @@ html,body{margin:0;background:#05070b;color:#f2f6fc}
   } catch (e) { /* the default look of the stylesheet stays */ }
   var sp = document.getElementById('splash'), slash = document.getElementById('sp-slash');
   if (!sp) return;
-  var mode = 'full', seen = false;
-  try { mode = localStorage.getItem('beast-nutrition:opening') || 'full'; } catch (e) { /* storage blocked */ }
+  var mode = 'daily', seen = false, today = new Date().toDateString();
+  try { mode = localStorage.getItem('beast-nutrition:opening') || 'daily'; } catch (e) { /* storage blocked */ }
   try { seen = sessionStorage.getItem('beast-nutrition:opened') === '1'; sessionStorage.setItem('beast-nutrition:opened', '1'); } catch (e) { /* storage blocked */ }
+  try { if (mode === 'daily') { if (localStorage.getItem('beast-nutrition:opened-on') === today) seen = true; localStorage.setItem('beast-nutrition:opened-on', today); } } catch (e) { /* storage blocked */ }
   function drop() { sp.remove(); if (slash) slash.remove(); }
   if (seen || mode === 'off') { drop(); return; }
   var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches;

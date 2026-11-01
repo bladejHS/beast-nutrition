@@ -57,7 +57,7 @@ export type MicroKey = (typeof MICRO_KEYS)[number] | 'iodine';
 export interface MicroDef { key: MicroKey; name: string; unit: string; group: 'v' | 'm'; ref: (sex: Sex, age: number) => number; sources: string; limit?: boolean }
 
 const by = (m: number, f: number) => (s: Sex) => (s === 'm' ? m : f);
-/** Adult reference intakes (US National Academies RDA/AI, via NIH ODS). */
+/** Adult reference intakes (US National Academies RDA/AI, via NIH ODS). Sodium: EFSA 2019, a limit rather than a goal. */
 export const MICROS: MicroDef[] = [
   { key: 'vitA', name: 'Vitamina A', unit: 'µg', group: 'v', ref: by(900, 700), sources: 'ficat, ouă, morcovi, cartofi dulci' },
   { key: 'vitC', name: 'Vitamina C', unit: 'mg', group: 'v', ref: by(90, 75), sources: 'ardei, kiwi, citrice, broccoli' },
@@ -73,7 +73,7 @@ export const MICROS: MicroDef[] = [
   { key: 'ca', name: 'Calciu', unit: 'mg', group: 'm', ref: (s, a) => (a > 70 || (s === 'f' && a > 50) ? 1200 : 1000), sources: 'lactate, tofu cu calciu, sardine' },
   { key: 'mg', name: 'Magneziu', unit: 'mg', group: 'm', ref: (s, a) => (s === 'm' ? (a > 30 ? 420 : 400) : (a > 30 ? 320 : 310)), sources: 'semințe, migdale, ovăz' },
   { key: 'k', name: 'Potasiu', unit: 'mg', group: 'm', ref: by(3400, 2600), sources: 'cartofi, fasole, banane' },
-  { key: 'na', name: 'Sodiu', unit: 'mg', group: 'm', ref: () => 1500, sources: 'sare, alimente procesate', limit: true },
+  { key: 'na', name: 'Sodiu', unit: 'mg', group: 'm', ref: () => 2000, sources: 'sare, alimente procesate', limit: true },
   { key: 'fe', name: 'Fier', unit: 'mg', group: 'm', ref: (s, a) => (s === 'f' && a <= 50 ? 18 : 8), sources: 'carne roșie, linte, spanac' },
   { key: 'zn', name: 'Zinc', unit: 'mg', group: 'm', ref: by(11, 8), sources: 'vită, semințe de dovleac' },
   { key: 'se', name: 'Seleniu', unit: 'µg', group: 'm', ref: () => 55, sources: 'ton, ouă, pui' },

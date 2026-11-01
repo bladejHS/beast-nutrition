@@ -1,12 +1,16 @@
 import { ctx, esc, hm, nowMinutes } from '../app.ts';
+import { back, banner } from './parts.ts';
 import { weekday } from '../logic/calc.ts';
 import {
   activate, adherence, advice, assessmentDue, currentRatio, dayInPhase, daysLeft, decide, FIXED, fastHours, pause, PHASES, phaseLength,
   PROGRAM_DAYS, programPct, resume, status, windowFor, type Decision, type Fixed, type Ratings,
 } from '../logic/fasting.ts';
-import { dayRating, trainingTime } from './state.ts';
+import { mealSlots, timingFor, trainingTime } from './state.ts';
 
 const DAYS = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du'];
+/** The phases keep their names in the saved program; on screen they are Romanian. */
+const PHASE_NAME: Record<string, string> = { FOUNDATION: 'Fundație', ADAPTATION: 'Adaptare', CONSISTENCY: 'Consecvență' };
+const phaseName = (name: string) => PHASE_NAME[name] ?? name;
 const QUESTIONS: [keyof Ratings, string][] = [['energy', 'Energie'], ['hunger', 'Foame (10 = deloc)'], ['sleep', 'Somn'], ['training', 'Antrenamente'], ['wellbeing', 'Stare generală'], ['nutrition', 'Calorii și proteine atinse']];
 
 export function fastChip(date: string): string {
@@ -25,16 +29,20 @@ function science() {
     <p class="hint">În sarcină, la tulburări alimentare, diabet sau tratamente, discută cu medicul înainte. Această secțiune nu vine din <i>Fat Loss Forever</i>.</p></section>`;
 }
 
+/** Training has to fit the window, and so does the meal after it. */
 function trainingClash() {
   const s = ctx.get();
   const today = ctx.today();
   const w = windowFor(s.fast, weekday(today));
   if (!w) return '';
-  const rating = dayRating(today).rating;
-  if (rating.demand === 'rest' || rating.demand === 'low') return '';
-  const [h = 0, m = 0] = trainingTime(today).split(':').map(Number);
+  const sl = mealSlots(today);
+  if (sl.demand === 'rest' || sl.demand === 'low') return '';
+  const start = trainingTime(today);
+  const [h = 0, m = 0] = start.split(':').map(Number);
   const open = status(w, h * 60 + m).eating;
-  return open ? '' : `<p class="warn">Antrenamentul de azi (${esc(s.fuel.trainingHour)}) cade în afara ferestrei. Mută fereastra pe această zi sau mănâncă înainte: mâncarea de care ai nevoie e mai importantă decât timerul.</p>`;
+  if (open && !sl.outside) return '';
+  const t = timingFor(today);
+  return `<p class="warn">${open ? `Antrenamentul de azi se termină la ${t.end}, iar fereastra se închide la ${esc(w.end)}, așa că masa de după pică în afara ei.` : `Antrenamentul de azi, de la ${esc(start)}, cade în afara ferestrei.`} Mută fereastra pe această zi: mâncarea de care ai nevoie e mai importantă decât timerul.</p>`;
 }
 
 function windowCard() {
@@ -42,7 +50,7 @@ function windowCard() {
   const w = windowFor(s.fast, weekday(ctx.today()));
   const st = w ? status(w, nowMinutes()) : null;
   return `<section class="card">
-    ${w && st ? `<div class="clock ${st.eating ? 'eat' : ''}"><span>${st.eating ? 'FEREASTRĂ DESCHISĂ' : 'POST'}</span><b id="fast-left">${hm(st.minutesLeft)}</b><small>Azi ${w.start}–${w.end} · ${w.ratio}</small></div>` : ''}
+    ${w && st ? `<div class="clock ${st.eating ? 'eat' : ''}"><span>${st.eating ? 'Fereastră deschisă' : 'În post'}</span><b id="fast-left">${hm(st.minutesLeft)}</b><small>Azi ${w.start}–${w.end}, ${w.ratio}</small></div>` : ''}
     ${trainingClash()}
     <label class="field">Începutul ferestrei de mâncat<input id="eat-start" type="time" value="${s.fast.eatStart}"></label>
     <h3>Program diferit pe zile</h3>
@@ -61,7 +69,7 @@ function adherenceCard() {
 }
 
 function timeline(phase: number) {
-  return `<ol class="tl">${PHASES.map((p, i) => `<li class="${i < phase ? 'past' : i === phase ? 'now' : ''}"><span>0${i + 1}</span><b>${p.name}</b><em>${p.ratio}</em><small>${i === 0 ? 'Zilele 1–7' : i === 1 ? 'Zilele 8–14' : 'Săpt. 3–8, opțional'}</small></li>`).join('')}</ol>`;
+  return `<ol class="tl">${PHASES.map((p, i) => `<li class="${i < phase ? 'past' : i === phase ? 'now' : ''}"><span>Faza ${i + 1}</span><b>${phaseName(p.name)}</b><em>${p.ratio}</em><small>${i === 0 ? 'Zilele 1–7' : i === 1 ? 'Zilele 8–14' : 'Săpt. 3–8, opțional'}</small></li>`).join('')}</ol>`;
 }
 
 function progDash() {
@@ -73,13 +81,13 @@ function progDash() {
   const due = assessmentDue(p, today);
   const done = Math.min(dayInPhase(p, today) - 1, phaseLength(p));
   const last = p.assessments.at(-1);
-  return `<section class="card prog"><p class="eyebrow">PROGRESSIVE FASTING · 8 SĂPTĂMÂNI</p>
-    <h2>PHASE 0${p.phase + 1} · ${ph.name}</h2>
+  return `<section class="card prog"><p class="hint">Post progresiv, 8 săptămâni</p>
+    <h2>Faza ${p.phase + 1}, ${phaseName(ph.name)}</h2>
     <div class="stats three"><div><b>${ph.ratio}</b><span>raport actual</span></div><div><b>${done}</b><span>zile făcute</span></div><div><b>${daysLeft(p, today)}</b><span>zile planificate rămase</span></div></div>
     ${timeline(p.phase)}
     <div class="track big"><div data-bar="prog8" data-to="${programPct(p, today) / 100}"></div></div>
-    <p class="hint">${Math.round(programPct(p, today) * PROGRAM_DAYS / 100)} din ${PROGRAM_DAYS} zile · ${esc(ph.focus)}</p>
-    <p class="coach">${p.pausedSince ? 'Program pus pe pauză. Nu se aplică nicio fereastră.' : p.stay ? `Ai ales să rămâi pe ${ph.ratio}. E perfect în regulă, oricât de mult.` : next ? `Urmează, doar dacă alegi: ${next.name}, ${next.ratio}. ${next.focus}` : 'Aceasta e ultima fază.'}</p>
+    <p class="hint">${Math.round(programPct(p, today) * PROGRAM_DAYS / 100)} din ${PROGRAM_DAYS} zile. ${esc(ph.focus)}</p>
+    <p class="coach">${p.pausedSince ? 'Program pus pe pauză. Nu se aplică nicio fereastră.' : p.stay ? `Ai ales să rămâi pe ${ph.ratio}. E perfect în regulă, oricât de mult.` : next ? `Urmează, doar dacă alegi: ${phaseName(next.name)}, ${next.ratio}. ${next.focus}` : 'Aceasta e ultima fază.'}</p>
     ${last ? `<p class="hint">Ultima evaluare: ${esc(last.date)}.</p>` : ''}
   </section>
   ${due ? assessment(p.phase) : '<button class="ghost wide" data-fast="assess">Fă evaluarea acum</button>'}
@@ -106,9 +114,8 @@ function assessment(phase: number) {
 function chooser() {
   const s = ctx.get();
   const cur = s.fast.active;
-  return `<section class="lead"><h1>Post</h1><p>Un singur program activ. Istoricul rămâne salvat când schimbi.</p></section>
-  ${FIXED.map((p) => `<button class="card pick ${cur?.type === 'fixed' && cur.protocol === p ? 'sel' : ''}" data-fast="fixed" data-v="${p}"><b>${p}</b><span>${fastHours(p)} ore post, ${24 - fastHours(p)} ore fereastră</span></button>`).join('')}
-  <button class="card pick prog-p" data-fast="prog"><b>PROGRESIV</b><span>8 săptămâni ghidate, de la 12:12 spre 14:10 și, dacă te simți bine, 16:8.</span></button>
+  return `${FIXED.map((p) => `<button class="card pick ${cur?.type === 'fixed' && cur.protocol === p ? 'sel' : ''}" data-fast="fixed" data-v="${p}"><b>${p}</b><span>${fastHours(p)} ore post, ${24 - fastHours(p)} ore fereastră</span></button>`).join('')}
+  <button class="card pick" data-fast="prog"><b>Progresiv</b><span>8 săptămâni ghidate, de la 12:12 spre 14:10 și, dacă te simți bine, 16:8.</span></button>
   ${cur ? `<button class="ghost wide danger" data-fast="off">Oprește postul</button>` : ''}
   ${cur ? windowCard() + adherenceCard() : ''}
   ${s.fast.history.length ? `<section class="card"><h2>Istoric</h2>${[...s.fast.history].reverse().slice(0, 8).map((h) => `<div class="line"><span>${esc(h.from)} → ${esc(h.to)}</span><b>${esc(h.label)}</b></div>`).join('')}</section>` : ''}`;
@@ -119,15 +126,16 @@ let view: 'dash' | 'pick' = 'dash';
 export function fastHtml() {
   const s = ctx.get();
   const onProg = s.fast.active?.type === 'prog' && view === 'dash';
-  return `${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
+  return `${back('Fuel', 'data-tab="fuel"')}${banner('advanced', 'Post', 'Un singur program activ. Istoricul rămâne salvat când schimbi.')}${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
 }
 
 function switchTo(next: Parameters<typeof activate>[1]) {
   const s = ctx.get();
-  if (s.fast.active && !confirm('Programul activ se oprește. Istoricul rămâne. Continui?')) return;
+  const before = s.fast;
   s.fast = activate(s.fast, next, ctx.today());
   view = 'dash';
   ctx.commit(); ctx.render();
+  if (before.active) ctx.toast('Programul s-a schimbat. Istoricul rămâne.', () => { s.fast = before; ctx.commit(); ctx.render(); });
 }
 
 export function fastAction(el: HTMLElement): boolean {
@@ -140,10 +148,11 @@ export function fastAction(el: HTMLElement): boolean {
   if (a === 'fixed') switchTo({ type: 'fixed', protocol: v as Fixed, since: today });
   if (a === 'prog') { if (s.fast.active?.type === 'prog') { view = 'dash'; ctx.render(); } else switchTo({ type: 'prog' }); }
   if (a === 'off' || a === 'stop') {
-    if (!confirm('Oprești postul? Istoricul rămâne salvat.')) return true;
+    const before = s.fast;
     s.fast = activate(s.fast, null, today);
     if (a === 'stop') s.fast.prog = null;
     view = 'dash';
+    ctx.toast('Post oprit. Istoricul rămâne.', () => { s.fast = before; ctx.commit(); ctx.render(); });
   }
   if (a === 'pick') view = 'pick';
   if (a === 'log') s.fast.log[today] = v === '1';

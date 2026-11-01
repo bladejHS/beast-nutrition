@@ -13,7 +13,7 @@ const woman: Profile = { sex: 'f', age: 45, heightCm: 165, weightKg: 90, bf: 36,
 const plan = (o: Partial<Parameters<typeof buildPlan>[1]> = {}): Plan => buildPlan(man, {
   phase: 'cut', startDate: '2026-11-02', ratePct: 0.6, carbShare: 0.6, maintenance: 2800, highDays: [], breaks: null, pace: 'c', ...o,
 });
-const week: Training = { linked: true, week: FALLBACK_WEEK, log: {} };
+const week: Training = { linked: true, week: FALLBACK_WEEK, log: {}, sleep: {} };
 
 test('demand comes from the sessions, not the weekday name', () => {
   assert.equal(classify(FALLBACK_WEEK[0]!).demand, 'high');

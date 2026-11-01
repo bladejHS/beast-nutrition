@@ -8,7 +8,8 @@ import { byBarcode, isRomanian, loadFoods, search, searchBranded, type Food } fr
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf, review, type CheckIn } from './logic/review.ts';
 import { dayMeals, entryFrom, load, MEALS, parseBackup, save, totals, type Entry, type State } from './logic/store.ts';
 import { ctx, afterRender, type Tab } from './app.ts';
-import { dayFuel, fuelAction, fuelHtml, fuelBind, syncFuel } from './screens/fuel.ts';
+import { fuelAction, fuelHtml, fuelBind } from './screens/fuel.ts';
+import { dayFuel, syncFuel } from './screens/state.ts';
 import { fastAction, fastChip, fastHtml, fastBind } from './screens/fast.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 

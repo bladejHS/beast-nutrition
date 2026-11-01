@@ -8,7 +8,11 @@ import { MICRO_KEYS, type Drink, type Measure, type MicroKey, type Supp, type Sw
 import type { Meal, Prefs } from './mealplan.ts';
 import type { Report } from './report.ts';
 
-export interface Entry { id: string; name: string; g: number; kcal: number; p: number; c: number; f: number; fiber: number; m?: Partial<Record<MicroKey, number>> }
+export interface Entry {
+  id: string; name: string; g: number; kcal: number; p: number; c: number; f: number; fiber: number; m?: Partial<Record<MicroKey, number>>;
+  /** The planned meal this came from, so changing that meal changes what was logged. */
+  from?: string;
+}
 
 /** What a day's fuel target was, frozen once the day is over. */
 export interface Snap { c: number; kcal: number; p: number; f: number; demand: Demand; reason: string }
@@ -98,4 +102,15 @@ export function entryFrom(food: Pick<Food, 'name' | 'kcal' | 'p' | 'c' | 'f' | '
   const m: Entry['m'] = {};
   food.micro?.forEach((v, i) => { if (v != null) m[MICRO_KEYS[i]!] = Math.round(v * k * 100) / 100; });
   return { id: crypto.randomUUID(), name: food.name, g, kcal: Math.round(food.kcal * k), p: r(food.p), c: r(food.c), f: r(food.f), fiber: r(food.fiber), ...(food.micro ? { m } : {}) };
+}
+
+/**
+ * Swaps what a planned meal logged for `next` (empty = takes it out of the log), staying in the same meal slot.
+ * Null when that meal was logged without a link, so nothing can be replaced safely.
+ */
+export function relog(days: Entry[][], mealId: string, next: Entry[], fallbackSlot: number, wasLogged: boolean): Entry[][] | null {
+  const slot = days.findIndex((d) => d.some((e) => e.from === mealId));
+  if (slot < 0 && wasLogged) return null;
+  const at = slot >= 0 ? slot : fallbackSlot;
+  return days.map((d, i) => { const kept = d.filter((e) => e.from !== mealId); return i === at ? [...kept, ...next.map((e) => ({ ...e, from: mealId }))] : kept; });
 }

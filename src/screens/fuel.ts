@@ -1,163 +1,174 @@
 import { ctx, dayShort, esc, n0 } from '../app.ts';
 import { EVIDENCE, MINERALS } from '../data/supplements.ts';
-import { targetFor, weekday, type DayTarget } from '../logic/calc.ts';
-import { mealCarbShares, reconcile, weekFuel, type FuelDay } from '../logic/carbs.ts';
+import { isBreakWeek, weekday } from '../logic/calc.ts';
 import { adherence, status, windowFor } from '../logic/fasting.ts';
 import { loadFoods, type Food } from '../logic/foods.ts';
-import { alternatives, generateDay, macros, shoppingList, substitute, type Meal } from '../logic/mealplan.ts';
+import { alternatives, macros, mealOptions, regenerate, shoppingList, substitute, type Meal } from '../logic/mealplan.ts';
 import { buildReport, type DayFacts } from '../logic/report.ts';
 import { addDays, finishedWeeks, mondayOf } from '../logic/review.ts';
-import { dayMeals, entryFrom, MEALS, totals, type Snap } from '../logic/store.ts';
-import { dayPlan, DEMAND_LABEL, readTraining, type DayPlan, type Demand, type Training } from '../logic/training.ts';
+import { dayMeals, entryFrom, MEALS, relog, totals } from '../logic/store.ts';
+import { CARB_LABEL, DEMAND_LABEL, type Demand } from '../logic/training.ts';
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
+import { carbsHtml, engineHtml, pickDay, pickWeek } from './carbs.ts';
+import { back, banner, cardSrc } from './parts.ts';
+import { dayFuel, dayRating, fuelWeek, mealSlots, notice, training } from './state.ts';
 
-type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report';
+type Sub = 'home' | 'overview' | 'carbs' | 'engine' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'advanced' | 'recovery';
 let sub: Sub = 'home';
 let enter = false;
 let mealDay = '';
 let microWeek = false;
-let notice = '';
 let foods: Food[] = [];
 let foodMap = new Map<string, Food>();
+let pending: Meal[] = [];
+const openMeals = new Set<string>();
 
-const training = (): Training => readTraining(localStorage);
-
-function plansFor(monday: string, t: Training): Record<string, DayPlan> {
-  const s = ctx.get();
-  const out: Record<string, DayPlan> = {};
-  for (let i = 0; i < 7; i++) {
-    const d = addDays(monday, i);
-    out[d] = dayPlan(t, d, ctx.today(), i, s.fuel.overrides[d], s.fuel.limits);
-  }
-  return out;
-}
-
-/** Past days use their frozen carbs; today and later are shared out from what is left of the week. */
-function fuelWeek(monday: string, t = training()): { days: FuelDay[]; plans: Record<string, DayPlan> } {
-  const s = ctx.get();
-  const plans = plansFor(monday, t);
-  const locked: Record<string, number> = {};
-  for (const d of Object.keys(plans)) if (d < ctx.today()) locked[d] = s.fuel.snap[d]?.c ?? targetFor(s.plan!, d).c;
-  return { plans, days: weekFuel(s.plan!, monday, (d) => s.fuel.snap[d]?.demand && d < ctx.today() ? s.fuel.snap[d]!.demand : plans[d]!.rating.demand, s.fuel.factors, s.profile!.sex, locked) };
-}
-
-export function dayFuel(date: string): DayTarget {
-  const s = ctx.get();
-  const snap: Snap | undefined = s.fuel.snap[date];
-  if (date < ctx.today() && snap && s.fuel.cycling) return { ...targetFor(s.plan!, date), ...snap };
-  if (!s.fuel.cycling) return targetFor(s.plan!, date);
-  return fuelWeek(mondayOf(date)).days.find((d) => d.date === date)!;
-}
-
-/** Freezes today's plan as it stands, and notices when training changed the week. */
-export function syncFuel() {
-  const s = ctx.get();
-  if (!s.plan || !s.profile || !s.fuel.cycling) return;
-  const today = ctx.today();
-  const monday = mondayOf(today);
-  const { days, plans } = fuelWeek(monday);
-  for (const d of days) {
-    if (d.date > today) continue;
-    if (d.date === today || !s.fuel.snap[d.date]) s.fuel.snap[d.date] = { c: d.c, kcal: d.kcal, p: d.p, f: d.f, demand: plans[d.date]!.plannedRating.demand, reason: plans[d.date]!.rating.reason };
-  }
-  const sig = days.filter((d) => d.date >= today).map((d) => `${d.date}:${d.demand}`).join('|');
-  if (s.fuel.sig && s.fuel.sig.slice(0, 10) === sig.slice(0, 10) && s.fuel.sig !== sig) notice = 'Antrenamentele s-au schimbat, așa că zilele rămase au fost recalculate. Totalul săptămânii e același.';
-  if (s.fuel.sig !== sig) { s.fuel.sig = sig; ctx.commit(); }
-}
-
-const back = () => `<button class="backbtn" data-f="sub" data-v="home">‹ Fuel</button>`;
 const demandTag = (d: Demand) => `<span class="dm ${d}">${DEMAND_LABEL[d]}</span>`;
+const latestKg = () => Object.entries(ctx.get().weights).sort().at(-1)?.[1] ?? ctx.get().profile!.weightKg;
+const kgText = (v: number) => v.toFixed(1).replace('.', ',');
+
+function sleepAvg(): number | null {
+  const t = training();
+  const list = Array.from({ length: 7 }, (_, i) => t.sleep[addDays(ctx.today(), -i)]).filter((x): x is number => x != null);
+  return list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
+}
+
+interface CardDef { k: string; label: string; go: string; chip: string }
+
+function cards(): CardDef[] {
+  const s = ctx.get();
+  const today = ctx.today();
+  const f = dayFuel(today);
+  const eaten = totals(dayMeals(s, today)).kcal;
+  const sleep = sleepAvg();
+  const go = (v: Sub) => `data-f="sub" data-v="${v}"`;
+  const tab = (v: string) => `data-tab="${v}"`;
+  return [
+    { k: 'nutrition', label: 'Nutrition Overview', go: go('overview'), chip: `${n0(Math.max(0, f.kcal - eaten))} kcal` },
+    { k: 'carbs', label: 'Carb Cycling', go: go('carbs'), chip: s.fuel.cycling ? CARB_LABEL[dayRating(today).rating.demand] : 'Oprit' },
+    { k: 'meals', label: 'Meal Planner', go: go('meals'), chip: `${(s.fuel.plan[today] ?? []).length} mese` },
+    { k: 'food', label: 'Jurnal alimente', go: tab('azi'), chip: `${n0(eaten)} kcal` },
+    { k: 'water', label: 'Hidratare', go: go('water'), chip: `${(waterOn(today) / 1000).toFixed(1).replace('.', ',')} L` },
+    { k: 'supp', label: 'Suplimente', go: go('supp'), chip: `${s.supps.length} în stack` },
+    { k: 'body', label: 'Corp', go: tab('cantar'), chip: `${kgText(latestKg())} kg` },
+    { k: 'analytics', label: 'Raport și analize', go: go('report'), chip: `${Object.keys(s.reports).length} rapoarte` },
+    { k: 'engine', label: 'Performance Fuel Engine', go: go('engine'), chip: s.fuel.cycling ? 'Activ' : 'Oprit' },
+    { k: 'advanced', label: 'Strategii avansate', go: go('advanced'), chip: '' },
+    { k: 'recovery', label: 'Recuperare', go: go('recovery'), chip: sleep == null ? '' : `${sleep.toFixed(1).replace('.', ',')} h somn` },
+    { k: 'settings', label: 'Plan și setări', go: tab('plan'), chip: '' },
+  ];
+}
 
 function home() {
   const s = ctx.get();
   const today = ctx.today();
   const t = training();
-  const p = dayPlan(t, today, today, weekday(today), s.fuel.overrides[today], s.fuel.limits);
+  const p = dayRating(today, t);
   const f = dayFuel(today);
-  const left = totals(dayMeals(s, today));
-  const tiles: [Sub, string, string][] = [['carbs', 'Carb Cycling', s.fuel.cycling ? 'Activ' : 'Oprit'], ['meals', 'Meal Planner', `${(s.fuel.plan[today] ?? []).length} mese azi`], ['water', 'Hidratare', `${n0(waterOn(today))} ml`], ['supp', 'Suplimente', `${s.supps.length} în stack`], ['micro', 'Micronutrienți', '20 urmăriți'], ['report', 'Raport', `${Object.keys(s.reports).length} salvate`]];
-  return `<section class="lead"><h1>Fuel</h1><p>${t.linked ? 'Conectat la antrenamentele din Inner Beast.' : 'Inner Beast nu a fost deschis în acest browser: folosesc planul standard din carte.'}</p></section>
-  <section class="card fuelhero">${demandTag(p.rating.demand)}<h2>${p.planned.length ? esc(p.planned.filter((x) => x.min > 0).map((x) => x.name).slice(0, 3).join(' + ')) : 'Fără antrenament'}</h2><p class="hint">${esc(p.rating.reason)} ${p.basis === 'manual' ? '' : 'Estimare din tipul și durata sesiunilor.'}</p>
-    <div class="stats"><div><b data-count="fk" data-to="${f.kcal}">${n0(f.kcal)}</b><span>kcal țintă</span></div><div><b>${f.p}</b><span>g proteine</span></div><div><b>${f.c}</b><span>g carbo</span></div><div><b>${f.f}</b><span>g grăsimi</span></div></div>
-    <p class="hint">Consumat azi: ${n0(left.kcal)} kcal · P ${n0(left.p)} · C ${n0(left.c)} · G ${n0(left.f)}</p></section>
-  <div class="tiles">${tiles.map(([k, a, b]) => `<button data-f="sub" data-v="${k}"><b>${a}</b><span>${esc(b)}</span></button>`).join('')}</div>`;
+  const names = p.planned.filter((x) => x.min > 0).map((x) => x.name);
+  return `<button class="fh ${p.rating.demand}" data-f="sub" data-v="carbs"><span class="fh-t"><b>${CARB_LABEL[p.rating.demand]}</b><small>${names.length ? esc(names.slice(0, 2).join(' + ')) : 'Fără antrenament'}</small></span><span class="fh-k"><b data-count="fk" data-to="${f.kcal}">${n0(f.kcal)}</b><small>kcal · ${f.c} g carbo</small></span></button>
+  ${t.linked ? '' : '<p class="hint">Inner Beast nu a fost deschis în acest browser: folosesc planul standard din carte.</p>'}
+  ${s.fuel.cycling ? '' : '<p class="hint">Carb Cycling e oprit: ținta zilnică rămâne cea din plan.</p>'}
+  <div class="fcards">${cards().map((c, i) => `<button class="fc" ${c.go} aria-label="${esc(c.label)}${c.chip ? `, ${esc(c.chip)}` : ''}"><img src="${cardSrc(c.k)}" alt="" width="580" height="${i < 4 ? 808 : i < 8 ? 738 : 728}" decoding="sync" ${i > 3 ? 'loading="lazy"' : ''} style="view-transition-name:card-${c.k}">${c.chip ? `<em>${esc(c.chip)}</em>` : ''}</button>`).join('')}</div>`;
 }
 
-function carbs() {
+function overview() {
   const s = ctx.get();
-  const monday = mondayOf(ctx.today());
-  const { days, plans } = fuelWeek(monday);
-  const r = reconcile(s.plan!, days);
-  const max = Math.max(...days.map((d) => d.c), 1);
-  const F = s.fuel.factors;
-  return `${back()}<section class="lead"><h1>Carb Cycling</h1><p>Mută carbohidrații spre zilele grele. Caloriile săptămânii, proteina și grăsimile rămân cele din plan.</p></section>
-  ${notice ? `<p class="updated">${esc(notice)}</p>` : ''}
-  <section class="card"><label class="switch"><input type="checkbox" id="cyc" ${s.fuel.cycling ? 'checked' : ''}><i></i><span>Folosește distribuția în ținta zilnică</span></label>
-    <p class="hint">Oprit, ținta rămâne exact cea din plan. Aceasta nu e o metodă Layne Norton: e un calcul al aplicației, peste metoda lui.</p></section>
-  <section class="week7">${days.map((d) => {
-    const pl = plans[d.date]!;
-    const isToday = d.date === ctx.today();
-    return `<details class="dayfuel ${d.demand} ${isToday ? 'today' : ''}" ${isToday ? 'open' : ''}><summary><span class="dn">${esc(dayShort(d.date))}</span><span class="cbar"><i data-bar="c-${d.date}" data-to="${d.c / max}"></i></span><b>${d.c} g</b></summary>
-      ${demandTag(d.demand)}${d.fixed ? ' <small class="hint">zi încheiată, ținta nu se mai schimbă</small>' : ''}
-      <p class="hint">${esc(pl.rating.reason)}${pl.done.length ? ` Făcut: ${esc(pl.done.map((x) => `${x.name} ${x.min} min`).join(', '))}.` : ''}</p>
-      <div class="line"><span>Plan</span><b>${n0(d.kcal)} kcal · P ${d.p} · C ${d.c} · G ${d.f}</b></div>
-      <div class="line"><span>Față de planul de bază</span><b>${d.shift > 0 ? '+' : ''}${d.shift} g carbo</b></div>
-      ${d.fixed ? '' : `<div class="seg small">${(['high', 'moderate', 'low', 'rest'] as Demand[]).map((x) => `<button data-f="ov" data-d="${d.date}" data-v="${x}" class="${s.fuel.overrides[d.date] === x ? 'on' : ''}">${x === 'high' ? 'High' : x === 'moderate' ? 'Mod' : x === 'low' ? 'Low' : 'Rest'}</button>`).join('')}</div>${s.fuel.overrides[d.date] ? `<button class="backbtn" data-f="ov" data-d="${d.date}" data-v="">Revino la automat</button>` : ''}`}
-    </details>`;
-  }).join('')}</section>
-  <section class="card"><h2>Verificare săptămână</h2>
-    <div class="line"><span>Calorii plan / distribuție</span><b>${n0(r.kcalPlan)} / ${n0(r.kcalFuel)}</b></div>
-    <div class="line"><span>Carbo plan / distribuție</span><b>${n0(r.carbsPlan)} / ${n0(r.carbsFuel)} g</b></div>
-    <div class="line"><span>Proteină și grăsimi</span><b>${r.proteinSame && r.fatSame ? 'neschimbate' : 'diferă'}</b></div></section>
-  <section class="card"><h2>Factori</h2><p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii.</p>
-    <div class="grid2">${(['high', 'moderate', 'low', 'rest'] as Demand[]).map((k) => `<label class="field">${DEMAND_LABEL[k]}<input type="number" step="0.05" min="0.3" max="2" data-factor="${k}" value="${F[k]}"></label>`).join('')}</div>
-    <label class="field">Ora obișnuită de antrenament<input type="time" id="thour" value="${s.fuel.trainingHour}"></label></section>
-  <section class="card"><h2>Mese în jurul antrenamentului</h2><p>Înainte: o masă cu carbohidrați ușor de digerat, cu 1–3 ore înainte. După: proteină și carbohidrați la următoarea masă.</p><p class="hint">În zilele de odihnă, carbohidrații se împart egal. Sfat general al aplicației, nu din carte.</p></section>`;
+  const today = ctx.today();
+  const f = dayFuel(today);
+  const sum = totals(dayMeals(s, today));
+  const left = f.kcal - sum.kcal;
+  const week = Array.from({ length: 7 }, (_, i) => totals(dayMeals(s, addDays(today, -i))).kcal).filter((k) => k > 0);
+  const row = (a: string, v: number, t: number, u: string) => `<div class="bar"><div class="bar-h"><span>${a}</span><b>${n0(v)} / ${n0(t)} ${u}</b></div><div class="track"><div data-bar="ov-${a}" data-to="${Math.min(1, v / (t || 1))}"></div></div></div>`;
+  const w = windowFor(s.fast, weekday(today));
+  return `${back()}${banner('nutrition', 'Nutrition Overview', 'Ziua de azi, din ce ai notat.')}
+  <section class="card"><div class="cc-kcal"><div><b data-count="ov-k" data-to="${sum.kcal}">${n0(sum.kcal)}</b><span>din ${n0(f.kcal)} kcal</span></div><div class="cc-left"><b class="${left < 0 ? 'over' : ''}">${n0(Math.abs(left))}</b><span>${left < 0 ? 'peste' : 'rămas'}</span></div></div>
+    ${row('Proteine', sum.p, f.p, 'g')}${row('Carbohidrați', sum.c, f.c, 'g')}${row('Grăsimi', sum.f, f.f, 'g')}${row('Fibre', sum.fiber, f.fiberMin, 'g')}</section>
+  <section class="card">
+    <div class="line"><span>Clasificarea zilei</span><b>${CARB_LABEL[dayRating(today).rating.demand]}</b></div>
+    <div class="line"><span>Lichide</span><b>${n0(waterOn(today))} ml</b></div>
+    <div class="line"><span>Suplimente bifate</span><b>${(s.suppLog[today] ?? []).length} din ${s.supps.length}</b></div>
+    ${w ? `<div class="line"><span>Post</span><b>${status(w, new Date().getHours() * 60 + new Date().getMinutes()).eating ? 'Fereastră de mâncat' : 'În post'}, ${esc(w.ratio)}</b></div>` : ''}
+    <div class="line"><span>Greutate</span><b>${kgText(latestKg())} kg</b></div>
+    ${week.length ? `<div class="line"><span>Media ultimelor zile notate</span><b>${n0(week.reduce((a, b) => a + b, 0) / week.length)} kcal, ${week.length} ${week.length === 1 ? 'zi' : 'zile'}</b></div>` : ''}
+  </section>
+  <div class="btns"><button class="primary" data-tab="azi">Notează mâncare</button><button class="ghost" data-f="sub" data-v="micro">Micronutrienți</button></div>`;
 }
 
-const windowTimes = (n: number, date: string) => {
+function recovery() {
   const s = ctx.get();
-  const w = windowFor(s.fast, weekday(date));
-  const [h = 8, m = 0] = (w?.start ?? '08:00').split(':').map(Number);
-  const span = w ? w.eatMin : 720;
-  return Array.from({ length: n }, (_, i) => { const t = h * 60 + m + (n > 1 ? (span * 0.9 * i) / (n - 1) : 0); return `${String(Math.floor(t / 60) % 24).padStart(2, '0')}:${String(Math.round(t % 60 / 5) * 5 % 60).padStart(2, '0')}`; });
-};
+  const today = ctx.today();
+  const t = training();
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6));
+  const avg = sleepAvg();
+  const { days } = fuelWeek(mondayOf(today), t);
+  const load = dates.reduce((a, d) => a + dayRating(d, t).rating.load, 0);
+  return `${back()}${banner('recovery', 'Recuperare', 'Somnul și încărcarea, din ce ai notat în Inner Beast.')}
+  <section class="card"><h2>Somn, ultimele 7 nopți</h2>
+    ${avg == null ? '<p class="hint">Niciun somn notat. Îl notezi pe ecranul Azi din Inner Beast.</p>' : `<div class="cc-kcal"><div><b>${avg.toFixed(1).replace('.', ',')}</b><span>ore în medie</span></div></div>
+    <div class="sl">${dates.map((d) => { const h = t.sleep[d]; return `<div><i><u data-bar="sl-${d}" data-axis="y" data-to="${Math.min(1, (h ?? 0) / 10)}"></u></i><span>${esc(dayShort(d))}</span><b>${h == null ? '–' : String(h).replace('.', ',')}</b></div>`; }).join('')}</div>`}
+    <p class="hint">Cartea Inner Beast cere minimum 7 ore pe noapte.</p></section>
+  <section class="card"><h2>Încărcare</h2>
+    <div class="line"><span>Ultimele 7 zile</span><b>${n0(load)}</b></div>
+    <div class="line"><span>Zile REST săptămâna asta</span><b>${days.filter((d) => d.demand === 'rest').length}</b></div>
+    ${isBreakWeek(s.plan!, today) ? '<div class="line"><span>Dietă</span><b>Săptămână de pauză la mențineri</b></div>' : ''}
+    <p class="hint">Încărcarea e o estimare din tipul și durata sesiunilor.</p></section>
+  <a class="ghost wide linkbtn" href="../inner-beast/">Deschide Inner Beast</a>`;
+}
+
+function advanced() {
+  const row = (attr: string, a: string, b: string) => `<button class="adv" ${attr}><b>${a}</b><span>${b}</span></button>`;
+  return `${back()}${banner('advanced', 'Strategii avansate', 'Instrumentele care merg peste planul zilnic.')}
+  ${row('data-tab="post"', 'Post progresiv', '12:12, 14:10, 16:8 și programul de 8 săptămâni.')}
+  ${row('data-tab="plan"', 'Pauze de dietă și zile cu calorii mari', 'Din Fat Loss Forever, se setează în Plan.')}
+  ${row('data-tab="plan"', 'Reverse diet', 'Faza de după slăbire, cu ritm conservator, moderat sau agresiv.')}
+  ${row('data-f="sub" data-v="micro"', 'Micronutrienți', '20 de vitamine și minerale, din alimentele notate.')}
+  ${row('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever.')}`;
+}
 
 function genDay(date: string, seed: number): Meal[] {
   const s = ctx.get();
-  const t = dayFuel(date);
-  const n = s.fuel.prefs.meals;
-  const times = windowTimes(n, date);
-  const demand = (s.fuel.cycling ? fuelWeek(mondayOf(date)).days.find((d) => d.date === date)?.demand : dayPlan(training(), date, ctx.today(), weekday(date), undefined, s.fuel.limits).rating.demand) ?? 'rest';
-  const before = times.reduce((best, x, i) => (x <= s.fuel.trainingHour ? i : best), 0);
-  const trainingMeal = demand === 'rest' || demand === 'low' ? null : before;
-  const tags = times.map((_, i) => (trainingMeal == null ? '' : i === trainingMeal ? 'Înainte de antrenament' : i === trainingMeal + 1 ? 'După antrenament' : ''));
-  return generateDay(t, mealCarbShares(n, trainingMeal, demand), times, tags, foods, s.fuel.prefs, seed);
+  const sl = mealSlots(date);
+  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, foods, s.fuel.prefs, seed);
 }
+
+const isPast = (d: string) => d < ctx.today();
+const needFoods = () => { if (foods.length) return false; void loadFoods().then((l) => { foods = l; foodMap = new Map(l.map((f) => [f.id, f])); ctx.render(); }); return true; };
 
 function mealCard(m: Meal, i: number) {
   const t = macros(m.items, foodMap);
-  return `<details class="mealc ${m.done ? 'done' : ''}"><summary><span class="mt">${esc(m.time)}</span><span><b>${esc(m.name)}</b><small>${esc(m.tag)}${m.tag ? ' · ' : ''}${n0(t.kcal)} kcal · P ${n0(t.p)} · C ${n0(t.c)} · G ${n0(t.f)} · fibre ${n0(t.fiber)}</small></span></summary>
-    ${m.items.map((it, k) => { const f = foodMap.get(it.foodId); return `<div class="ing"><span>${n0(it.g)} g ${esc(f?.name ?? '')}</span><button data-f="sw" data-m="${i}" data-i="${k}">Schimbă</button></div>`; }).join('')}
+  const past = isPast(mealDay);
+  return `<details class="mealc ${m.done ? 'done' : ''} ${m.tag ? 'tagged' : ''}" data-id="${m.id}" ${openMeals.has(m.id) ? 'open' : ''}><summary><span class="mt">${esc(m.time)}</span><span><b>${esc(m.name)}</b>${m.tag ? `<i class="mtag">${esc(m.tag)}</i>` : ''}<small>${n0(t.kcal)} kcal · P ${n0(t.p)} · C ${n0(t.c)} · G ${n0(t.f)} · fibre ${n0(t.fiber)}</small></span></summary>
+    ${m.items.map((it, k) => { const f = foodMap.get(it.foodId); return `<div class="ing"><span>${n0(it.g)} g ${esc(f?.name ?? '')}</span>${past ? '' : `<button data-f="sw" data-m="${i}" data-i="${k}">Schimbă</button>`}</div>`; }).join('')}
     <p class="hint">${esc(m.steps)}</p>
-    <div class="btns"><button class="primary" data-f="eat" data-m="${i}" ${m.done ? 'disabled' : ''}>${m.done ? 'Notată în jurnal' : 'Am mâncat, notează'}</button><button class="ghost" data-f="move" data-m="${i}">Mută pe altă zi</button><button class="ghost" data-f="rm" data-m="${i}">Scoate</button></div></details>`;
+    ${past ? '' : `<div class="btns"><button class="${m.done ? 'ghost' : 'primary'}" data-f="${m.done ? 'uneat' : 'eat'}" data-m="${i}">${m.done ? 'Scoate din jurnal' : 'Am mâncat, notează'}</button><button class="ghost" data-f="opts" data-m="${i}">Alte variante</button>${m.done ? '' : `<button class="ghost" data-f="move" data-m="${i}">Mută pe altă zi</button>`}<button class="ghost" data-f="rm" data-m="${i}">Scoate</button></div>`}</details>`;
 }
 
 function meals() {
   const s = ctx.get();
-  if (!foods.length) { void loadFoods().then((l) => { foods = l; foodMap = new Map(l.map((f) => [f.id, f])); ctx.render(); }); return `${back()}<div class="skel"></div><div class="skel"></div><div class="skel"></div>`; }
+  if (needFoods()) return `${back()}<div class="skel"></div><div class="skel"></div><div class="skel"></div>`;
   mealDay ||= ctx.today();
   const monday = mondayOf(ctx.today());
   const dates = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
   const list = s.fuel.plan[mealDay] ?? [];
   const t = dayFuel(mealDay);
   const sum = macros(list.flatMap((m) => m.items), foodMap);
+  const ate = totals(dayMeals(s, mealDay));
   const shop = shoppingList(dates.map((d) => s.fuel.plan[d] ?? []), foodMap);
   const p = s.fuel.prefs;
-  return `${back()}<section class="lead"><h1>Meal Planner</h1><p>Cantitățile vin din valorile USDA și sunt calculate pe ținta zilei.</p></section>
-  <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}">${esc(dayShort(d))}<small>${(s.fuel.plan[d] ?? []).length || '–'}</small></button>`).join('')}</div>
-  <section class="card"><div class="line"><span>Țintă</span><b>${n0(t.kcal)} kcal · P ${t.p} · C ${t.c} · G ${t.f}</b></div><div class="line"><span>Planificat</span><b>${n0(sum.kcal)} kcal · P ${n0(sum.p)} · C ${n0(sum.c)} · G ${n0(sum.f)}</b></div>
-    <div class="btns"><button class="primary" data-f="gen">Generează ziua</button><button class="ghost" data-f="genw">Generează săptămâna</button></div></section>
+  const past = isPast(mealDay);
+  const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
+  const { days } = fuelWeek(monday);
+  const dem = (d: string) => days.find((x) => x.date === d)!.demand;
+  return `${back()}${banner('meals', 'Meal Planner', 'Mese calculate pe ținta zilei, din valorile USDA.')}
+  <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}">${esc(dayShort(d))}<small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
+  ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost" data-f="gen">Actualizează mesele rămase</button></div>` : ''}
+  <section class="card">${demandTag(dem(mealDay))}
+    <div class="line"><span>Țintă</span><b>${n0(t.kcal)} kcal · P ${t.p} · C ${t.c} · G ${t.f}</b></div>
+    <div class="line"><span>Planificat</span><b>${n0(sum.kcal)} kcal · P ${n0(sum.p)} · C ${n0(sum.c)} · G ${n0(sum.f)}</b></div>
+    <div class="line"><span>Mâncat</span><b>${n0(ate.kcal)} kcal · P ${n0(ate.p)} · C ${n0(ate.c)} · G ${n0(ate.f)}</b></div>
+    <div class="line"><span>Rămas</span><b>${n0(t.kcal - ate.kcal)} kcal · P ${n0(t.p - ate.p)} · C ${n0(t.c - ate.c)} · G ${n0(t.f - ate.f)}</b></div>
+    ${past ? '<p class="hint">Zi încheiată: doar pentru citit.</p>' : `<div class="btns"><button class="primary" data-f="gen">Generează ziua</button><button class="ghost" data-f="genw">Generează săptămâna</button></div><p class="hint">Mesele notate deja în jurnal nu se suprascriu.</p>`}</section>
   ${list.map(mealCard).join('') || '<p class="hint pad">Nicio masă pentru această zi.</p>'}
   <details class="card"><summary><b>Preferințe</b></summary><form id="pf">
     <label class="field">Mese pe zi<select name="meals">${[3, 4, 5].map((n) => `<option ${n === p.meals ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -173,14 +184,14 @@ const waterOn = (d: string) => (ctx.get().drinks[d] ?? []).reduce((a, x) => a + 
 function water() {
   const s = ctx.get();
   const today = ctx.today();
-  const kg = Object.entries(s.weights).sort().at(-1)?.[1] ?? s.profile!.weightKg;
+  const kg = latestKg();
   const target = waterTarget(kg, s.waterMlKg);
   const drank = waterOn(today);
   const t = training();
   const mins = (t.week[weekday(today)] ?? []).reduce((a, x) => a + (x.kind === 'wimhof' || x.kind === 'breath' ? 0 : x.min), 0);
   const fl = trainingFluid(mins, s.sweat);
   const w = windowFor(s.fast, weekday(today));
-  return `${back()}<section class="lead"><h1>Hidratare</h1></section>
+  return `${back()}${banner('water', 'Hidratare')}
   <section class="card tank"><div class="glass"><i data-level="w" data-to="${Math.min(1, drank / target)}"></i><b data-count="wtr" data-to="${drank}">${n0(drank)}</b><small>din ${n0(target)} ml</small></div>
     <div class="chips">${[200, 250, 330, 500].map((m) => `<button data-f="drink" data-v="${m}">+${m} ml</button>`).join('')}</div>
     <div class="seg small"><button data-f="dk" data-v="Apă" class="${dk === 'Apă' ? 'on' : ''}">Apă</button><button data-f="dk" data-v="Cafea/ceai" class="${dk === 'Cafea/ceai' ? 'on' : ''}">Cafea/ceai</button><button data-f="dk" data-v="Altceva" class="${dk === 'Altceva' ? 'on' : ''}">Altceva</button></div>
@@ -204,7 +215,7 @@ function supp() {
   const today = ctx.today();
   const taken = s.suppLog[today] ?? [];
   const issues = analyseStack(s.supps);
-  return `${back()}<section class="lead"><h1>Suplimente</h1><p>Informații educaționale, nu sfaturi medicale. Aplicația nu recomandă automat nimic.</p></section>
+  return `${back()}${banner('supp', 'Suplimente', 'Informații educaționale, nu sfaturi medicale. Aplicația nu recomandă automat nimic.')}
   ${issues.map((i) => `<p class="${i.level === 'warn' ? 'warn' : 'hint'} issue">${esc(i.text)}</p>`).join('')}
   ${s.supps.map((x) => `<section class="card sup"><label class="check"><input type="checkbox" data-take="${x.id}" ${taken.includes(x.id) ? 'checked' : ''}><span><b>${esc(x.product)}</b> ${esc(x.brand)}<br><small class="hint">${esc(x.ingredient)} · ${esc(x.serving)} · ${esc(x.time)} · ${esc(x.freq)}</small></span></label><button class="xs" data-f="delsup" data-v="${x.id}" aria-label="Șterge">×</button></section>`).join('')}
   <details class="card"><summary><b>Adaugă în stack</b></summary><form id="suf">
@@ -243,7 +254,7 @@ function factsFor(week: string): DayFacts[] {
   return Array.from({ length: 7 }, (_, i) => {
     const date = addDays(week, i);
     const sum = totals(dayMeals(s, date));
-    const p = dayPlan(t, date, ctx.today(), i, s.fuel.overrides[date], s.fuel.limits);
+    const p = dayRating(date, t);
     const f = dayFuel(date);
     return { date, kcal: sum.kcal, p: sum.p, c: sum.c, f: sum.f, fiber: sum.fiber, tKcal: f.kcal, tP: f.p, tC: f.c, demand: p.rating.demand, plannedSessions: p.planned.length, doneSessions: p.done.length, water: waterOn(date), suppsTaken: (s.suppLog[date] ?? []).length, fastKept: s.fast.log[date] ?? null };
   });
@@ -280,18 +291,16 @@ function report() {
     ${r.waist != null ? `<div class="line"><span>Talie</span><b>${r.waist} cm</b></div>` : ''}
     ${r.recs.map((x) => `<p class="coach">${esc(x)}</p>`).join('')}</details>`;
   const a = adherence(s.fast, today);
-  return `${back()}<section class="lead"><h1>Raport</h1><p>Doar date salvate de tine. Legăturile dintre cifre nu dovedesc o cauză.</p></section>
+  return `${back()}${banner('analytics', 'Analytics', 'Doar date salvate de tine. Legăturile dintre cifre nu dovedesc o cauză.')}<button class="ghost wide" data-f="sub" data-v="micro">Micronutrienți</button>
   ${card(current, 'Săptămâna curentă, până acum', true)}${list.map((r) => card(r, `Săptămâna din ${r.week}`, false)).join('')}
   ${a.known ? '' : ''}`;
 }
 
 export function fuelHtml() {
-  const out = `<div class="${enter ? 'subin' : ''}">${{ home, carbs, meals, water, supp, micro, report }[sub]()}</div>`;
+  const out = `<div class="${enter ? 'subin' : ''}">${{ home, overview, carbs: carbsHtml, engine: engineHtml, meals, water, supp, micro, report, advanced, recovery }[sub]()}</div>`;
   enter = false;
   return out;
 }
-
-function setPlan(date: string, list: Meal[]) { ctx.get().fuel.plan[date] = list; }
 
 function openSwap(mi: number, ii: number) {
   const s = ctx.get();
@@ -301,6 +310,26 @@ function openSwap(mi: number, ii: number) {
   ctx.open(`<h2>Schimbă ${esc(foodMap.get(it.foodId)?.name ?? '')}</h2><p class="hint">Masa se recalculează ca să păstreze macronutrienții.</p>${alt.map((f) => `<button class="row" data-f="swgo" data-m="${mi}" data-i="${ii}" data-v="${f.id}"><span><b>${esc(f.name)}</b></span><em>${n0(f.kcal)}<small> kcal/100 g</small></em></button>`).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
 }
 
+const entriesOf = (m: Meal) => m.items.flatMap((it) => { const f = foodMap.get(it.foodId); return f ? [entryFrom(f, it.g)] : []; });
+const slotOf = (mi: number) => Math.min(mi, MEALS.length - 1);
+
+/** After a logged meal changed: the journal and the remaining targets follow. False when it cannot be matched. */
+function syncLog(meal: Meal, mi: number, next: ReturnType<typeof entriesOf>): boolean {
+  const s = ctx.get();
+  const days = relog(dayMeals(s, mealDay), meal.id, next, slotOf(mi), meal.done);
+  if (!days) { ctx.toast('Masa a fost notată înainte de această versiune. Schimb-o din Azi.'); return false; }
+  s.days[mealDay] = days;
+  return true;
+}
+
+function openOptions(mi: number) {
+  const s = ctx.get();
+  const m = s.fuel.plan[mealDay]![mi]!;
+  const g = macros(m.items, foodMap);
+  pending = mealOptions(g, foods, s.fuel.prefs, m.time, m.tag, Date.now() % 97, m.name);
+  ctx.open(`<h2>${esc(m.tag || 'Alte variante')}</h2><p class="hint">Aceleași macronutrienți, alte alimente.</p>${pending.map((o, k) => { const t = macros(o.items, foodMap); return `<button class="row" data-f="optgo" data-m="${mi}" data-v="${k}"><span><b>${esc(o.name)}</b><small>${o.items.map((it) => `${n0(it.g)} g ${esc(foodMap.get(it.foodId)?.name ?? '')}`).join(', ')}</small></span><em>${n0(t.kcal)}<small> kcal</small><br>P ${n0(t.p)} · C ${n0(t.c)} · G ${n0(t.f)}</em></button>`; }).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
+}
+
 export function fuelAction(el: HTMLElement): boolean {
   const a = el.dataset['f'];
   if (!a) return false;
@@ -308,28 +337,40 @@ export function fuelAction(el: HTMLElement): boolean {
   const d = el.dataset;
   const v = d['v'] ?? '';
   const mi = Number(d['m']);
-  if (a === 'sub') { sub = v as Sub; enter = true; ctx.render(); scrollTo(0, 0); return true; }
-  if (a === 'ov') { if (v) s.fuel.overrides[d['d']!] = v as Demand; else delete s.fuel.overrides[d['d']!]; }
-  if (a === 'mday') mealDay = v;
-  if (a === 'gen') setPlan(mealDay, genDay(mealDay, Date.now() % 97));
-  if (a === 'genw') { const m = mondayOf(ctx.today()); for (let i = 0; i < 7; i++) { const x = addDays(m, i); if (x >= ctx.today()) setPlan(x, genDay(x, i * 3 + 1)); } }
-  if (a === 'sw') { openSwap(mi, Number(d['i'])); return true; }
-  if (a === 'swgo') { const list = s.fuel.plan[mealDay]!; list[mi] = substitute(list[mi]!, Number(d['i']), foodMap.get(v)!, foodMap); ctx.close(); }
-  if (a === 'rm') s.fuel.plan[mealDay]!.splice(mi, 1);
-  if (a === 'move') {
-    const m = mondayOf(ctx.today());
-    ctx.open(`<h2>Mută pe</h2>${Array.from({ length: 7 }, (_, i) => addDays(m, i)).filter((x) => x !== mealDay).map((x) => `<button class="row" data-f="movego" data-m="${mi}" data-v="${x}"><span><b>${esc(dayShort(x))} ${x.slice(8)}</b></span></button>`).join('')}`);
+  const plan = s.fuel.plan[mealDay] ?? [];
+  const meal = plan[mi];
+  if (a === 'sub') {
+    const go = () => { sub = v as Sub; enter = true; notice.text = v === 'carbs' ? notice.text : ''; ctx.render(); scrollTo(0, 0); };
+    if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) document.startViewTransition(go); else go();
     return true;
   }
-  if (a === 'movego') { const [meal] = s.fuel.plan[mealDay]!.splice(mi, 1); (s.fuel.plan[v] ??= []).push(meal!); ctx.close(); ctx.toast('Masă mutată. Vezi totalurile zilei.'); }
-  if (a === 'eat') {
-    const list = s.fuel.plan[mealDay]!;
-    const meal = list[mi]!;
-    const days = dayMeals(s, mealDay).map((x) => [...x]);
-    for (const it of meal.items) { const f = foodMap.get(it.foodId); if (f) days[Math.min(mi, MEALS.length - 1)]!.push(entryFrom(f, it.g)); }
-    s.days[mealDay] = days;
-    meal.done = true;
+  if (a === 'cal') pickDay(v);
+  if (a === 'calw') pickWeek(Number(v));
+  if (a === 'ov') { if (v) s.fuel.overrides[d['d']!] = v as Demand; else delete s.fuel.overrides[d['d']!]; s.fuel.sig = ''; notice.text = ''; }
+  if (a === 'mday') mealDay = v;
+  if (a === 'gen') { s.fuel.plan[mealDay] = genDay(mealDay, Date.now() % 97); }
+  if (a === 'genw') { const m = mondayOf(ctx.today()); for (let i = 0; i < 7; i++) { const x = addDays(m, i); if (x >= ctx.today()) s.fuel.plan[x] = genDay(x, i * 3 + 1); } }
+  if (a === 'sw') { openSwap(mi, Number(d['i'])); return true; }
+  if (a === 'opts') { openOptions(mi); return true; }
+  if (a === 'swgo') {
+    const next = substitute(meal!, Number(d['i']), foodMap.get(v)!, foodMap);
+    if (meal!.done && !syncLog(next, mi, entriesOf(next))) return true;
+    plan[mi] = next; ctx.close();
   }
+  if (a === 'optgo') {
+    const next = { ...pending[Number(v)]!, id: meal!.id, done: meal!.done };
+    if (meal!.done && !syncLog(next, mi, entriesOf(next))) return true;
+    plan[mi] = next; ctx.close();
+  }
+  if (a === 'rm') { if (meal!.done && !syncLog(meal!, mi, [])) return true; plan.splice(mi, 1); }
+  if (a === 'move') {
+    const m = mondayOf(ctx.today());
+    ctx.open(`<h2>Mută pe</h2>${Array.from({ length: 7 }, (_, i) => addDays(m, i)).filter((x) => x !== mealDay && x >= ctx.today()).map((x) => `<button class="row" data-f="movego" data-m="${mi}" data-v="${x}"><span><b>${esc(dayShort(x))} ${x.slice(8)}</b></span></button>`).join('')}`);
+    return true;
+  }
+  if (a === 'movego') { const [m] = plan.splice(mi, 1); (s.fuel.plan[v] ??= []).push(m!); ctx.close(); ctx.toast('Masă mutată. Vezi totalurile zilei.'); }
+  if (a === 'eat') { if (!syncLog({ ...meal!, done: false }, mi, entriesOf(meal!))) return true; meal!.done = true; }
+  if (a === 'uneat') { if (!syncLog(meal!, mi, [])) return true; meal!.done = false; }
   if (a === 'drink') { const now = new Date(); (s.drinks[ctx.today()] ??= []).push({ id: crypto.randomUUID(), time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, ml: Number(v), kind: dk }); }
   if (a === 'dk') dk = v;
   if (a === 'undrink') s.drinks[ctx.today()] = (s.drinks[ctx.today()] ?? []).filter((x) => x.id !== v);
@@ -347,6 +388,8 @@ export function fuelBind() {
   const save = () => { ctx.commit(); ctx.render(); };
   on('#cyc', (i) => { s.fuel.cycling = i.checked; if (!i.checked) s.fuel.sig = ''; save(); });
   on('#thour', (i) => { s.fuel.trainingHour = i.value || '17:00'; save(); });
+  document.querySelectorAll<HTMLInputElement>('[data-limit]').forEach((i) => i.addEventListener('change', () => { s.fuel.limits[i.dataset['limit'] as 'high' | 'moderate'] = Math.max(5, Number(i.value) || 0); save(); }));
+  document.querySelectorAll<HTMLDetailsElement>('details.mealc').forEach((m) => m.addEventListener('toggle', () => { if (m.open) openMeals.add(m.dataset['id']!); else openMeals.delete(m.dataset['id']!); }));
   on('#mlkg', (i) => { s.waterMlKg = Number(i.value) || 35; save(); });
   on('#rem', (i) => { s.remindMin = Number(i.value) || 0; save(); if (s.remindMin && 'Notification' in window) void Notification.requestPermission(); });
   document.querySelectorAll<HTMLInputElement>('[data-factor]').forEach((i) => i.addEventListener('change', () => { s.fuel.factors[i.dataset['factor'] as Demand] = Math.min(2, Math.max(0.3, Number(i.value) || 1)); save(); }));

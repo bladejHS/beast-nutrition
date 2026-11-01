@@ -89,7 +89,7 @@ export function buildMeal(tpl: Template, target: { p: number; c: number; f: numb
 }
 
 /** Targets per meal: protein evenly, fat evenly, carbs by training share. */
-export function generateDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number): Meal[] {
+export function generateDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: { avoid?: string[]; firstSweet?: boolean } = {}): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
   const words = banned(prefs);
@@ -99,15 +99,17 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
   const sweet = list.filter((t) => t.sweet), savory = list.filter((t) => !t.sweet);
   const meals: Meal[] = [];
   const left = { ...day };
+  const avoid = opts.avoid ?? [];
+  const firstSweet = opts.firstSweet ?? true;
   for (let i = 0; i < n; i++) {
-    const pool = i === 0 && sweet.length ? sweet : savory.length ? savory : list;
+    const pool = i === 0 && firstSweet && sweet.length ? sweet : savory.length ? savory : list;
     let meal: Meal | null = null;
     let best = Infinity;
     const shareLeft = carbShares.slice(i).reduce((x, y) => x + y, 0) || 1;
     const goal = { p: left.p / (n - i), c: (left.c * carbShares[i]!) / shareLeft, f: Math.max(0, left.f) / (n - i) };
     for (let k = 0; k < pool.length; k++) {
       const tpl = pool[(seed + i + k) % pool.length]!;
-      if (meals.some((m) => m.name === tpl.name)) continue;
+      if (avoid.includes(tpl.name) || meals.some((m) => m.name === tpl.name)) continue;
       const option = buildMeal(tpl, goal, byName, db, words, seed + i, times[i] ?? '', tags[i] ?? '');
       if (!option) continue;
       const got = macros(option.items, db);
@@ -123,6 +125,31 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
     }
   }
   return meals;
+}
+
+/** Rebuilds a day around what was already eaten: logged meals stay exactly as they are, the rest share what is left. */
+export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number): Meal[] {
+  const db = new Map(foods.map((f) => [f.id, f]));
+  const kept = existing.filter((m) => m.done);
+  const eaten = macros(kept.flatMap((m) => m.items), db);
+  const free = times.map((_, i) => i).filter((i) => !kept.some((m) => m.time === times[i]));
+  const open = free.slice(-Math.max(0, times.length - kept.length));
+  if (!open.length) return kept;
+  const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
+  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: kept.map((m) => m.name), firstSweet: open[0] === 0 });
+  return [...kept, ...fresh].sort((a, b) => a.time.localeCompare(b.time));
+}
+
+/** Other meals for the same slot, sized to the same macros, best fit first. */
+export function mealOptions(goal: { p: number; c: number; f: number }, foods: Food[], prefs: Prefs, time: string, tag: string, seed: number, current = ''): Meal[] {
+  const db = new Map(foods.map((f) => [f.id, f]));
+  const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
+  const words = banned(prefs);
+  return TEMPLATES.filter((t) => t.cook <= prefs.maxCook && t.name !== current)
+    .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag))
+    .filter((m): m is Meal => !!m)
+    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 }; })
+    .sort((a, b) => a.miss - b.miss).slice(0, 3).map((x) => x.m);
 }
 
 export function substitute(meal: Meal, index: number, next: Food, db: Map<string, Food>): Meal {

@@ -27,12 +27,13 @@ const counts = new Map<string, number>();
 export function afterRender(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('[data-bar]').forEach((el) => {
     const key = el.dataset['bar']!, to = Number(el.dataset['to']);
-    if (calm()) { el.style.transform = `scaleX(${to})`; bars.set(key, to); return; }
+    const scale = el.dataset['axis'] === 'y' ? 'scaleY' : 'scaleX';
+    if (calm()) { el.style.transform = `${scale}(${to})`; bars.set(key, to); return; }
     el.style.transition = 'none';
-    el.style.transform = `scaleX(${bars.get(key) ?? 0})`;
+    el.style.transform = `${scale}(${bars.get(key) ?? 0})`;
     void el.offsetWidth;
     el.style.transition = '';
-    el.style.transform = `scaleX(${to})`;
+    el.style.transform = `${scale}(${to})`;
     bars.set(key, to);
   });
   root.querySelectorAll<HTMLElement>('[data-level]').forEach((el) => {

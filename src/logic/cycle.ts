@@ -1,7 +1,7 @@
 /* The week as the app sees it: the real training rated day by day, and the carbs of the protected plan shared
    out accordingly. Pure, so the rules about history can be tested. Past days never move. */
-import { targetFor, type DayTarget, type Plan, type Sex } from './calc.ts';
-import { weekFuel, type Factors, type Frozen, type FuelDay } from './carbs.ts';
+import { type DayTarget, type Plan, type Sex } from './calc.ts';
+import { dayTarget, weekFuel, type Factors, type Frozen, type FuelDay } from './carbs.ts';
 import { addDays, mondayOf } from './review.ts';
 import type { Snap } from './store.ts';
 import { dayPlan, type DayPlan, type Demand, type Rules, type Training } from './training.ts';
@@ -13,6 +13,8 @@ export interface CycleIn {
   cancelled?: Record<string, string[]>;
   /** Only the user's own classes count; a day without one stays neutral. */
   manual?: boolean;
+  /** An easy day before a HIGH day gets a moderate share. On unless turned off. */
+  prefuel?: boolean;
 }
 
 /** The class of one day, by the rules in force. */
@@ -37,18 +39,23 @@ export function cycleWeek(x: CycleIn, monday: string): { days: FuelDay[]; plans:
   for (const d of Object.keys(plans)) {
     if (d >= x.today) continue;
     const s = x.snap[d];
-    const c = targetFor(x.plan, d).c;
+    const c = dayTarget(x.plan, d).c;
     locked[d] = s ? { c: s.c, base: s.b ?? s.c, p: s.p, f: s.f } : { c, base: c };
   }
   const demand = (d: string) => (d < x.today && x.snap[d]?.demand) || plans[d]!.rating.demand;
-  return { plans, days: weekFuel(x.plan, monday, demand, x.factors, x.sex, locked) };
+  const nextHigh = (d: string) => {
+    if (x.prefuel === false) return false;
+    const next = addDays(d, 1);
+    return (plans[next] ?? rateDay(x, next, 0)).rating.demand === 'high';
+  };
+  return { plans, days: weekFuel(x.plan, monday, demand, x.factors, x.sex, locked, nextHigh) };
 }
 
 /** The target of one day: a frozen day stays as it was, whatever changed since. */
 export function targetOn(x: CycleIn, date: string): DayTarget {
   const snap = x.snap[date];
-  if (date < x.today && snap) return { ...targetFor(x.plan, date), c: snap.c, kcal: snap.kcal, p: snap.p, f: snap.f };
-  if (!x.cycling) return targetFor(x.plan, date);
+  if (date < x.today && snap) return { ...dayTarget(x.plan, date), c: snap.c, kcal: snap.kcal, p: snap.p, f: snap.f, fiberMin: Math.round(snap.kcal / 100), fiberMax: Math.round((snap.kcal / 1000) * 15) };
+  if (!x.cycling) return dayTarget(x.plan, date);
   return cycleWeek(x, mondayOf(date)).days.find((d) => d.date === date)!;
 }
 

@@ -4,12 +4,12 @@ import { dayBand } from '../logic/carbs.ts';
 import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Rated } from '../logic/insights.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
 import { dayMeals, totals } from '../logic/store.ts';
-import { TOLERANCE_LABEL, type Timing, type Tolerance } from '../logic/timing.ts';
+import { TOLERANCE_LABEL, waterBefore, type Timing, type Tolerance } from '../logic/timing.ts';
 import { CARB_LABEL, DEFAULT_RULES, DEMAND_LABEL, WEIGHT_LABEL, type WeightKey } from '../logic/training.ts';
 import { cv } from './carbs.ts';
 import { weekCheck } from './carbweek.ts';
 import { comma, LEVELS, longDay, SHORT, shortDate } from './parts.ts';
-import { fuelWeek, mealSlots, timingFor, training, trainingTime } from './state.ts';
+import { fuelWeek, latestKg, mealSlots, timingFor, training, trainingTime } from './state.ts';
 
 const macroLine = (x: { p: number; c: number; f: number }) => `P ${x.p} · C ${x.c} · G ${x.f}`;
 
@@ -19,6 +19,7 @@ function preCard(t: Timing, date: string) {
   return `<li class="ts pre"><h3>Înainte</h3><div class="ts-h"><b>${p.mealTime}</b><span>cu ${p.gapMin} min înainte, ideal ${p.idealGap}</span></div>
     <div class="ts-m">${macroLine(p)}</div><p>${esc(p.note)}</p>
     ${p.snackTime ? `<p class="hint">Gustare la ${p.snackTime}, cam ${p.snackC} g carbo.</p>` : ''}
+    <p class="hint">Apă: ${waterBefore(latestKg()).map((x) => n0(x)).join('–')} ml în cele 4 ore dinainte (ACSM).</p>
     <div class="btns"><button class="ghost" data-f="topt" data-d="${date}" data-v="pre">Variante de masă</button><button class="ghost" data-f="topt" data-d="${date}" data-v="snack">Variantă ușoară</button></div></li>`;
 }
 
@@ -116,7 +117,7 @@ export function configView() {
     <div class="gap">${sw('cbox', f.boxStrength, 'Box și forță în aceeași zi înseamnă HIGH')}</div></section>
   <details class="card"><summary><b>Intensități pe tip de sesiune</b></summary><p class="hint">Încărcarea = minute × intensitate. Valorile sunt ale aplicației.</p>
     <div class="grid2">${(Object.keys(WEIGHT_LABEL) as WeightKey[]).map((k) => `<label class="field">${WEIGHT_LABEL[k]}<input type="number" step="0.05" min="0" max="1.5" data-weight="${k}" value="${f.weights[k]}"></label>`).join('')}</div></details>
-  <section class="card"><h2>Distribuție</h2><p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii. Nicio zi nu iese din intervalul ${comma(band.lo)}–${comma(band.hi)} × carbohidrații din plan.</p>
+  <section class="card"><h2>Distribuție</h2>${sw('cpre', f.prefuel, 'Pre-fuel: ziua dinaintea unei zile HIGH', 'O zi LOW sau RECOVERY dinaintea unei zile HIGH primește factorul MODERATE, ca sesiunea grea să nu înceapă cu rezerve mici.')}<p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii. Nicio zi nu iese din intervalul ${comma(band.lo)}–${comma(band.hi)} × carbohidrații din plan.</p>
     <div class="grid2">${LEVELS.map((k) => `<label class="field">${DEMAND_LABEL[k]}<input type="number" step="0.05" min="0.3" max="2" data-factor="${k}" value="${f.factors[k]}"></label>`).join('')}</div></section>
   <section class="card"><h2>Timing</h2>
     <label class="field">Ora obișnuită de antrenament<input type="time" id="thour" value="${f.trainingHour}"></label>

@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPlan, type Profile } from './calc.ts';
-import { DEFAULT_FACTORS, mealCarbShares, reconcile } from './carbs.ts';
+import { dayTarget, DEFAULT_FACTORS, exactCarbs, mealCarbShares, mealFatShares, reconcile } from './carbs.ts';
 import { cycleWeek, freeze, rateDay, type CycleIn } from './cycle.ts';
 import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Feedback, type Rated } from './insights.ts';
-import { macros, regenerate, snackOptions, generateDay, type Prefs } from './mealplan.ts';
+import { macros, mealOptions, PRE_TAG, regenerate, snackOptions, generateDay, type Prefs } from './mealplan.ts';
 import { parseBackup } from './store.ts';
-import { intraAdvice, timing, type TimingIn } from './timing.ts';
+import { intraAdvice, mealTimes, sportRows, timing, waterBefore, type TimingIn } from './timing.ts';
 import { classify, DEFAULT_RULES, DEFAULT_WEIGHTS, FALLBACK_WEEK, readTraining, sessionStatus, weightKey, type Session, type Training } from './training.ts';
 
 const man: Profile = { sex: 'm', age: 30, heightCm: 180, weightKg: 100, bf: 20, activity: 1.55, lifts: true };
@@ -249,4 +249,107 @@ test('a backup from an older version gets the new settings', () => {
   assert.equal(s.fuel.tolerance, 'normal');
   assert.deepEqual(s.fuel.cancelled, {});
   assert.equal(s.fuel.weights.boxHard, 1);
+});
+
+test('a day\'s macros add up to its calories, whatever the rounding of the plan', () => {
+  for (const maintenance of [2000, 2317, 2803, 3111]) for (const carbShare of [0.5, 0.55, 0.6, 0.7]) for (const ratePct of [0.4, 0.7, 1]) {
+    const q = buildPlan(man, { phase: 'cut', startDate: '2026-11-02', ratePct, carbShare, maintenance, highDays: [], breaks: null, pace: 'c' });
+    const t = dayTarget(q, MONDAY);
+    assert.equal(t.kcal, t.p * 4 + t.c * 4 + t.f * 9);
+    assert.ok(Math.abs(t.kcal - q.macros.kcal) <= 2, `${t.kcal} of ${q.macros.kcal}`);
+    assert.equal(t.p, q.macros.p);
+    assert.equal(t.f, q.macros.f);
+    assert.equal(t.c, exactCarbs(q.macros));
+  }
+});
+
+test('fibre follows the calories of the day, not of the plan', () => {
+  const days = cycleWeek(input(), MONDAY).days;
+  for (const d of days) { assert.equal(d.fiberMin, Math.round(d.kcal / 100)); assert.equal(d.fiberMax, Math.round((d.kcal / 1000) * 15)); }
+});
+
+test('an easy day before a HIGH day gets a moderate share, and the week stays the same', () => {
+  const on = cycleWeek(input(), MONDAY).days;
+  const off = cycleWeek(input({ prefuel: false }), MONDAY).days;
+  assert.equal(on[2]!.demand, 'low');
+  assert.equal(on[2]!.prefuel, true);
+  assert.equal(on[5]!.prefuel, false, 'Saturday comes before a moderate Sunday');
+  assert.equal(off[2]!.prefuel, false);
+  assert.ok(on[2]!.c > off[2]!.c);
+  assert.ok(on[2]!.c > on[5]!.c, 'Wednesday gets more than an ordinary low day');
+  for (const w of [on, off]) { const r = reconcile(plan, w); assert.equal(r.carbsFuel, r.carbsPlan); assert.equal(r.kcalFuel, r.kcalPlan); }
+});
+
+test('Sunday looks ahead to next Monday across the week boundary', () => {
+  const easySunday: Training = { ...week, week: FALLBACK_WEEK.map((d, i) => (i === 6 ? [] : d)) };
+  const sunday = cycleWeek(input({ training: easySunday }), MONDAY).days[6]!;
+  assert.deepEqual([sunday.demand, sunday.prefuel], ['rest', true]);
+});
+
+test('fat moves away from the meal before training and the day keeps its total', () => {
+  const s = mealFatShares(4, 2, 'high');
+  assert.ok(s[2]! < s[1]!);
+  assert.ok(Math.abs(s.reduce((a, b) => a + b, 0) - 1) < 1e-9);
+  assert.deepEqual(mealFatShares(4, 2, 'rest'), [0.25, 0.25, 0.25, 0.25]);
+  assert.deepEqual(mealFatShares(4, -1, 'high'), [0.25, 0.25, 0.25, 0.25]);
+  const t = timing({ ...base, fatShares: s });
+  assert.ok(t.pre!.f < t.post!.f);
+});
+
+test('meal times stay on the clock when the minutes round up', () => {
+  assert.deepEqual(mealTimes('11:58', 0, 1), ['12:00']);
+  assert.deepEqual(mealTimes('08:00', 720, 3), ['08:00', '13:25', '18:50']);
+  for (const start of ['07:30', '10:13', '11:58', '12:00', '19:59']) for (const eat of [360, 480, 600, 720]) for (const n of [3, 4, 5]) {
+    const list = mealTimes(start, eat, n);
+    assert.ok(list.every((t) => /^\d\d:\d[05]$/.test(t)), list.join());
+    assert.equal(new Set(list).size, n, list.join());
+  }
+});
+
+test('sport references inform and never hide a shortfall', () => {
+  const [c, p, f] = sportRows({ p: 185, c: 320, f: 50 }, 100, 4, 'high');
+  assert.deepEqual([c!.value, c!.ref, c!.ok], ['3,2 g/kg', '6–10 g/kg', false]);
+  assert.deepEqual([p!.value, p!.ok], ['46 g', true]);
+  assert.equal(f!.ok, true);
+  assert.equal(sportRows({ p: 80, c: 150, f: 20 }, 60, 4, 'rest')[2]!.ok, false);
+  assert.deepEqual(waterBefore(80), [400, 550]);
+});
+
+const kitchen = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('n', 'Nuci', 654, 15, 14, 65), mk('e', 'Piept de pui, gătit', 165, 31, 0, 3.6), mk('f', 'Orez alb fiert', 130, 2.7, 28, 0.3), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli fiert', 35, 2.4, 7, 0.4), mk('j', 'Piept de curcan, gătit', 147, 30, 0, 2), mk('k', 'Cartofi fierți', 86, 1.7, 20, 0.1), mk('l', 'Somon gătit', 206, 22, 0, 12.4), mk('v', 'Carne tocată de vită 90%, gătită', 217, 26, 0, 11.8), mk('w', 'Paste fierte', 158, 5.8, 31, 0.9), mk('z', 'Dovlecei', 17, 1.2, 3.1, 0.3), mk('q', 'Linte fiartă', 116, 9, 20, 0.4), mk('m2', 'Morcovi', 41, 0.9, 10, 0.2), mk('t', 'Ton la conservă în apă', 116, 26, 0, 0.8), mk('u', 'Quinoa fiartă', 120, 4.4, 21, 1.9), mk('r', 'Roșii', 18, 0.9, 3.9, 0.2)];
+const kitchenDb = new Map(kitchen.map((f) => [f.id, f]));
+
+test('a big carb meal never turns into a mountain of potatoes', () => {
+  for (let seed = 0; seed < 30; seed++) for (const m of generateDay({ p: 180, c: 380, f: 50 }, [0.2, 0.2, 0.3, 0.3], ['08:00', '12:00', '16:00', '20:00'], [], kitchen, prefs, seed)) for (const it of m.items) {
+    if (it.role === 'carb') assert.ok(it.g <= 460, `${m.name} ${it.g}`);
+  }
+});
+
+test('the meal before training is never a heavy one', () => {
+  const tags = ['', '', PRE_TAG, 'După antrenament'];
+  for (let seed = 0; seed < 30; seed++) {
+    const pre = generateDay({ p: 180, c: 300, f: 50 }, [0.2, 0.2, 0.3, 0.3], ['08:00', '12:00', '15:00', '19:00'], tags, kitchen, prefs, seed)[2];
+    assert.ok(pre && !/Somon|Linte|Vită/.test(pre.name), pre?.name);
+  }
+  assert.ok(mealOptions({ p: 45, c: 90, f: 8 }, kitchen, prefs, '15:00', PRE_TAG, 1).every((m) => !/Somon|Linte|Vită/.test(m.name)));
+});
+
+test('a week of meals varies from day to day and still lands on target', () => {
+  const day = { p: 180, c: 260, f: 50 };
+  const week: string[][] = [];
+  for (let i = 0; i < 7; i++) {
+    const list = generateDay(day, [0.25, 0.25, 0.25, 0.25], ['08:00', '12:00', '16:00', '20:00'], [], kitchen, prefs, i * 3 + 1, { recent: week.slice(-2).flat() });
+    const t = macros(list.flatMap((m) => m.items), kitchenDb);
+    assert.ok(Math.abs(t.p - day.p) <= 8 && Math.abs(t.c - day.c) <= 10 && Math.abs(t.f - day.f) <= 6, JSON.stringify(t));
+    week.push(list.map((m) => m.name));
+  }
+  for (let i = 1; i < 7; i++) assert.notEqual(week[i]!.join(), week[i - 1]!.join());
+  assert.ok(new Set(week.map((x) => x.join())).size >= 5, week.map((x) => x.join()).join(' / '));
+});
+
+test('generated days land on target with sensible portions', () => {
+  for (let seed = 0; seed < 20; seed++) {
+    const day = { p: 185, c: 322, f: 50 };
+    const t = macros(generateDay(day, mealCarbShares(4, 2, 'high'), ['08:00', '12:00', '15:00', '19:00'], ['', '', PRE_TAG, ''], kitchen, prefs, seed, { fatShares: mealFatShares(4, 2, 'high') }).flatMap((m) => m.items), kitchenDb);
+    assert.ok(Math.abs(t.p - day.p) <= 5 && Math.abs(t.c - day.c) <= 8 && Math.abs(t.f - day.f) <= 5, JSON.stringify(t));
+  }
 });

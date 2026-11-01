@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPlan, targetFor, type Plan, type Profile } from './calc.ts';
-import { dayBand, DEFAULT_FACTORS, mealCarbShares, reconcile, weekFuel } from './carbs.ts';
+import { buildPlan, type Plan, type Profile } from './calc.ts';
+import { dayBand, dayTarget, DEFAULT_FACTORS, exactCarbs, mealCarbShares, reconcile, weekFuel } from './carbs.ts';
 import { cycleWeek, freeze, targetOn, type CycleIn } from './cycle.ts';
 import { generateDay, macros, mealOptions, regenerate, type Meal, type Prefs } from './mealplan.ts';
 import { entryFrom, relog, totals, type Entry, type Snap } from './store.ts';
@@ -61,7 +61,7 @@ test('protein, fat and the weekly energy stay those of the plan, and only carbs 
 test('a rest week is no deficit: all days rated the same give back the plan', () => {
   const none: Training = { ...week, week: FALLBACK_WEEK.map(() => []) };
   const { days } = cycleWeek(input({ training: none }), MONDAY);
-  for (const d of days) assert.equal(d.c, targetFor(plan, d.date).c);
+  for (const d of days) assert.equal(d.c, dayTarget(plan, d.date).c);
 });
 
 test('an override changes the day and rebalances only the days ahead', () => {
@@ -229,7 +229,7 @@ test('snapshots saved before this rule are not paid back, so the current week he
   const old: Record<string, Snap> = {};
   for (const d of WEEK.slice(0, 6)) old[d] = { c: 150, kcal: 1780, p: 185, f: 50, demand: 'low', reason: '' };
   const sunday = cycleWeek(input({ plan: mid, today: SUNDAY, snap: old }), MONDAY).days[6]!;
-  assert.equal(sunday.c, mid.macros.c);
+  assert.equal(sunday.c, exactCarbs(mid.macros));
 });
 
 test('an ordinary week lived day by day stays on plan and inside the band', () => {

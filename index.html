@@ -14,11 +14,190 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="favicon.ico">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="splash/emblem.webp" as="image" type="image/webp">
+<link rel="preload" href="fonts/barlow-condensed-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face{font-family:'Barlow Condensed';font-style:normal;font-display:swap;font-weight:700 900;src:url(fonts/barlow-condensed-latin-800-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F}
+@font-face{font-family:'Montserrat';font-style:normal;font-display:swap;font-weight:100 900;src:url(fonts/montserrat-latin-wght-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F}
+html,body{margin:0;background:#05070b;color:#f2f6fc}
+/* BEAST AWAKENING, the Beast Nutrition cut, about 2.5 s. 0–.4 darkness, navy smoke, slow dust; .4–.9 an electric streak reveals the wolf;
+   .9–1.5 the wolf comes up while the fuel ring fills with the plan's own protein, carbs and fat; 1.5–2 BEAST NUTRITION and the tagline;
+   2–2.5 a blue slash opens the app. Scripted below. */
+#splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#05070b;color:#f2f6fc;animation:sp-guard 0s linear 9s forwards}
+@keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
+.sp-smoke,.sp-dust,.sp-sparks,.sp-beam{position:absolute;inset:0;pointer-events:none}
+.sp-smoke{opacity:0}
+.sp-smoke b{position:absolute;width:120vmax;height:120vmax;border-radius:50%;background:radial-gradient(closest-side,rgba(16,38,76,.62),rgba(7,17,31,.3) 55%,transparent 72%);will-change:transform}
+.sp-smoke b:nth-child(1){left:-70vmax;top:-30vmax}.sp-smoke b:nth-child(2){right:-74vmax;top:-12vmax}.sp-smoke b:nth-child(3){left:-30vmax;bottom:-84vmax}
+.sp-go .sp-smoke{animation:sp-in .5s ease-out both}
+.sp-go .sp-smoke b:nth-child(1){animation:sp-drift1 2.6s linear both}.sp-go .sp-smoke b:nth-child(2){animation:sp-drift2 2.6s linear both}.sp-go .sp-smoke b:nth-child(3){animation:sp-drift3 2.6s linear both}
+.sp-dust i{position:absolute;left:var(--x);top:var(--y);width:var(--s);height:var(--s);border-radius:50%;background:#48cfff;opacity:0}
+.sp-go .sp-dust i{animation:sp-dust 2.3s linear var(--d) both}
+.sp-beam{opacity:0;background:linear-gradient(114deg,transparent 30%,rgba(22,119,255,.2) 49%,rgba(72,207,255,.08) 53%,transparent 68%)}
+.sp-go .sp-beam{animation:sp-beam 1.5s ease-out .42s both}
+.sp-cam{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:clamp(24px,4.6vh,38px);--w:min(54vw,33vh,300px)}
+.sp-stage{position:relative;width:var(--w);aspect-ratio:680/801}
+.sp-halo,.sp-pulse{position:absolute;left:50%;top:50%;border-radius:50%;pointer-events:none;opacity:0}
+.sp-halo{width:170%;aspect-ratio:1;margin:-85% 0 0 -85%;background:radial-gradient(closest-side,rgba(22,119,255,.3),rgba(22,119,255,.08) 55%,transparent 74%)}
+.sp-pulse{width:120%;aspect-ratio:1;margin:-60% 0 0 -60%;background:radial-gradient(closest-side,rgba(72,207,255,.5),rgba(22,119,255,.26) 46%,transparent 72%)}
+.sp-go .sp-halo{animation:sp-in .5s ease-out .5s both}
+.sp-go .sp-pulse{animation:sp-pulse .6s cubic-bezier(.2,.7,.2,1) .98s both}
+.sp-emb{position:absolute;inset:0;clip-path:polygon(-40% -10%,-40% -10%,-70% 110%,-70% 110%);transform:scale(1.07);will-change:transform,clip-path}
+.sp-go .sp-emb{animation:sp-reveal .46s cubic-bezier(.6,0,.3,1) .44s forwards,sp-settle .62s cubic-bezier(.16,.8,.24,1) .9s forwards}
+.sp-rim{position:absolute;inset:0;opacity:.46;filter:drop-shadow(0 0 1px rgba(72,207,255,.85)) drop-shadow(0 0 14px rgba(22,119,255,.5))}
+.sp-rim img{display:block;width:100%;height:100%}
+.sp-go .sp-rim{animation:sp-wake .5s ease-out .92s forwards}
+.sp-sheen{position:absolute;inset:0;overflow:hidden;-webkit-mask:url(splash/emblem.webp) center/100% 100% no-repeat;mask:url(splash/emblem.webp) center/100% 100% no-repeat}
+.sp-sheen i{position:absolute;inset:-10% -70%;background:linear-gradient(104deg,transparent 45%,rgba(205,232,255,.72) 50%,transparent 55%);transform:translateX(-58%);opacity:0}
+.sp-go .sp-sheen i{animation:sp-sheen .44s ease-in-out 1.06s both}
+.sp-streak{position:absolute;left:50%;top:50%;width:190vmax;height:3px;margin:-1.5px 0 0 -95vmax;background:linear-gradient(90deg,transparent 34%,#1677ff 47%,#d9f1ff 50%,#1677ff 53%,transparent 66%);box-shadow:0 0 14px rgba(22,119,255,.9);opacity:0;transform:rotate(-24deg) translateX(-62%);will-change:transform}
+.sp-go .sp-streak{animation:sp-streak .46s cubic-bezier(.6,0,.3,1) .42s both}
+.sp-sparks{left:50%;top:44%;right:auto;bottom:auto;width:0;height:0}
+.sp-sparks i{position:absolute;width:15px;height:1.5px;border-radius:2px;background:linear-gradient(90deg,transparent,#48cfff);opacity:0;transform:rotate(var(--a))}
+.sp-go .sp-sparks i{animation:sp-spark .42s ease-out var(--d) both}
+.sp-id{position:relative;display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px)}
+.sp-name{margin:0;font:800 clamp(30px,10vw,66px)/.95 'Barlow Condensed','Arial Narrow',Impact,sans-serif;letter-spacing:.1em;margin-right:-.1em;text-transform:uppercase;white-space:nowrap;background:linear-gradient(180deg,#f2f6fc 28%,#9fb0c6 92%);-webkit-background-clip:text;background-clip:text;color:transparent;opacity:0;clip-path:inset(0 100% 0 0)}
+.sp-name span{background:linear-gradient(180deg,#48cfff,#1677ff 78%);-webkit-background-clip:text;background-clip:text}
+.sp-rule{display:block;width:min(62vw,340px);height:1px;background:linear-gradient(90deg,transparent,#1677ff 22%,#48cfff 50%,#1677ff 78%,transparent);transform:scaleX(0);opacity:0}
+.sp-tag{margin:0;font:700 clamp(10.5px,2.9vw,14px)/1.2 'Montserrat',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#8b97a8;white-space:nowrap;opacity:0;transform:translateY(6px)}
+.sp-go .sp-name{animation:sp-name .36s cubic-bezier(.2,.8,.2,1) 1.5s forwards}
+.sp-go .sp-rule{animation:sp-rule .34s cubic-bezier(.2,.8,.2,1) 1.62s forwards}
+.sp-go .sp-tag{animation:sp-tag .28s ease-out 1.72s forwards}
+.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));padding:10px 12px;border:0;background:none;color:#8b97a8;font:700 11px/1 'Montserrat',system-ui,sans-serif;letter-spacing:.18em;cursor:pointer;opacity:0;transition:opacity .3s}
+.sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
+.sp-skip:focus-visible{outline:2px solid #48cfff;opacity:1}
+/* reduced motion or the short intro: the finished picture, only faded */
+.sp-calm .sp-emb{clip-path:none;transform:none}.sp-calm .sp-rim{opacity:1}.sp-calm .sp-halo{opacity:1}.sp-calm .sp-smoke{opacity:1}
+.sp-calm .sp-name,.sp-calm .sp-tag{opacity:1;clip-path:none;transform:none}.sp-calm .sp-rule{opacity:1;transform:none}
+#splash.sp-fade{animation:none;opacity:0;transition:opacity .24s linear;pointer-events:none}
+/* the entry: a blue slash, and the splash wiped away behind it */
+#splash.sp-exit{animation:sp-wipe .46s cubic-bezier(.7,0,.2,1) forwards;pointer-events:none}
+#sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(22,119,255,.5) 34%,#1677ff 47%,#bfe6ff 50%,#1677ff 53%,rgba(22,119,255,.34) 68%,transparent)}
+#sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
+.sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 15px/1.4 'Montserrat',system-ui,sans-serif;color:#f2f6fc}
+.sp-fail a{color:#48cfff;font-weight:700}
+@keyframes sp-in{to{opacity:1}}
+@keyframes sp-drift1{to{transform:translate(9vmax,-3vmax)}}
+@keyframes sp-drift2{to{transform:translate(-8vmax,4vmax)}}
+@keyframes sp-drift3{to{transform:translate(5vmax,-6vmax)}}
+@keyframes sp-dust{0%{opacity:0;transform:none}24%{opacity:var(--o)}100%{opacity:0;transform:translate(var(--dx),var(--dy))}}
+@keyframes sp-beam{0%{opacity:0}34%{opacity:1}100%{opacity:.42}}
+@keyframes sp-reveal{to{clip-path:polygon(-40% -10%,170% -10%,140% 110%,-70% 110%)}}
+@keyframes sp-settle{to{transform:scale(1)}}
+@keyframes sp-wake{to{opacity:1}}
+@keyframes sp-pulse{0%{opacity:0;transform:scale(.72)}30%{opacity:.95}100%{opacity:0;transform:scale(1.5)}}
+@keyframes sp-sheen{0%{opacity:0;transform:translateX(-58%)}18%{opacity:1}82%{opacity:1}100%{opacity:0;transform:translateX(58%)}}
+@keyframes sp-streak{0%{opacity:0;transform:rotate(-24deg) translateX(-62%)}12%{opacity:1}86%{opacity:1}100%{opacity:0;transform:rotate(-24deg) translateX(62%)}}
+@keyframes sp-spark{0%{opacity:0;transform:rotate(var(--a)) translateX(0)}30%{opacity:.9}100%{opacity:0;transform:rotate(var(--a)) translateX(var(--l))}}
+@keyframes sp-name{to{opacity:1;clip-path:inset(-10% -4% -10% 0)}}
+@keyframes sp-rule{to{opacity:1;transform:none}}
+@keyframes sp-tag{to{opacity:1;transform:none}}
+@keyframes sp-wipe{from{clip-path:polygon(calc(-50% + 7vh) 0,220% 0,220% 100%,calc(-50% - 7vh) 100%)}to{clip-path:polygon(calc(130% + 7vh) 0,220% 0,220% 100%,calc(130% - 7vh) 100%)}}
+@keyframes sp-slash{0%{opacity:1;transform:translateX(-65vw) skewX(-8deg)}100%{opacity:1;transform:translateX(115vw) skewX(-8deg)}}
+/* the fuel ring: three arcs, one per macronutrient */
+.sp-ring{position:absolute;left:50%;top:50%;width:134%;aspect-ratio:1;transform:translate(-50%,-50%);overflow:visible;pointer-events:none}
+.sp-ring circle{fill:none;stroke-width:2.4}
+.sp-ring .t{stroke:#101c2d;opacity:0}
+.sp-ring .m{stroke-linecap:butt;stroke-dasharray:0 100;transform-origin:50% 50%;transform:rotate(var(--rot))}
+.sp-ring .p{stroke:#f2f6fc}.sp-ring .c{stroke:#1677ff}.sp-ring .f{stroke:#48cfff}
+.sp-go .sp-ring .t{animation:sp-in .4s ease-out .7s forwards}
+.sp-go .sp-ring .p{animation:sp-arc .34s cubic-bezier(.3,0,.2,1) .95s forwards}
+.sp-go .sp-ring .c{animation:sp-arc .42s cubic-bezier(.3,0,.2,1) 1.2s forwards}
+.sp-go .sp-ring .f{animation:sp-arc .26s cubic-bezier(.3,0,.2,1) 1.54s forwards}
+.sp-calm .sp-ring .t{opacity:1}.sp-calm .sp-ring .m{stroke-dasharray:var(--len) 100}
+@keyframes sp-arc{to{stroke-dasharray:var(--len) 100}}
+</style>
 </head>
 <body>
+<div id="splash">
+  <div class="sp-smoke" aria-hidden="true"><b></b><b></b><b></b></div>
+  <div class="sp-dust" aria-hidden="true"><i style="--x:61%;--y:77%;--s:3px;--o:0.4;--d:520ms;--dx:35px;--dy:-78px"></i><i style="--x:27%;--y:71%;--s:3px;--o:0.55;--d:190ms;--dx:-28px;--dy:-62px"></i><i style="--x:42%;--y:24%;--s:1.5px;--o:0.55;--d:42ms;--dx:36px;--dy:-65px"></i><i style="--x:61%;--y:89%;--s:2px;--o:0.55;--d:15ms;--dx:27px;--dy:-86px"></i><i style="--x:11%;--y:10%;--s:2px;--o:0.3;--d:30ms;--dx:59px;--dy:-61px"></i><i style="--x:45%;--y:62%;--s:2px;--o:0.55;--d:239ms;--dx:41px;--dy:-72px"></i><i style="--x:67%;--y:6%;--s:1.5px;--o:0.4;--d:284ms;--dx:12px;--dy:-55px"></i><i style="--x:14%;--y:38%;--s:2px;--o:0.3;--d:525ms;--dx:-4px;--dy:-89px"></i><i style="--x:12%;--y:78%;--s:1.5px;--o:0.4;--d:110ms;--dx:-3px;--dy:-66px"></i><i style="--x:12%;--y:8%;--s:1.5px;--o:0.3;--d:214ms;--dx:-34px;--dy:-60px"></i><i style="--x:52%;--y:56%;--s:3px;--o:0.3;--d:579ms;--dx:40px;--dy:-78px"></i><i style="--x:90%;--y:40%;--s:2px;--o:0.3;--d:318ms;--dx:2px;--dy:-90px"></i><i style="--x:56%;--y:21%;--s:2px;--o:0.3;--d:103ms;--dx:-39px;--dy:-87px"></i><i style="--x:63%;--y:68%;--s:2px;--o:0.55;--d:572ms;--dx:-16px;--dy:-62px"></i></div>
+  <div class="sp-beam" aria-hidden="true"></div>
+  <div class="sp-cam">
+    <div class="sp-stage" aria-hidden="true">
+      <div class="sp-halo"></div>
+      <div class="sp-pulse"></div>
+      <svg class="sp-ring" viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="57"/><circle class="m p" cx="60" cy="60" r="57" pathLength="100"/><circle class="m c" cx="60" cy="60" r="57" pathLength="100"/><circle class="m f" cx="60" cy="60" r="57" pathLength="100"/></svg>
+      <div class="sp-emb">
+        <div class="sp-rim"><img src="splash/emblem.webp" alt="" width="680" height="801" decoding="sync"></div>
+        <div class="sp-sheen"><i></i></div>
+      </div>
+      <i class="sp-streak"></i>
+    </div>
+    <div class="sp-id">
+      <p class="sp-name">Beast <span>Nutrition</span></p>
+      <i class="sp-rule" aria-hidden="true"></i>
+      <p class="sp-tag">FUEL. PERFORMANCE. RECOVERY.</p>
+    </div>
+  </div>
+  <div class="sp-sparks" aria-hidden="true"><i style="--a:-24deg;--l:44vmin;--d:520ms"></i><i style="--a:-20deg;--l:58vmin;--d:560ms"></i><i style="--a:-28deg;--l:38vmin;--d:600ms"></i><i style="--a:156deg;--l:36vmin;--d:580ms"></i><i style="--a:152deg;--l:46vmin;--d:640ms"></i><i style="--a:-16deg;--l:34vmin;--d:660ms"></i></div>
+  <button class="sp-skip" type="button" aria-label="Sari peste intro">SARI</button>
+</div>
+<div id="sp-slash" aria-hidden="true"></div>
 <div id="app"></div>
 <div id="sheet"></div>
 <div id="toast" role="status"></div>
+<script>
+// Plays on a fresh launch only: the page stays loaded while you move around the app, and a reload in the same session skips it.
+// The session key is this app's own: both apps share an origin, and opening one must not silence the other.
+// main.ts builds the dashboard underneath at the same time, so the exit only waits if that is genuinely not ready.
+(function () {
+  // The ring shows this person's own plan: each macro's share of the calories.
+  try {
+    var saved = JSON.parse(localStorage.getItem('beast-nutrition:v2') || 'null'), m = saved && saved.plan && saved.plan.macros;
+    var parts = m && m.kcal > 0 ? [m.p * 4, m.c * 4, m.f * 9] : [30, 50, 20];
+    var sum = parts[0] + parts[1] + parts[2], at = -90;
+    ['p', 'c', 'f'].forEach(function (k, i) {
+      var share = parts[i] / sum * 100, arc = document.querySelector('.sp-ring .' + k);
+      if (arc) { arc.style.setProperty('--len', (share - 1.4).toFixed(2)); arc.style.setProperty('--rot', at.toFixed(1) + 'deg'); }
+      at += share * 3.6;
+    });
+  } catch (e) { /* the default look of the stylesheet stays */ }
+  var sp = document.getElementById('splash'), slash = document.getElementById('sp-slash');
+  if (!sp) return;
+  var mode = 'full', seen = false;
+  try { mode = localStorage.getItem('beast-nutrition:opening') || 'full'; } catch (e) { /* storage blocked */ }
+  try { seen = sessionStorage.getItem('beast-nutrition:opened') === '1'; sessionStorage.setItem('beast-nutrition:opened', '1'); } catch (e) { /* storage blocked */ }
+  function drop() { sp.remove(); if (slash) slash.remove(); }
+  if (seen || mode === 'off') { drop(); return; }
+  var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var HOLD = calm ? 800 : 2000, LIMIT = 6000;
+  var t0 = 0, started = false, leaving = false, broken = false;
+  function ready() { var a = document.getElementById('app'); return !!a && a.children.length > 0; }
+  addEventListener('error', function (e) { if (e.error || (e.target && e.target.tagName === 'SCRIPT')) broken = true; }, true);
+  function leave() {
+    if (leaving) return;
+    if (!ready() && !broken && performance.now() - t0 < LIMIT) { setTimeout(leave, 60); return; }
+    leaving = true;
+    if (!ready()) {
+      var a = document.getElementById('app');
+      if (a) a.innerHTML = '<div class="sp-fail"><p>Aplicația nu s-a putut încărca.</p><a href="./">Încearcă din nou</a></div>';
+    }
+    sp.classList.remove('sp-go', 'sp-calm');
+    sp.classList.add(calm ? 'sp-fade' : 'sp-exit');
+    if (calm) sp.classList.add('sp-calm'); else if (slash) slash.classList.add('sp-exit');
+    setTimeout(drop, calm ? 280 : 480);
+  }
+  function go() {
+    if (started) return;
+    started = true;
+    t0 = performance.now();
+    sp.classList.add(calm ? 'sp-calm' : 'sp-go');
+    setTimeout(leave, HOLD);
+  }
+  // starts when the wolf is decoded, but a slow image never holds the app back
+  var im = new Image();
+  im.onload = im.onerror = go;
+  im.src = 'splash/emblem.webp';
+  setTimeout(go, 500);
+  function skip() { if (!started) go(); t0 = t0 || performance.now(); leave(); }
+  sp.addEventListener('click', skip);
+  addEventListener('keydown', function k(e) {
+    if (!sp.isConnected) { removeEventListener('keydown', k); return; }
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') skip();
+  });
+})();
+</script>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

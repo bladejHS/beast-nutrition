@@ -26,7 +26,7 @@ export function flow(p: DayPlan, demand: Demand, kcal: number, c: number) {
   return `<ol class="flow" aria-label="De la antrenament la ținte"><li><span>Antrenament</span><b>${esc(work)}</b></li><li><span>Cerere</span><b>${level}${p.rating.load ? ` · ${p.rating.load}` : ''}</b></li><li><span>Clasă</span><b>${CARB_LABEL[demand]}</b></li><li><span>Ținte</span><b>${n0(kcal)} kcal · ${c} g</b></li></ol>`;
 }
 
-function hero(demand: Demand, p: DayPlan) {
+function hero(demand: Demand, p: DayPlan, prefuel: boolean) {
   const s = ctx.get();
   const today = ctx.today();
   const f = dayFuel(today);
@@ -39,7 +39,7 @@ function hero(demand: Demand, p: DayPlan) {
   return `<section class="cc ${demand} ${flip ? 'flip' : ''} ${fx.recalc ? 'recalc' : ''}"><i class="cc-sweep"></i>
     <p class="cc-k"><span>Today's Fuel Strategy</span><b>${esc(longDay(today))}</b></p>
     <h1 class="cc-class"><span>${a}</span>${b ? ` ${b}` : ''}</h1>
-    <p class="cc-why">${esc(p.rating.reason)} ${basis}</p>
+    <p class="cc-why">${esc(p.rating.reason)} ${basis}${prefuel ? ' Mâine e o zi HIGH, așa că azi primești o porție moderată de carbohidrați.' : ''}</p>
     ${flow(p, demand, f.kcal, f.c)}
     <div class="cc-kcal"><div><b data-count="cc-k" data-to="${f.kcal}">${n0(f.kcal)}</b><span>kcal țintă</span></div><div class="cc-left"><b data-count="cc-e" data-to="${Math.round(eaten.kcal)}">${n0(eaten.kcal)}</b><span>mâncat</span></div><div class="cc-left"><b class="${left < 0 ? 'over' : ''}" data-count="cc-l" data-to="${Math.abs(Math.round(left))}">${n0(Math.abs(left))}</b><span>${left < 0 ? 'peste' : 'rămas'}</span></div></div>
     <div class="mcs">${macroTile('Proteine', 'cc-p', f.p, eaten.p)}${macroTile('Carbo', 'cc-c', f.c, eaten.c)}${macroTile('Grăsimi', 'cc-f', f.f, eaten.f)}</div>
@@ -73,7 +73,7 @@ function todayView() {
   const off = s.fuel.cancelled[today] ?? [];
   const next = nextSession(p, off);
   const alts = picks(p.planned);
-  return `${hero(day.demand, p)}
+  return `${hero(day.demand, p, day.prefuel)}
   ${notice.text ? `<p class="updated">${esc(notice.text)}</p>` : ''}
   ${s.fuel.cycling ? '' : `<section class="card"><label class="switch"><input type="checkbox" id="cyc"><i></i><span>Folosește distribuția în ținta zilnică</span></label><p class="hint">Oprit: ținta rămâne cea din plan. Pornit, azi ai avea ${day.c} g carbo.</p></section>`}
   ${timingStrip(timingFor(today), day.demand)}

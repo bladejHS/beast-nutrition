@@ -46,6 +46,8 @@ export interface Fuel {
   preGap: number;
   tolerance: Tolerance;
   intra: boolean;
+  /** An easy day before a HIGH day gets a moderate share of the carbs. */
+  prefuel: boolean;
   /** date → sessions the user cancelled. */
   cancelled: Record<string, string[]>;
   feedback: Record<string, Feedback>;
@@ -79,7 +81,7 @@ export const MEALS = ['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Masa 5'];
 export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, weights: {}, checkins: {}, custom: [], recent: [],
   fast: freshFasting(),
   fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [],
-    mode: 'auto', sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, cancelled: {}, feedback: {} },
+    mode: 'auto', sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, prefuel: true, cancelled: {}, feedback: {} },
   drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {} });
 
 /** Saved states from older versions get the fields added since. */

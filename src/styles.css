@@ -487,6 +487,7 @@ b.over, em.over { color: var(--warn); }
 .ts-h span { color: var(--mute); font-size: 12px; }
 .ts-m { margin-top: 5px; font-weight: 700; font-size: 14px; }
 .ts p { font-size: 13.5px; margin: 6px 0 0; }
+b.under { color: var(--warn); }
 .ins.watch { border-color: var(--warn); }
 .ins.good { border-color: var(--sky); }
 .hist summary { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }

@@ -11,6 +11,29 @@ export const IDEAL_GAP: Record<Tolerance, number> = { low: 180, normal: 120, hig
 const toMin = (t: string) => { const [h = 0, m = 0] = t.split(':').map(Number); return h * 60 + m; };
 export const toTime = (min: number) => { const v = ((Math.round(min) % 1440) + 1440) % 1440; return `${String(Math.floor(v / 60)).padStart(2, '0')}:${String(v % 60).padStart(2, '0')}`; };
 
+/** Meal times across the eating window, on whole 5 minutes. */
+export function mealTimes(start: string, eatMin: number, n: number): string[] {
+  return Array.from({ length: n }, (_, i) => toTime(Math.round((toMin(start) + (n > 1 ? (eatMin * 0.9 * i) / (n - 1) : 0)) / 5) * 5));
+}
+
+/** Water in the hours before training, from body weight: 5–7 ml/kg (ACSM, Sawka 2007). */
+export const waterBefore = (kg: number) => [Math.round((kg * 5) / 50) * 50, Math.round((kg * 7) / 50) * 50] as const;
+
+export interface SportRow { label: string; value: string; ref: string; ok: boolean }
+
+/** The day against sports-nutrition references. Information only: in a deficit carbs usually sit under them, and nothing is changed for it. */
+export function sportRows(day: { p: number; c: number; f: number }, kg: number, meals: number, demand: Demand): SportRow[] {
+  const per = (g: number) => (g / kg).toFixed(1).replace('.', ',');
+  const range: Record<Demand, [number, number]> = { rest: [3, 5], low: [3, 5], moderate: [5, 7], high: [6, 10] };
+  const [lo, hi] = range[demand];
+  const dose = day.p / meals;
+  return [
+    { label: 'Carbohidrați', value: `${per(day.c)} g/kg`, ref: `${lo}–${hi} g/kg`, ok: day.c / kg >= lo },
+    { label: 'Proteină pe masă', value: `${Math.round(dose)} g`, ref: `peste ${Math.round(kg * 0.25)} g`, ok: dose >= kg * 0.25 },
+    { label: 'Grăsimi', value: `${per(day.f)} g/kg`, ref: 'peste 0,5 g/kg', ok: day.f / kg >= 0.5 },
+  ];
+}
+
 export interface Intra { level: 'none' | 'small' | 'optional' | 'advised'; minutes: number; gLow: number; gHigh: number; total: number; text: string }
 
 /** Only hard minutes count: a long easy session asks for nothing during it. */
@@ -32,6 +55,8 @@ export interface TimingIn {
   start: string; sessions: Session[]; demand: Demand;
   day: { p: number; c: number; f: number };
   times: string[]; shares: number[]; trainingMeal: number | null;
+  /** Share of the day's fat per meal; even when missing. */
+  fatShares?: number[];
   tolerance: Tolerance; gap: number;
   /** Class of tomorrow, null when unknown. */
   tomorrow: Demand | null;
@@ -47,7 +72,7 @@ export function timing(x: TimingIn): Timing {
   const start = toMin(x.start);
   const end = start + minutes;
   const n = x.times.length;
-  const slot = (i: number) => ({ p: Math.round(x.day.p / n), c: Math.round(x.day.c * x.shares[i]!), f: Math.round(x.day.f / n), slot: i, mealTime: x.times[i]! });
+  const slot = (i: number) => ({ p: Math.round(x.day.p / n), c: Math.round(x.day.c * x.shares[i]!), f: Math.round(x.day.f * (x.fatShares?.[i] ?? 1 / n)), slot: i, mealTime: x.times[i]! });
   const base = { start: x.start, end: toTime(end), minutes, intra: intraAdvice(x.sessions, x.tolerance, x.weights), hasSession: real.length > 0 };
   if (x.trainingMeal == null) return { ...base, pre: null, post: null };
   const tm = x.trainingMeal;

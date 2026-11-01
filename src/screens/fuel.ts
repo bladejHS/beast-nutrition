@@ -13,7 +13,7 @@ import { insights, type Feedback, type FeedbackKey, type Rated } from '../logic/
 import { toTime, type Tolerance } from '../logic/timing.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
 import { back, banner, cardSrc } from './parts.ts';
-import { dayFuel, dayRating, fuelWeek, fx, loadPantry, mealSlots, notice, pantry, timingFor, training } from './state.ts';
+import { dayFuel, dayRating, fuelWeek, fx, latestKg, loadPantry, mealSlots, notice, pantry, timingFor, training } from './state.ts';
 
 type Sub = 'home' | 'overview' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'advanced' | 'recovery';
 let sub: Sub = 'home';
@@ -24,7 +24,6 @@ let pending: Meal[] = [];
 const openMeals = new Set<string>();
 
 const demandTag = (d: Demand) => `<span class="dm ${d}">${DEMAND_LABEL[d]}</span>`;
-const latestKg = () => Object.entries(ctx.get().weights).sort().at(-1)?.[1] ?? ctx.get().profile!.weightKg;
 const kgText = (v: number) => v.toFixed(1).replace('.', ',');
 
 function sleepAvg(): number | null {
@@ -129,7 +128,8 @@ function advanced() {
 function genDay(date: string, seed: number): Meal[] {
   const s = ctx.get();
   const sl = mealSlots(date);
-  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, pantry.foods, s.fuel.prefs, seed);
+  const recent = [-2, -1, 1].flatMap((k) => s.fuel.plan[addDays(date, k)] ?? []).map((m) => m.name);
+  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, pantry.foods, s.fuel.prefs, seed, sl.fatShares, recent);
 }
 
 const isPast = (d: string) => d < ctx.today();
@@ -452,6 +452,7 @@ export function fuelBind() {
   const flag = (id: string, fn: (on: boolean) => void) => on(id, (i) => { fn(i.checked); s.fuel.sig = ''; fx.recalc = true; save(); });
   flag('#csync', (v) => { s.fuel.sync = v; });
   flag('#cbox', (v) => { s.fuel.boxStrength = v; });
+  flag('#cpre', (v) => { s.fuel.prefuel = v; });
   on('#cintra', (i) => { s.fuel.intra = i.checked; save(); });
   on('#pregap', (i) => { s.fuel.preGap = Math.max(0, Number(i.value) || 0); save(); });
   on('#frpe', (i) => { (s.fuel.feedback[i.dataset['d']!] ??= {} as Feedback).rpe = Number(i.value); fx.recalc = true; save(); });

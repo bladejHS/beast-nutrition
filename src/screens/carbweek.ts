@@ -3,11 +3,12 @@ import { ctx, dayShort, esc, n0 } from '../app.ts';
 import { reconcile, type FuelDay } from '../logic/carbs.ts';
 import { FEEDBACK } from '../logic/insights.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
+import { sportRows } from '../logic/timing.ts';
 import { dayMeals, totals } from '../logic/store.ts';
 import { CARB_LABEL, DEMAND_LABEL, nextSession, picks, sessionStatus, type DayPlan, type Demand } from '../logic/training.ts';
 import { cv, flow } from './carbs.ts';
 import { comma, LEVELS, longDay, SHORT, sessionRow, shortDate } from './parts.ts';
-import { dayFuel, fuelWeek, fx, rules, timingFor, training } from './state.ts';
+import { dayFuel, fuelWeek, fx, latestKg, rules, timingFor, training } from './state.ts';
 
 export function weekCheck(days: FuelDay[]) {
   const r = reconcile(ctx.get().plan!, days);
@@ -35,7 +36,7 @@ function dayRow(d: FuelDay, p: DayPlan, today: string, i: number) {
   return `<button class="dr ${d.demand} ${d.date === today ? 'now' : ''}" data-f="dd" data-v="${d.date}" style="--i:${i}">
     <span class="dr-d"><small>${esc(dayShort(d.date))}</small><b>${Number(d.date.slice(8))}</b></span>
     <span class="dr-m"><b>${names.length ? esc(names.join(' + ')) : 'Odihnă'}</b>${alts.length ? `<small>${esc(alts.join('; '))}</small>` : ''}
-      <span class="dr-t"><i class="dm ${d.demand}">${DEMAND_LABEL[d.demand]}</i><i class="dm ${d.demand}">${CARB_LABEL[d.demand]}</i>${s.fuel.overrides[d.date] ? '<i class="dm">Manual</i>' : ''}</span>
+      <span class="dr-t"><i class="dm ${d.demand}">${DEMAND_LABEL[d.demand]}</i><i class="dm ${d.demand}">${CARB_LABEL[d.demand]}</i>${s.fuel.overrides[d.date] ? '<i class="dm">Manual</i>' : ''}${d.prefuel ? '<i class="dm">Pre-fuel</i>' : ''}</span>
       <small class="dr-n"><b>${n0(d.kcal)} kcal</b> · P ${d.p} · C ${d.c} · G ${d.f}${real.length ? ` · ${done}/${real.length} făcute` : ''}</small></span>
   </button>`;
 }
@@ -78,6 +79,12 @@ function analysis(p: DayPlan) {
     <div class="thr"><div class="track big"><div data-bar="an-t" data-to="${Math.min(1, p.rating.load / top)}"></div></div><i style="left:${pct(lim.moderate)}"></i><i style="left:${pct(lim.high)}"></i></div>
     <div class="thl"><span style="left:${pct(lim.moderate)}">MOD ${Math.round(lim.moderate)}</span><span style="left:${pct(lim.high)}">HIGH ${Math.round(lim.high)}</span></div>
     <p class="hint">Încărcare ${p.rating.load}. Scorul e al aplicației: minute × intensitatea tipului de sesiune. E o estimare, nu o măsurare validată a nevoii de carbohidrați.</p></section>`;
+}
+
+function sportCard(demand: Demand, f: { p: number; c: number; f: number }) {
+  const rows = sportRows(f, latestKg(), ctx.get().fuel.prefs.meals, demand);
+  return `<section class="card"><h2>Repere sportive</h2>${rows.map((r) => `<div class="line"><span>${r.label}</span><b class="${r.ok ? '' : 'under'}">${r.value}</b><em>${r.ref}</em></div>`).join('')}
+    <p class="hint">Repere pentru sportivi (ACSM 2016, ISSN 2017), doar informative. În deficit, carbohidrații stau de obicei sub interval: de aceea contează masa dinainte și cea de după antrenament.</p></section>`;
 }
 
 function feedbackCard(date: string) {
@@ -123,10 +130,11 @@ export function dayDetail(date: string) {
   ${analysis(p)}
   <section class="card"><h2>Cum s-a calculat</h2>
     <div class="line"><span>Carbo din plan</span><b>${d.planC} g</b></div>
-    <div class="line"><span>Factor ${SHORT[d.demand]}</span><b>${comma(s.fuel.factors[d.demand])}</b></div>
+    <div class="line"><span>Factor ${SHORT[d.demand]}${d.prefuel ? ', ridicat: mâine e HIGH' : ''}</span><b>${comma(d.prefuel ? Math.max(s.fuel.factors[d.demand], s.fuel.factors.moderate) : s.fuel.factors[d.demand])}</b></div>
     <div class="line"><span>După echilibrarea săptămânii</span><b>${d.c} g (${d.shift > 0 ? '+' : ''}${d.shift})</b></div>
     <div class="line"><span>Calorii</span><b>${d.p}×4 + ${d.c}×4 + ${d.f}×9 = ${n0(d.kcal)}</b></div>
     <p class="hint">${s.fuel.cycling ? 'Se mută doar carbohidrații între zile. Proteina, grăsimile și caloriile săptămânii rămân cele din plan.' : 'Carb Cycling e oprit: ținta aplicată e cea din plan, cifrele de aici arată distribuția dacă îl pornești.'}</p></section>
+  ${sportCard(d.demand, f)}
   ${tm.hasSession && (tm.pre || tm.post) ? `<section class="card"><h2>Mese</h2>
     ${tm.pre ? `<div class="line"><span>Înainte, ${tm.pre.mealTime}</span><b>P ${tm.pre.p} · C ${tm.pre.c} · G ${tm.pre.f}</b></div>` : ''}
     <div class="line"><span>Antrenament</span><b>${tm.start}–${tm.end}</b></div>

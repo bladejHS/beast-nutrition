@@ -1,7 +1,7 @@
 import './styles.css';
 import { PRINCIPLES } from './content.ts';
 import {
-  bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, isBreakWeek, lbmKg, predictedMaintenance, shiftCarbsFat,
+  bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, isBreakWeek, kcalFloor, lbmKg, predictedMaintenance, shiftCarbsFat,
   type Pace, type Phase, type Profile, type Sex,
 } from './logic/calc.ts';
 import { byBarcode, isRomanian, loadFoods, search, searchBranded, type Food } from './logic/foods.ts';
@@ -9,7 +9,8 @@ import { addDays, finishedWeeks, maintenanceFromData, mondayOf, review, type Che
 import { dayMeals, entryFrom, load, MEALS, parseBackup, save, totals, type Entry, type State } from './logic/store.ts';
 import { ctx, afterRender, type Tab } from './app.ts';
 import { fuelAction, fuelHtml, fuelBind } from './screens/fuel.ts';
-import { dayFuel, syncFuel } from './screens/state.ts';
+import { dayFuel, freshFuel, syncFuel } from './screens/state.ts';
+import { dayTarget, exactCarbs } from './logic/carbs.ts';
 import { fastAction, fastChip, fastHtml, fastBind } from './screens/fast.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 
@@ -36,6 +37,7 @@ function toast(msg: string) {
 }
 
 function commit() {
+  freshFuel();
   if (!save(s)) toast('Browserul nu a putut salva. Fă un backup din Plan.');
 }
 ctx.get = () => s; ctx.commit = commit; ctx.toast = toast; ctx.render = () => render(); ctx.open = (h) => open(h); ctx.close = () => close(); ctx.today = () => localDate();
@@ -48,6 +50,7 @@ const latestWeight = () => {
 
 function render() {
   if (!s.profile || !s.plan || editing) { app.innerHTML = setupView(); bindSetup(); return; }
+  freshFuel();
   syncFuel();
   const views: Record<Tab, () => string> = { azi: todayView, fuel: fuelHtml, post: fastHtml, cantar: () => scaleView() + bodyHtml(), plan: planView, minte: mindView };
   const enter = tab !== lastTab;
@@ -321,6 +324,10 @@ function dataMaintenance(): number | null {
   return maintenanceFromData(sum / n, (first.avg - last.avg) / span, deficitFactor(s.profile!));
 }
 
+function openingMode() {
+  try { return localStorage.getItem('beast-nutrition:opening') || 'full'; } catch { return 'full'; }
+}
+
 function planView() {
   const plan = s.plan!, p = s.profile!;
   const m = plan.macros;
@@ -329,7 +336,7 @@ function planView() {
   const blocked = plan.phase === 'cut' ? dietBlocked(p, plan.maintenance) : null;
   return `
   <section class="card"><h2>${phaseName(plan.phase)}</h2>
-    <div class="stats"><div><b>${n0(m.kcal)}</b><span>kcal/zi în medie</span></div><div><b>${m.p}</b><span>g proteine</span></div><div><b>${m.c}</b><span>g carbohidrați</span></div><div><b>${m.f}</b><span>g grăsimi</span></div></div>
+    <div class="stats"><div><b>${n0(m.kcal)}</b><span>kcal/zi în medie</span></div><div><b>${m.p}</b><span>g proteine</span></div><div><b>${exactCarbs(m)}</b><span>g carbohidrați</span></div><div><b>${m.f}</b><span>g grăsimi</span></div></div>
     <div class="line"><span>Mențineri folosite</span><b>${n0(plan.maintenance)} kcal</b></div>
     <div class="line"><span>BMR (Müller)</span><b>${n0(bmrMuller(p))} kcal</b></div>
     <div class="line"><span>Masă slabă</span><b>${lbm.toFixed(1)} kg</b></div>
@@ -338,12 +345,14 @@ function planView() {
     ${plan.breaks ? `<div class="line"><span>Pauze de dietă</span><b>${plan.breaks.on} săpt. deficit + ${plan.breaks.off} mențineri</b></div>` : ''}
     ${blocked ? `<p class="warn">${esc(blocked)} Cartea recomandă întâi un reverse diet.</p>` : ''}
     ${plan.phase === 'cut' && cutSetup(p, plan.maintenance, plan.ratePct).floored ? `<p class="warn">Ținta a ajuns la limita minimă a aplicației: ritmul de ${plan.ratePct}% e prea mare pentru menținerile de ${n0(plan.maintenance)} kcal. Alege un ritm mai mic sau corectează menținerile.</p>` : ''}
+    ${plan.highDays.length && Math.min(...Array.from({ length: 7 }, (_, i) => dayTarget(plan, addDays(mondayOf(localDate()), i)).kcal)) < kcalFloor(p.sex) ? '<p class="warn">Zilele cu calorii mici coboară sub limita minimă a aplicației. Alege o singură zi mare sau un ritm mai mic.</p>' : ''}
     ${plan.phase === 'cut' && isBreakWeek(plan, localDate()) ? '<p class="coach">Săptămâna asta e pauză: mănânci la mențineri.</p>' : ''}
     <button class="ghost wide" data-edit>Schimbă datele și planul</button></section>
   <section class="card"><h2>Faza următoare</h2><p class="hint">Dieta nu se termină, se schimbă faza. Caloriile pornesc de la menținerile tale reale.</p>
     <div class="seg">${(['cut', 'maintain', 'reverse'] as Phase[]).filter((x) => x !== plan.phase).map((x) => `<button data-phase="${x}">${phaseName(x)}</button>`).join('')}</div></section>
   ${plan.adjustments.length ? `<section class="card"><h2>Ajustări</h2>${[...plan.adjustments].reverse().map((a) => `<div class="line"><span>${esc(a.date)} · ${esc(a.note)}</span><b>${a.pct > 0 ? '+' : ''}${a.pct}%</b><em>${n0(a.to)} kcal</em></div>`).join('')}</section>` : ''}
   <button class="ghost wide" data-tab="minte">Mentalitate: cele 12 principii</button>
+  <section class="card"><h2>Intro la pornire</h2><div class="seg small">${[['full', 'Complet'], ['short', 'Scurt'], ['off', 'Oprit']].map(([v, l]) => `<button data-opening="${v}" class="${openingMode() === v ? 'on' : ''}">${l}</button>`).join('')}</div></section>
   <section class="card"><h2>Datele tale</h2><p class="hint">Totul stă doar în acest browser, fără cont și fără server. Ține un backup.</p>
     <div class="tools"><button class="ghost" data-export>Descarcă backup</button><label class="ghost file">Încarcă backup<input type="file" id="imp" accept="application/json"></label></div></section>
   <section class="card src"><h2>Surse</h2><p>Metoda: <i>Fat Loss Forever</i>, Layne Norton &amp; Peter Baker. Aplicația nu este afiliată autorilor.</p>
@@ -412,7 +421,7 @@ function bindSetup() {
     const m = plan.macros;
     const setup = cutSetup(profile, plan.maintenance, plan.ratePct);
     const block = phase === 'cut' ? dietBlocked(profile, plan.maintenance) : null;
-    box.innerHTML = `<b>${n0(m.kcal)}</b> kcal<span>P ${m.p}</span><span>C ${m.c}</span><span>G ${m.f}</span>
+    box.innerHTML = `<b>${n0(m.kcal)}</b> kcal<span>P ${m.p}</span><span>C ${exactCarbs(m)}</span><span>G ${m.f}</span>
       <p>Mențineri: ${n0(plan.maintenance)} kcal${phase === 'cut' ? ` · deficit ${n0(setup.deficit)} kcal/zi · −${setup.weeklyKg.toFixed(2)} kg/săpt.` : ''}</p>
       ${setup.floored && phase === 'cut' ? '<p class="warn">Ritmul cerut ar coborî sub limita minimă de calorii, așa că ținta a fost ridicată. Alege un ritm mai mic.</p>' : ''}
       ${block ? `<p class="warn">${esc(block)} Cartea recomandă întâi un reverse diet.</p>` : ''}`;
@@ -475,6 +484,7 @@ document.addEventListener('click', (ev) => {
     if (plan.phase !== 'cut') plan.maintenance = to.kcal;
     commit(); render(); toast(`Noua țintă: ${n0(to.kcal)} kcal`);
   } else if (d['phase']) changePhase(d['phase'] as Phase);
+  else if (d['opening']) { try { localStorage.setItem('beast-nutrition:opening', d['opening']); } catch { /* storage blocked: the intro stays on */ } render(); }
   else if (d['edit'] != null) { editing = true; render(); scrollTo(0, 0); }
   else if (d['cancel'] != null) { editing = false; render(); }
   else if (d['export'] != null) {

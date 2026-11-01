@@ -14,7 +14,9 @@ export interface Meal { id: string; name: string; steps: string; time: string; i
 export interface Macro { kcal: number; p: number; c: number; f: number; fiber: number }
 export interface Prefs { meals: 3 | 4 | 5; exclude: string; allergies: string; maxCook: number; budget: number }
 
-interface Template { name: string; sweet: boolean; steps: string; cook: number; protein: string[]; carb: string[]; fat: string[]; veg: string[] }
+interface Template { name: string; sweet: boolean; steps: string; cook: number; protein: string[]; carb: string[]; fat: string[]; veg: string[];
+  /** Slow to digest: not the meal before training. */
+  heavy?: boolean }
 
 /** Names are Romanian names from the curated list, resolved against the database when generating. */
 const TEMPLATES: Template[] = [
@@ -23,11 +25,11 @@ const TEMPLATES: Template[] = [
   { name: 'Omletă cu pâine și legume', sweet: false, cook: 10, steps: 'Bate albușurile cu ouăle, gătește-le în tigaie cu uleiul, servește cu pâine și legume.', protein: ['Albuș de ou'], carb: ['Pâine integrală', 'Pâine de secară'], fat: ['Ou întreg, crud', 'Ulei de măsline'], veg: ['Roșii', 'Ardei gras roșu', 'Spanac crud'] },
   { name: 'Pui cu orez și broccoli', sweet: false, cook: 25, steps: 'Fierbe orezul, gătește puiul la tigaie sau la cuptor, fierbe broccoli, adaugă uleiul la final. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Piept de pui, gătit'], carb: ['Orez alb fiert', 'Orez brun fiert'], fat: ['Ulei de măsline'], veg: ['Broccoli fiert', 'Fasole verde'] },
   { name: 'Curcan cu cartofi și salată', sweet: false, cook: 30, steps: 'Coace curcanul și cartofii, amestecă salata cu uleiul. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Piept de curcan, gătit'], carb: ['Cartofi la cuptor', 'Cartofi fierți', 'Cartofi dulci la cuptor'], fat: ['Ulei de măsline'], veg: ['Salată verde', 'Castraveți', 'Roșii'] },
-  { name: 'Vită cu paste și legume', sweet: false, cook: 20, steps: 'Fierbe pastele, rumenește carnea, adaugă legumele și amestecă.', protein: ['Carne tocată de vită 90%, gătită'], carb: ['Paste fierte'], fat: ['Parmezan', 'Ulei de măsline'], veg: ['Dovlecei', 'Ardei gras roșu', 'Ciuperci'] },
-  { name: 'Somon cu cartofi și legume', sweet: false, cook: 25, steps: 'Coace somonul și cartofii, fierbe legumele la abur.', protein: ['Somon gătit'], carb: ['Cartofi fierți', 'Cuscus fiert'], fat: [], veg: ['Broccoli fiert', 'Conopidă', 'Morcovi'] },
+  { name: 'Vită cu paste și legume', sweet: false, cook: 20, heavy: true, steps: 'Fierbe pastele, rumenește carnea, adaugă legumele și amestecă.', protein: ['Carne tocată de vită 90%, gătită'], carb: ['Paste fierte'], fat: ['Parmezan', 'Ulei de măsline'], veg: ['Dovlecei', 'Ardei gras roșu', 'Ciuperci'] },
+  { name: 'Somon cu cartofi și legume', sweet: false, cook: 25, heavy: true, steps: 'Coace somonul și cartofii, fierbe legumele la abur.', protein: ['Somon gătit'], carb: ['Cartofi fierți', 'Cuscus fiert'], fat: [], veg: ['Broccoli fiert', 'Conopidă', 'Morcovi'] },
   { name: 'Ton cu quinoa și legume', sweet: false, cook: 15, steps: 'Fierbe quinoa, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa fiartă', 'Orez alb fiert'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
   { name: 'Brânză de vaci cu pâine și legume', sweet: false, cook: 5, steps: 'Pune brânza pe farfurie, servește cu pâine și legume proaspete.', protein: ['Brânză de vaci'], carb: ['Pâine integrală'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Roșii', 'Castraveți'] },
-  { name: 'Linte cu pui și orez', sweet: false, cook: 25, steps: 'Fierbe lintea și orezul, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, gătit'], carb: ['Linte fiartă', 'Năut fiert'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
+  { name: 'Linte cu pui și orez', sweet: false, cook: 25, heavy: true, steps: 'Fierbe lintea și orezul, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, gătit'], carb: ['Linte fiartă', 'Năut fiert'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
 ];
 
 export const PAIRS: Record<Role, string[]> = {
@@ -92,12 +94,41 @@ export function buildMeal(tpl: Template, target: { p: number; c: number; f: numb
   return { id: crypto.randomUUID(), name: tpl.name, steps: tpl.steps, time, tag, done: false, items: solve(items, target, db) };
 }
 
-/** Targets per meal: protein evenly, fat evenly, carbs by training share. */
-export function generateDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: { avoid?: string[]; firstSweet?: boolean } = {}): Meal[] {
+/** The most anyone would eat of one food in a meal, in grams. */
+const CAP: Record<Role, number> = { protein: 350, carb: 450, fat: 45, veg: 400, extra: 200 };
+const bulk = (items: Item[]) => items.reduce((s, i) => s + Math.max(0, i.g - CAP[i.role]), 0);
+export const PRE_TAG = 'Înainte de antrenament';
+
+/** `recent`: meals of the nearby days. They stay possible, but the day prefers others. */
+type GenOpts = { avoid?: string[]; firstSweet?: boolean; fatShares?: number[]; recent?: string[] };
+
+/**
+ * Eight tries, scored by how far the day lands from its macros, in kcal, plus any portion nobody would eat.
+ * Among those about as good as the best one, the seed chooses, so a new plan is both accurate and different.
+ */
+export function generateDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: GenOpts = {}): Meal[] {
+  const db = new Map(foods.map((f) => [f.id, f]));
+  const tries = Array.from({ length: 8 }, (_, k) => {
+    const meals = oneDay(day, carbShares, times, tags, foods, prefs, seed + k * 17, opts);
+    const got = macros(meals.flatMap((m) => m.items), db);
+    return { meals, key: meals.map((m) => m.name).join('|'), miss: Math.abs(got.f - day.f) * 9 + Math.abs(got.c - day.c) * 4 + Math.abs(got.p - day.p) * 4 + bulk(meals.flatMap((m) => m.items)) * 4 + (carbShares.length - meals.length) * 1000 };
+  });
+  const lowest = Math.min(...tries.map((t) => t.miss));
+  const repeats = (t: { meals: Meal[] }) => t.meals.filter((m) => opts.recent?.includes(m.name)).length;
+  const near = tries.filter((t) => t.miss <= lowest + 15);
+  const fewest = Math.min(...near.map(repeats));
+  const fresh = near.filter((t) => repeats(t) === fewest);
+  const close = fresh.filter((t, i) => fresh.findIndex((x) => x.key === t.key) === i);
+  return close[Math.abs(seed) % close.length]!.meals;
+}
+
+/** Targets per meal: protein evenly, fat by its share, carbs by training share. */
+function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: GenOpts): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
   const words = banned(prefs);
   const n = carbShares.length;
+  const fatShares = opts.fatShares ?? carbShares.map(() => 1 / n);
   const usable = TEMPLATES.filter((t) => t.cook <= prefs.maxCook);
   const list = usable.length ? usable : TEMPLATES;
   const sweet = list.filter((t) => t.sweet), savory = list.filter((t) => !t.sweet);
@@ -106,11 +137,12 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
   const avoid = opts.avoid ?? [];
   const firstSweet = opts.firstSweet ?? true;
   for (let i = 0; i < n; i++) {
-    const pool = i === 0 && firstSweet && sweet.length ? sweet : savory.length ? savory : list;
+    const pool = (i === 0 && firstSweet && sweet.length ? sweet : savory.length ? savory : list).filter((t) => !(t.heavy && tags[i] === PRE_TAG));
     let meal: Meal | null = null;
     let best = Infinity;
     const shareLeft = carbShares.slice(i).reduce((x, y) => x + y, 0) || 1;
-    const goal = { p: left.p / (n - i), c: (left.c * carbShares[i]!) / shareLeft, f: Math.max(0, left.f) / (n - i) };
+    const fatLeft = fatShares.slice(i).reduce((x, y) => x + y, 0) || 1;
+    const goal = { p: left.p / (n - i), c: (left.c * carbShares[i]!) / shareLeft, f: (Math.max(0, left.f) * fatShares[i]!) / fatLeft };
     for (let k = 0; k < pool.length; k++) {
       const tpl = pool[(seed + i + k) % pool.length]!;
       if (avoid.includes(tpl.name) || meals.some((m) => m.name === tpl.name)) continue;
@@ -118,7 +150,7 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
       if (!option) continue;
       const got = macros(option.items, db);
       // Variety first: a later template wins only if it clearly fits better.
-      const miss = Math.abs(got.f - goal.f) * 9 + Math.abs(got.c - goal.c) * 4 + Math.abs(got.p - goal.p) * 4;
+      const miss = Math.abs(got.f - goal.f) * 9 + Math.abs(got.c - goal.c) * 4 + Math.abs(got.p - goal.p) * 4 + bulk(option.items) * 4 + (opts.recent?.filter((x) => x === tpl.name).length ?? 0) * 70;
       if (miss + 40 < best) { best = miss; meal = option; }
     }
     if (meal) {
@@ -132,7 +164,7 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
 }
 
 /** Rebuilds a day around what was already eaten: logged meals stay exactly as they are, the rest share what is left. */
-export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number): Meal[] {
+export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, fatShares?: number[], recent?: string[]): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const kept = existing.filter((m) => m.done || m.snack || m.keep);
   const full = kept.filter((m) => !m.snack);
@@ -141,7 +173,7 @@ export function regenerate(existing: Meal[], day: { p: number; c: number; f: num
   const open = free.slice(-Math.max(0, times.length - full.length));
   if (!open.length) return kept;
   const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
-  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0 });
+  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}) });
   return [...kept, ...fresh].sort((a, b) => a.time.localeCompare(b.time));
 }
 
@@ -150,10 +182,10 @@ export function mealOptions(goal: { p: number; c: number; f: number }, foods: Fo
   const db = new Map(foods.map((f) => [f.id, f]));
   const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
   const words = banned(prefs);
-  return TEMPLATES.filter((t) => t.cook <= prefs.maxCook && t.name !== current)
+  return TEMPLATES.filter((t) => t.cook <= prefs.maxCook && t.name !== current && !(t.heavy && tag === PRE_TAG))
     .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag))
     .filter((m): m is Meal => !!m)
-    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 }; })
+    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 }; })
     .sort((a, b) => a.miss - b.miss).slice(0, 3).map((x) => x.m);
 }
 

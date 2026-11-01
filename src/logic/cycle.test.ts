@@ -5,13 +5,13 @@ import { dayBand, DEFAULT_FACTORS, mealCarbShares, reconcile, weekFuel } from '.
 import { cycleWeek, freeze, targetOn, type CycleIn } from './cycle.ts';
 import { generateDay, macros, mealOptions, regenerate, type Meal, type Prefs } from './mealplan.ts';
 import { entryFrom, relog, totals, type Entry, type Snap } from './store.ts';
-import { classify, CARB_LABEL, DEFAULT_LIMITS, FALLBACK_WEEK, nextSession, picks, type Session, type Training } from './training.ts';
+import { classify, CARB_LABEL, DEFAULT_RULES, FALLBACK_WEEK, nextSession, picks, type Session, type Training } from './training.ts';
 
 const man: Profile = { sex: 'm', age: 30, heightCm: 180, weightKg: 100, bf: 20, activity: 1.55, lifts: true };
 const plan: Plan = buildPlan(man, { phase: 'cut', startDate: '2026-11-02', ratePct: 0.6, carbShare: 0.7, maintenance: 2800, highDays: [], breaks: null, pace: 'c' });
 const week: Training = { linked: true, week: FALLBACK_WEEK, log: {}, sleep: {} };
 const MONDAY = '2026-11-02';
-const input = (o: Partial<CycleIn> = {}): CycleIn => ({ plan, sex: 'm', cycling: true, factors: DEFAULT_FACTORS, limits: DEFAULT_LIMITS, overrides: {}, snap: {}, today: MONDAY, training: week, ...o });
+const input = (o: Partial<CycleIn> = {}): CycleIn => ({ plan, sex: 'm', cycling: true, factors: DEFAULT_FACTORS, rules: DEFAULT_RULES, overrides: {}, snap: {}, today: MONDAY, training: week, ...o });
 
 const thursday = (feet: Session, main: Session): Session[] => [feet, FALLBACK_WEEK[3]![1]!, main];
 const rope: Session = FALLBACK_WEEK[3]![0]!;

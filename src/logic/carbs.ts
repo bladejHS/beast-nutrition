@@ -97,12 +97,12 @@ export function reconcile(plan: Plan, days: FuelDay[]) {
   };
 }
 
-/** Share of the day's carbs per meal: more around training on demanding days. Own rule. */
+/** Share of the day's carbs per meal: more around training on demanding days. Own rule. -1 = training before the first meal. */
 export function mealCarbShares(meals: number, trainingMeal: number | null, demand: Demand): number[] {
   const out = Array.from({ length: meals }, () => 1);
   if (trainingMeal != null && (demand === 'high' || demand === 'moderate')) {
     const extra = demand === 'high' ? 0.8 : 0.4;
-    out[trainingMeal] = 1 + extra;
+    if (trainingMeal >= 0) out[trainingMeal] = 1 + extra;
     if (trainingMeal + 1 < meals) out[trainingMeal + 1] = 1 + extra;
   }
   const total = out.reduce((a, b) => a + b, 0);

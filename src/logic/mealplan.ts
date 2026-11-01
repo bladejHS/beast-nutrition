@@ -6,7 +6,11 @@ import { fold } from './foods.ts';
 
 export type Role = 'protein' | 'carb' | 'fat' | 'veg' | 'extra';
 export interface Item { foodId: string; role: Role; g: number }
-export interface Meal { id: string; name: string; steps: string; time: string; items: Item[]; done: boolean; tag: string }
+export interface Meal { id: string; name: string; steps: string; time: string; items: Item[]; done: boolean; tag: string;
+  /** An extra small meal, on top of the day's slots. */
+  snack?: boolean;
+  /** Chosen by the user: stays when the day is rebuilt. */
+  keep?: boolean }
 export interface Macro { kcal: number; p: number; c: number; f: number; fiber: number }
 export interface Prefs { meals: 3 | 4 | 5; exclude: string; allergies: string; maxCook: number; budget: number }
 
@@ -130,13 +134,14 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
 /** Rebuilds a day around what was already eaten: logged meals stay exactly as they are, the rest share what is left. */
 export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
-  const kept = existing.filter((m) => m.done);
+  const kept = existing.filter((m) => m.done || m.snack || m.keep);
+  const full = kept.filter((m) => !m.snack);
   const eaten = macros(kept.flatMap((m) => m.items), db);
-  const free = times.map((_, i) => i).filter((i) => !kept.some((m) => m.time === times[i]));
-  const open = free.slice(-Math.max(0, times.length - kept.length));
+  const free = times.map((_, i) => i).filter((i) => !full.some((m) => m.time === times[i]));
+  const open = free.slice(-Math.max(0, times.length - full.length));
   if (!open.length) return kept;
   const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
-  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: kept.map((m) => m.name), firstSweet: open[0] === 0 });
+  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0 });
   return [...kept, ...fresh].sort((a, b) => a.time.localeCompare(b.time));
 }
 
@@ -150,6 +155,24 @@ export function mealOptions(goal: { p: number; c: number; f: number }, foods: Fo
     .filter((m): m is Meal => !!m)
     .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 }; })
     .sort((a, b) => a.miss - b.miss).slice(0, 3).map((x) => x.m);
+}
+
+/** Small and easy to digest. Grams come from the carbs asked for and the food's real values. */
+const SNACKS: { name: string; steps: string; foods: [string, number][] }[] = [
+  { name: 'Banană', steps: 'Se mănâncă simplu, fără altceva.', foods: [['Banană', 1]] },
+  { name: 'Iaurt grecesc cu miere', steps: 'Amestecă mierea în iaurt.', foods: [['Miere', 0.75], ['Iaurt grecesc degresat', 0.25]] },
+  { name: 'Pâine albă cu miere', steps: 'Unge pâinea cu miere.', foods: [['Pâine albă', 0.65], ['Miere', 0.35]] },
+];
+
+export function snackOptions(carbs: number, foods: Food[], prefs: Prefs, time: string, tag: string): Meal[] {
+  const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
+  const words = banned(prefs);
+  return SNACKS.flatMap((s) => {
+    const found = s.foods.map(([n, part]) => ({ food: byName.get(n), part }));
+    if (found.some((x) => !x.food || !allowed(x.food, words) || x.food.c <= 0)) return [];
+    const items: Item[] = found.map((x) => ({ foodId: x.food!.id, role: 'carb', g: Math.max(5, Math.round(((carbs * x.part) / x.food!.c) * 100 / 5) * 5) }));
+    return [{ id: crypto.randomUUID(), name: s.name, steps: s.steps, time, tag, done: false, snack: true, items }];
+  });
 }
 
 export function substitute(meal: Meal, index: number, next: Food, db: Map<string, Food>): Meal {

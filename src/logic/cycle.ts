@@ -4,18 +4,29 @@ import { targetFor, type DayTarget, type Plan, type Sex } from './calc.ts';
 import { weekFuel, type Factors, type Frozen, type FuelDay } from './carbs.ts';
 import { addDays, mondayOf } from './review.ts';
 import type { Snap } from './store.ts';
-import { dayPlan, type DayPlan, type Demand, type Limits, type Training } from './training.ts';
+import { dayPlan, type DayPlan, type Demand, type Rules, type Training } from './training.ts';
 
 export interface CycleIn {
-  plan: Plan; sex: Sex; cycling: boolean; factors: Factors; limits: Limits;
+  plan: Plan; sex: Sex; cycling: boolean; factors: Factors; rules: Partial<Rules>;
   overrides: Record<string, Demand>; snap: Record<string, Snap>; today: string; training: Training;
+  /** Sessions the user cancelled, by date. */
+  cancelled?: Record<string, string[]>;
+  /** Only the user's own classes count; a day without one stays neutral. */
+  manual?: boolean;
+}
+
+/** The class of one day, by the rules in force. */
+export function rateDay(x: CycleIn, d: string, weekdayIdx: number): DayPlan {
+  const own = x.overrides[d];
+  const p = dayPlan(x.training, d, x.today, weekdayIdx, own ?? (x.manual ? 'moderate' : undefined), x.rules, x.cancelled?.[d]);
+  return x.manual && !own ? { ...p, rating: { ...p.rating, reason: 'Mod manual: zi neclasificată, rămâne pe MODERATE.' } } : p;
 }
 
 export function plansFor(x: CycleIn, monday: string): Record<string, DayPlan> {
   const out: Record<string, DayPlan> = {};
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i);
-    out[d] = dayPlan(x.training, d, x.today, i, x.overrides[d], x.limits);
+    out[d] = rateDay(x, d, i);
   }
   return out;
 }
@@ -47,7 +58,7 @@ export function freeze(x: CycleIn): { snaps: Record<string, Snap>; sig: string }
   const snaps: Record<string, Snap> = {};
   for (const d of days) {
     if (d.date > x.today || (d.date < x.today && x.snap[d.date])) continue;
-    snaps[d.date] = { c: d.c, kcal: d.kcal, p: d.p, f: d.f, b: d.planC, demand: plans[d.date]!.rating.demand, reason: plans[d.date]!.rating.reason };
+    snaps[d.date] = { c: d.c, kcal: d.kcal, p: d.p, f: d.f, b: d.planC, demand: plans[d.date]!.rating.demand, planned: plans[d.date]!.plannedRating.demand, load: plans[d.date]!.rating.load, reason: plans[d.date]!.rating.reason };
   }
   return { snaps, sig: days.filter((d) => d.date >= x.today).map((d) => `${d.date}:${d.demand}`).join('|') };
 }

@@ -4,7 +4,7 @@ import {
   activate, adherence, advice, assessmentDue, currentRatio, dayInPhase, daysLeft, decide, FIXED, fastHours, pause, PHASES, phaseLength,
   PROGRAM_DAYS, programPct, resume, status, windowFor, type Decision, type Fixed, type Ratings,
 } from '../logic/fasting.ts';
-import { readTraining, classify } from '../logic/training.ts';
+import { dayRating, trainingTime } from './state.ts';
 
 const DAYS = ['Lu', 'Ma', 'Mi', 'Jo', 'Vi', 'Sâ', 'Du'];
 const QUESTIONS: [keyof Ratings, string][] = [['energy', 'Energie'], ['hunger', 'Foame (10 = deloc)'], ['sleep', 'Somn'], ['training', 'Antrenamente'], ['wellbeing', 'Stare generală'], ['nutrition', 'Calorii și proteine atinse']];
@@ -30,10 +30,9 @@ function trainingClash() {
   const today = ctx.today();
   const w = windowFor(s.fast, weekday(today));
   if (!w) return '';
-  const t = readTraining(localStorage);
-  const rating = classify(t.week[weekday(today)] ?? [], s.fuel.limits);
+  const rating = dayRating(today).rating;
   if (rating.demand === 'rest' || rating.demand === 'low') return '';
-  const [h = 0, m = 0] = s.fuel.trainingHour.split(':').map(Number);
+  const [h = 0, m = 0] = trainingTime(today).split(':').map(Number);
   const open = status(w, h * 60 + m).eating;
   return open ? '' : `<p class="warn">Antrenamentul de azi (${esc(s.fuel.trainingHour)}) cade în afara ferestrei. Mută fereastra pe această zi sau mănâncă înainte: mâncarea de care ai nevoie e mai importantă decât timerul.</p>`;
 }

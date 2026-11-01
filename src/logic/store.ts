@@ -3,7 +3,9 @@ import type { CheckIn } from './review.ts';
 import type { Food } from './foods.ts';
 import { freshFasting, type FastState } from './fasting.ts';
 import { DEFAULT_FACTORS, type Factors } from './carbs.ts';
-import { DEFAULT_LIMITS, type Demand, type Limits } from './training.ts';
+import { DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand, type Limits, type Session, type Weights } from './training.ts';
+import type { Feedback } from './insights.ts';
+import type { Tolerance } from './timing.ts';
 import { MICRO_KEYS, type Drink, type Measure, type MicroKey, type Supp, type SweatTest } from './wellness.ts';
 import type { Meal, Prefs } from './mealplan.ts';
 import type { Report } from './report.ts';
@@ -14,8 +16,8 @@ export interface Entry {
   from?: string;
 }
 
-/** What a day's fuel target was, frozen once the day is over. `b`: the plan's carbs that day, missing on older snapshots. */
-export interface Snap { c: number; kcal: number; p: number; f: number; b?: number; demand: Demand; reason: string }
+/** What a day's fuel target was, frozen once the day is over. `b`: the plan's carbs that day, missing on older snapshots. `planned`: the class before training happened. */
+export interface Snap { c: number; kcal: number; p: number; f: number; b?: number; demand: Demand; planned?: Demand; load?: number; reason: string }
 
 export interface Fuel {
   cycling: boolean;
@@ -29,6 +31,24 @@ export interface Fuel {
   prefs: Prefs;
   plan: Record<string, Meal[]>;
   shopDone: string[];
+  /** 'manual': only the classes the user sets. */
+  mode: 'auto' | 'manual';
+  /** Off: keeps using `syncedWeek`, the last plan read from Inner Beast. */
+  sync: boolean;
+  syncedWeek: Session[][] | null;
+  /** Above 1 the same training rates higher. */
+  sensitivity: number;
+  weights: Weights;
+  boxStrength: boolean;
+  /** Monday = 0 → training time, when it differs from `trainingHour`. */
+  times: Record<number, string>;
+  /** Minutes between the pre-workout meal and training; 0 = from the tolerance. */
+  preGap: number;
+  tolerance: Tolerance;
+  intra: boolean;
+  /** date → sessions the user cancelled. */
+  cancelled: Record<string, string[]>;
+  feedback: Record<string, Feedback>;
 }
 
 export interface State {
@@ -58,13 +78,20 @@ const KEY = 'beast-nutrition:v2';
 export const MEALS = ['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Masa 5'];
 export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, weights: {}, checkins: {}, custom: [], recent: [],
   fast: freshFasting(),
-  fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [] },
+  fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [],
+    mode: 'auto', sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, cancelled: {}, feedback: {} },
   drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {} });
+
+/** Saved states from older versions get the fields added since. */
+function withDefaults(d: Partial<State>): State {
+  const base = empty();
+  return { ...base, ...d, fuel: { ...base.fuel, ...d.fuel } };
+}
 
 export function load(): State {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...empty(), ...JSON.parse(raw) as Partial<State> } : empty();
+    return raw ? withDefaults(JSON.parse(raw) as Partial<State>) : empty();
   } catch {
     return empty();
   }
@@ -83,7 +110,7 @@ export function save(s: State): boolean {
 export function parseBackup(text: string): State {
   const data = JSON.parse(text) as Partial<State>;
   if (data.v !== 1 || typeof data.days !== 'object') throw new Error('Fișierul nu este un backup BEAST NUTRITION.');
-  return { ...empty(), ...data };
+  return withDefaults(data);
 }
 
 export const dayMeals = (s: State, date: string): Entry[][] => MEALS.map((_, i) => s.days[date]?.[i] ?? []);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bfClass, bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, macrosFor, proteinG, shiftCarbsFat, targetFor, isBreakWeek, type Plan, type Profile } from './calc.ts';
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf, review, type Week } from './review.ts';
-import { fold, parseDb, search } from './foods.ts';
+import { brandRowToFood, decodeIds, fold, parseDb, search, searchUsdaBrands, usdaBarcode, type BrandRow } from './foods.ts';
 import { entryFrom, parseBackup, totals } from './store.ts';
 
 const man: Profile = { sex: 'm', age: 30, heightCm: 180, weightKg: 100, bf: 20, activity: 1.55, lifts: true };
@@ -135,6 +135,38 @@ test('Romanian search reaches USDA names and ranks Romanian names first', () => 
   assert.deepEqual(search(db, 'lapte').map((f) => f.id), ['u1', 'u2']);
   assert.deepEqual(search(db, 'cafea').map((f) => f.id), ['u3']);
   assert.equal(search(db, 'nimic').length, 0);
+});
+
+const shards: Record<string, unknown> = {
+  'w/ch.json': { chicken: '0,1,2', chips: '4' },
+  'w/so.json': { soup: '1,2' },
+  'b/456.json': { '123456': 257 },
+  'p/0.json': [[10, 'Chicken · A', 100, 20, 1, 2, 1, 0, 0, 50, 85, 0, '1 piece'], [11, 'Chicken Soup · A', 40, 3, 4, 1, null, null, null, null, 240, 1, ''], [12, 'x', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ''], [13, 'Chicken Soup · B', 45, 3, 5, 1, 1, 1, 0, 300, 0, 0, ''], [14, 'Chips', 500, 6, 50, 30, 4, 1, 3, 500, 28, 0, '']],
+  'p/1.json': [[20, 'A', 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, ''], [21, 'Barcode food', 200, 10, 20, 5, 2, 1, 1, 90, 30, 0, '']],
+};
+const fake = async (path: string) => shards[path] ?? null;
+
+test('USDA branded shards: gaps decode, every word must match, Romanian reaches English words', async () => {
+  assert.deepEqual(decodeIds('0,1,a'), [0, 1, 11]);
+  const both = await searchUsdaBrands('Chicken with soup', fake);
+  assert.deepEqual(both.foods.map((f) => f.id).sort(), ['b11', 'b13']);
+  assert.equal(both.total, 2);
+  assert.deepEqual((await searchUsdaBrands('chi', fake)).foods.map((f) => f.id).sort(), ['b10', 'b11', 'b13', 'b14']);
+  assert.ok((await searchUsdaBrands('pui', fake)).foods.some((f) => f.id === 'b10'));
+  assert.equal((await searchUsdaBrands('zzz', fake)).total, 0);
+});
+
+test('USDA branded rows keep missing label values apart from real zeros', () => {
+  const soup = brandRowToFood((shards['p/0.json'] as BrandRow[])[1]!);
+  assert.equal(soup.noFiber, true);
+  assert.equal(soup.fiber, 0);
+  assert.deepEqual(soup.portions, [['1 porție (240 ml)', 240]]);
+  assert.equal(brandRowToFood((shards['p/0.json'] as BrandRow[])[0]!).noFiber, undefined);
+});
+
+test('a barcode is found with or without leading zeros', async () => {
+  assert.equal((await usdaBarcode('00123456', fake))?.id, 'b21');
+  assert.equal(await usdaBarcode('999999', fake), null);
 });
 
 test('entries are scaled from 100 g and summed', () => {

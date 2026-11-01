@@ -1,4 +1,5 @@
-/* Food database: USDA FoodData Central (shipped with the app) plus Open Food Facts for branded products. */
+/* Food database: USDA FoodData Central generic foods (shipped with the app), USDA branded products
+   (static shards in public/branded, read on demand) and Open Food Facts. */
 export interface Food {
   id: string;
   name: string;
@@ -9,7 +10,9 @@ export interface Food {
   portions: [string, number][];
   /** Per 100 g, in MICRO_KEYS order; null = no data, never zero. */
   micro?: (number | null)[];
-  source: 'usda' | 'off' | 'mine' | 'spd';
+  source: 'usda' | 'fdc' | 'off' | 'mine' | 'spd';
+  /** The label does not state fiber, so its 0 is not a real zero. */
+  noFiber?: boolean;
   /** Allergens printed by the producer. */
   allergens?: string;
 }
@@ -33,6 +36,7 @@ export const TERMS: Record<string, string> = {
   seminte: 'seeds', ulei: 'oil', masline: 'olives', miere: 'honey', zahar: 'sugar', ciocolata: 'chocolate', cafea: 'coffee',
   ceai: 'tea', suc: 'juice', bere: 'beer', vin: 'wine', apa: 'water', sunca: 'ham', carnat: 'sausage', carnati: 'sausage',
   fiert: 'boiled', fiarta: 'boiled', copt: 'baked', prajit: 'fried', gatit: 'cooked', crud: 'raw', piept: 'breast',
+  grecesc: 'greek', proteine: 'protein', proteina: 'protein', proteic: 'protein', baton: 'bar', batoane: 'bar', cereale: 'cereal', mustar: 'mustard',
   pulpa: 'thigh', aripi: 'wing', ficat: 'liver', supa: 'soup', sos: 'sauce', faina: 'flour', biscuiti: 'cookies', tort: 'cake',
 };
 
@@ -93,6 +97,80 @@ export function search(list: Food[], query: string, limit = 40): Food[] {
   return scored.sort((a, b) => b[0] - a[0]).slice(0, limit).map((x) => x[1]);
 }
 
+// ---- USDA branded products: static files, see scripts/usda-branded.py ----
+const BRANDED = 'branded/2026-10-29';
+const CHUNK = 256;
+/** How many product files one search may open; the brand sort keeps a brand inside few of them. */
+const MAX_CHUNKS = 10;
+const STOP = new Set(['and', 'the', 'with', 'of', 'in', 'for', 'or', 'an']);
+
+export type BrandRow = [number, string, number, number, number, number, number | null, number | null, number | null, number | null, number, number, string];
+/** Reads one shard; null when it does not exist, which only means no word or code lands there. */
+export type Loader = (path: string) => Promise<unknown>;
+
+const fromSite: Loader = async (path) => {
+  const res = await fetch(`${import.meta.env.BASE_URL}${BRANDED}/${path}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('Produsele de marcă nu s-au încărcat.');
+  return res.json();
+};
+
+const tokens = (q: string) => fold(q).split(/[^a-z0-9]+/).filter((w) => w.length >= 2 && !STOP.has(w));
+
+/** Product numbers are stored as base-36 gaps, which keeps the word files small. */
+export function decodeIds(s: string): number[] {
+  let n = 0;
+  return s.split(',').map((d) => (n += parseInt(d, 36)));
+}
+
+export function brandRowToFood(r: BrandRow): Food {
+  const [id, name, kcal, p, c, f, fiber, sugar, sat, sodium, size, ml, label] = r;
+  const unit = ml ? 'ml' : 'g';
+  return {
+    id: `b${id}`, name, en: name, cat: 'Produs de marcă · USDA', kcal, p, c, f, fiber: fiber ?? 0, sugar: sugar ?? 0, sat: sat ?? 0, sodium: sodium ?? 0,
+    portions: size ? [[`${label || '1 porție'} (${size} ${unit})`, size]] : [], source: 'fdc', ...(fiber == null ? { noFiber: true } : {}),
+  };
+}
+
+/** Every product with a word starting with `word`, or with its English meaning. */
+async function matches(word: string, load: Loader): Promise<Set<number>> {
+  const out = new Set<number>();
+  for (const w of new Set([word, TERMS[word] ?? word])) {
+    const shard = await load(`w/${w.slice(0, 2)}.json`) as Record<string, string> | null;
+    for (const [key, ids] of Object.entries(shard ?? {})) if (key.startsWith(w)) decodeIds(ids).forEach((i) => out.add(i));
+  }
+  return out;
+}
+
+export async function searchUsdaBrands(query: string, load: Loader = fromSite, limit = 40): Promise<{ foods: Food[]; total: number }> {
+  const words = tokens(query);
+  if (!words.length) return { foods: [], total: 0 };
+  const sets = (await Promise.all(words.map((w) => matches(w, load)))).sort((a, b) => a.size - b.size);
+  const hits = [...sets[0]!].filter((i) => sets.every((s) => s.has(i)));
+  const perChunk = new Map<number, number[]>();
+  for (const i of hits) {
+    const c = Math.floor(i / CHUNK);
+    const list = perChunk.get(c);
+    if (list) list.push(i % CHUNK); else perChunk.set(c, [i % CHUNK]);
+  }
+  const top = [...perChunk].sort((a, b) => b[1].length - a[1].length).slice(0, MAX_CHUNKS);
+  const rows = await Promise.all(top.map(async ([c, at]) => {
+    const chunk = await load(`p/${c}.json`) as BrandRow[] | null;
+    return at.map((i) => chunk?.[i]).filter((r): r is BrandRow => !!r);
+  }));
+  return { foods: search(rows.flat().map(brandRowToFood), words.join(' '), limit), total: hits.length };
+}
+
+export async function usdaBarcode(code: string, load: Loader = fromSite): Promise<Food | null> {
+  const key = code.replace(/^0+/, '');
+  const shard = await load(`b/${key.slice(-3)}.json`) as Record<string, number> | null;
+  const n = shard?.[key];
+  if (n == null) return null;
+  const chunk = await load(`p/${Math.floor(n / CHUNK)}.json`) as BrandRow[] | null;
+  const row = chunk?.[n % CHUNK];
+  return row ? brandRowToFood(row) : null;
+}
+
 const offToFood = (p: Record<string, unknown>): Food | null => {
   const n = (p['nutriments'] ?? {}) as Record<string, number>;
   const kcal = Number(n['energy-kcal_100g'] ?? (n['energy-kj_100g'] != null ? n['energy-kj_100g'] / 4.184 : NaN));
@@ -118,7 +196,10 @@ export async function searchBranded(query: string): Promise<Food[]> {
   return (json.products ?? []).map(offToFood).filter((f): f is Food => !!f);
 }
 
+/** USDA first, it is the checked data; Open Food Facts covers what is sold in Romania. */
 export async function byBarcode(code: string): Promise<Food | null> {
+  const usda = await usdaBarcode(code).catch(() => null);
+  if (usda) return usda;
   const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${FIELDS}`);
   if (!res.ok) return null;
   const json = await res.json() as { status?: number; product?: Record<string, unknown> };

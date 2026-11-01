@@ -1,5 +1,6 @@
 // Writes dist/sw.js: precaches every built file under a version derived from their content.
 // A new deploy = a new version: the next launch installs it, the one after runs it.
+// public/branded is 3,400 files: never precached, each one is kept the first time it is used.
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
@@ -14,7 +15,7 @@ function walk(dir) {
 }
 
 const files = walk(DIST)
-  .filter((f) => !/sw\.js$|\.map$|OFL\.txt$/.test(f) && !/[\\/]pose[\\/]/.test(f))
+  .filter((f) => !/sw\.js$|\.map$|OFL\.txt$/.test(f) && !/[\\/](pose|branded)[\\/]/.test(f))
   .sort();
 const hash = createHash('sha256');
 for (const f of files) hash.update(f).update(readFileSync(f));
@@ -41,6 +42,13 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;
   if (r.mode === 'navigate') {
     e.respondWith(caches.match('./').then((m) => m || fetch(r)));
+    return;
+  }
+  if (url.pathname.includes('/branded/')) {
+    e.respondWith(caches.open('branded-data').then((c) => c.match(r).then((m) => m || fetch(r).then((res) => {
+      if (res.ok) c.put(r, res.clone());
+      return res;
+    }))));
     return;
   }
   e.respondWith(caches.match(r, { ignoreSearch: true }).then((m) => m || fetch(r)));

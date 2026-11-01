@@ -4,7 +4,7 @@ import {
   bmrMuller, buildPlan, cutSetup, deficitFactor, dietBlocked, isBreakWeek, kcalFloor, lbmKg, predictedMaintenance, shiftCarbsFat,
   type Pace, type Phase, type Profile, type Sex,
 } from './logic/calc.ts';
-import { byBarcode, isRomanian, loadFoods, search, searchBranded, type Food } from './logic/foods.ts';
+import { byBarcode, isRomanian, loadFoods, search, searchBranded, searchUsdaBrands, type Food } from './logic/foods.ts';
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf, review, type CheckIn } from './logic/review.ts';
 import { dayMeals, entryFrom, load, MEALS, parseBackup, save, totals, type Entry, type State } from './logic/store.ts';
 import { ctx, afterRender, type Tab } from './app.ts';
@@ -157,26 +157,42 @@ function showRecent() {
   if (!res) return;
   shown.clear();
   const list = [...s.custom, ...s.recent.filter((r) => !s.custom.some((c) => c.id === r.id))].slice(0, 15);
-  res.innerHTML = list.length ? `<h3>Recente</h3>${list.map((f) => foodRow(f, shown)).join('')}` : '<p class="hint pad">Sunt 7.793 de alimente. Poți căuta în română.</p>';
+  res.innerHTML = list.length ? `<h3>Recente</h3>${list.map((f) => foodRow(f, shown)).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă. Poți căuta în română.</p>';
 }
 
 let searchTimer = 0;
+let searchRun = 0;
+
+/** USDA answers from the app's own files; Open Food Facts is slower, can fail and only adds to the list. */
+async function runBrandSearch(q: string, res: Element, run: number) {
+  res.innerHTML = '<p class="hint pad">Caut în produsele de marcă…</p>';
+  const usda = await searchUsdaBrands(q).catch(() => null);
+  if (run !== searchRun) return;
+  const more = usda && usda.total > usda.foods.length ? `<p class="hint pad">${usda.total.toLocaleString('ro-RO')} produse găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
+  const local = usda?.foods.length ? `${more}${usda.foods.map((f) => foodRow(f, shown)).join('')}` : '';
+  res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
+  const off = await searchBranded(q).catch(() => null);
+  if (run !== searchRun) return;
+  const extra = off?.length ? `<h3>Open Food Facts</h3>${off.map((f) => foodRow(f, shown)).join('')}` : '';
+  res.innerHTML = local + extra || `<p class="hint pad">${usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă au nevoie de internet. Poți folosi Alimente sau introdu valorile manual.'}</p>`;
+}
+
 async function runSearch(q: string) {
   const res = document.querySelector('#res');
+  const run = ++searchRun;
   if (!res) return;
   if (q.trim().length < 2) { showRecent(); return; }
   shown.clear();
   try {
     if (mode === 'brand') {
-      res.innerHTML = '<p class="hint pad">Caut în Open Food Facts…</p>';
-      const list = await searchBranded(q);
-      res.innerHTML = list.map((f) => foodRow(f, shown)).join('') || '<p class="hint pad">Niciun produs găsit.</p>';
+      await runBrandSearch(q, res, run);
     } else {
       const all = [...s.custom, ...await loadFoods()];
+      if (run !== searchRun) return;
       res.innerHTML = search(all, q).map((f) => foodRow(f, shown)).join('') || '<p class="hint pad">Nimic găsit. Încearcă și în engleză sau la Produse de marcă.</p>';
     }
   } catch {
-    res.innerHTML = '<p class="hint pad">Open Food Facts nu răspunde acum. Încearcă mai târziu, cu codul de bare sau introdu valorile manual.</p>';
+    res.innerHTML = '<p class="hint pad">Baza de alimente nu s-a încărcat. Încearcă din nou sau introdu valorile manual.</p>';
   }
 }
 
@@ -186,7 +202,7 @@ function openQuantity(f: Food) {
     <label class="field">Cantitate (g)<input id="g" type="number" inputmode="decimal" value="${f.portions[0]?.[1] ?? 100}" min="1"></label>
     <div class="chips">${chips.map(([l, g]) => `<button data-g="${g}">${esc(l)}</button>`).join('')}</div>
     <div id="pv" class="preview"></div>
-    <p class="hint">Pe 100 g: ${n0(f.kcal)} kcal · ${f.source === 'spd' ? 'fibre nedeclarate' : `fibre ${f.fiber} g`} · zahăr ${f.sugar} g · sare ${(f.sodium * 2.5 / 1000).toFixed(1)} g</p>
+    <p class="hint">Pe 100 g: ${n0(f.kcal)} kcal · ${f.source === 'spd' || f.noFiber ? 'fibre nedeclarate' : `fibre ${f.fiber} g`} · zahăr ${f.sugar} g · sare ${(f.sodium * 2.5 / 1000).toFixed(1)} g</p>
     ${f.allergens ? `<p class="warn">Alergeni: ${esc(f.allergens)}</p>` : ''}
     <button class="primary wide" id="addgo">Adaugă la ${MEALS[meal]}</button>`);
   const input = document.querySelector<HTMLInputElement>('#g')!;
@@ -232,7 +248,7 @@ function openBarcode() {
     stop();
     try {
       const f = await byBarcode(code);
-      if (f) openQuantity(f); else toast('Produsul nu este în Open Food Facts.');
+      if (f) openQuantity(f); else toast('Codul nu este în USDA sau Open Food Facts.');
     } catch { toast('Căutarea are nevoie de internet.'); }
   };
   document.querySelector('#find')!.addEventListener('click', () => {

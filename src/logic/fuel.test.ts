@@ -20,7 +20,8 @@ test('demand comes from the sessions, not the weekday name', () => {
   assert.equal(classify(FALLBACK_WEEK[1]!).demand, 'moderate');
   assert.equal(classify(FALLBACK_WEEK[2]!).demand, 'low');
   assert.equal(classify(FALLBACK_WEEK[3]!).demand, 'high');
-  assert.equal(classify(FALLBACK_WEEK[5]!).demand, 'low');
+  assert.equal(classify(FALLBACK_WEEK[5]!).demand, 'moderate');
+  assert.equal(classify(FALLBACK_WEEK[6]!).demand, 'low');
   assert.equal(classify([]).demand, 'rest');
   assert.equal(classify([{ name: 'Easy', kind: 'rounds', focus: 'slow', min: 10 }]).demand, 'low');
 });

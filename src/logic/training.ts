@@ -26,40 +26,46 @@ export type WeightKey = 'boxHard' | 'boxTech' | 'boxEasy' | 'footwork' | 'legs' 
 export type Weights = Record<WeightKey, number>;
 /** Effort per minute by session type. An estimate of this app, not a validated measure of carbohydrate needs. */
 export const DEFAULT_WEIGHTS: Weights = { boxHard: 1, boxTech: 0.8, boxEasy: 0.3, footwork: 0.8, legs: 0.8, amrap: 1, workout: 0.7, row: 0.9, run: 0.6, race: 1, coach: 0.6, routine: 0.2, walk: 0.2 };
-export const WEIGHT_LABEL: Record<WeightKey, string> = { boxHard: 'Sac: putere, mișcare', boxTech: 'Box tehnic, combinații', boxEasy: 'Box lent, distanță', footwork: 'Coardă, scară', legs: 'Intervale picioare', amrap: 'AMRAP', workout: 'Forță, calistenie', row: 'Machine Row', run: 'Alergare', race: 'Simulare de concurs', coach: 'Antrenor cu cameră', routine: 'Mobilitate, stretching', walk: 'Mers' };
+export const WEIGHT_LABEL: Record<WeightKey, string> = { boxHard: 'Sac, pads: putere, mișcare', boxTech: 'Kickbox tehnic, combinații', boxEasy: 'Kickbox lent, distanță', footwork: 'Coardă, scară', legs: 'Intervale picioare', amrap: 'AMRAP', workout: 'Forță, calistenie', row: 'Machine Row', run: 'Alergare', race: 'Simulare de concurs', coach: 'Antrenor cu cameră', routine: 'Mobilitate, stretching', walk: 'Mers' };
 
 export interface Rules { limits: Limits; weights: Weights; boxStrength: boolean }
 export const DEFAULT_RULES: Rules = { limits: DEFAULT_LIMITS, weights: DEFAULT_WEIGHTS, boxStrength: true };
 
-/** What each boxing block trains, in the words of the plan. */
-export const FOCUS_LABEL: Record<string, string> = { jab: 'Jab & Footwork', move: 'Punches & Movement', combo: 'Combinations', power: 'Angle Changes & Power', slow: 'Controlled & Clean', distance: 'Distance Work' };
+/** What each kickboxing block trains, in the words of the plan (Inner Beast's FOCUS_LINE). */
+export const FOCUS_LABEL: Record<string, string> = { jab: 'Jab, Teep & Footwork', move: 'Strikes & Movement', combo: 'Combinations', power: 'Dutch Combinations & Power', slow: 'Slow, Clean Technique', distance: 'Distance Work', pads: 'Thai Pads' };
 
-/** Same weekly plan as Inner Beast; used only until that app has been opened in this browser. */
+/** Same weekly plan as Inner Beast, as its bridge publishes it with the default choices (updated 2026-11-08:
+ *  kickboxing, the reworked push/pull/legs days, Knee and Kick Armor). Used when Inner Beast has not been opened in
+ *  this browser, which is always the case for two separate home-screen apps on an iPhone. */
 export const FALLBACK_WEEK: Session[][] = [
-  [{ id: 'mon-shadow', name: 'Shadow Boxing', kind: 'rounds', min: 25, focus: 'jab' }, { id: 'mon-bw', name: 'Bodyweight Workout', kind: 'amrap', min: 10 }, { id: 'mon-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 19, focus: 'move' }],
-  [{ id: 'tue-stretch', name: 'Full Body Stretching', kind: 'routine', min: 15 }, { id: 'tue-cal', name: 'Calisthenics', kind: 'workout', min: 60 }, { id: 'tue-easy', name: 'Easy Shadow Boxing', kind: 'rounds', min: 10, focus: 'slow' }],
+  [{ id: 'mon-shadow', name: 'Shadow Kickboxing', kind: 'rounds', min: 26, focus: 'jab' }, { id: 'mon-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 19, focus: 'move' }, { id: 'mon-bw', name: 'Bodyweight Workout', kind: 'amrap', min: 10 }],
+  [{ id: 'tue-stretch', name: 'Dynamic Warm-up', kind: 'routine', min: 10 }, { id: 'tue-cal', name: 'Calisthenics: Chest, Shoulders, Triceps', kind: 'workout', min: 45 }, { id: 'knee-tue', name: 'Knee Armor', kind: 'workout', min: 8 }, { id: 'tue-easy', name: 'Easy Shadow Kickboxing', kind: 'rounds', min: 10, focus: 'slow' }, { id: 'tue-row', name: 'Easy Row', kind: 'run', min: 20 }, { id: 'tue-cool', name: 'Cool-down Stretch', kind: 'routine', min: 5 }],
   [{ id: 'wed-walk', name: 'Walk (10K Steps)', kind: 'walk', min: 75 }, { id: 'wed-shower', name: 'Cold & Warm Showers', kind: 'shower', min: 10 }, { id: 'wed-med', name: 'Meditation', kind: 'wimhof', min: 12 }],
-  [{ id: 'thu-rope', name: 'Jumping Rope', kind: 'rounds', min: 25, focus: 'rope', alt: { other: 'Agility Ladder' } }, { id: 'thu-shadow', name: 'Shadow Boxing', kind: 'rounds', min: 11, focus: 'combo' }, { id: 'thu-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 39, focus: 'power', alt: { other: 'Machine Row' } }],
-  [{ id: 'fri-stretch', name: 'Full Body Stretching', kind: 'routine', min: 15 }, { id: 'fri-cal', name: 'Calisthenics', kind: 'workout', min: 60 }, { id: 'fri-easy', name: 'Easy Shadow Boxing', kind: 'rounds', min: 10, focus: 'distance' }],
-  [{ id: 'sat-mob', name: 'Mobility Training', kind: 'routine', min: 30 }, { id: 'sat-med', name: 'Meditation', kind: 'wimhof', min: 10 }, { id: 'sat-breath', name: 'Breathing Exercises', kind: 'breath', min: 10 }],
-  [{ id: 'sun-jog', name: 'Jogging', kind: 'run', min: 20 }, { id: 'sun-legs', name: 'Wall Sit', kind: 'rounds', min: 19, focus: 'legs' }, { id: 'sun-lunges', name: 'Lunges', kind: 'workout', min: 15 }],
+  [{ id: 'thu-rope', name: 'Jumping Rope', kind: 'rounds', min: 18, focus: 'rope', alt: { other: 'Agility Ladder' } }, { id: 'thu-shadow', name: 'Shadow Kickboxing', kind: 'rounds', min: 15, focus: 'combo', alt: { other: 'Technical Sparring / Pads' } }, { id: 'thu-power', name: 'Punch-out', kind: 'rounds', min: 11, focus: 'power' }, { id: 'thu-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 23, focus: 'power', alt: { other: 'Machine Row' } }],
+  [{ id: 'fri-stretch', name: 'Dynamic Warm-up', kind: 'routine', min: 10 }, { id: 'fri-cal', name: 'Calisthenics: Back, Biceps, Shoulders', kind: 'workout', min: 54 }, { id: 'kick-fri', name: 'Kick Armor', kind: 'workout', min: 10 }, { id: 'fri-easy', name: 'Easy Shadow Kickboxing', kind: 'rounds', min: 10, focus: 'distance' }],
+  [{ id: 'sun-legs', name: 'Leg Day Warm-up', kind: 'routine', min: 10 }, { id: 'sun-lunges', name: 'Speed, Power & Leg Strength', kind: 'workout', min: 66 }, { id: 'knee-sat', name: 'Knee Armor', kind: 'workout', min: 8 }],
+  [{ id: 'sun-jog', name: 'Easy Row', kind: 'run', min: 20, alt: { other: 'Jogging' } }, { id: 'sat-mob', name: 'Mobility Training', kind: 'routine', min: 30 }, { id: 'sat-med', name: 'Meditation', kind: 'wimhof', min: 10 }, { id: 'sat-breath', name: 'Breathing Exercises', kind: 'breath', min: 10 }],
 ];
 
-export function weightKey(s: Pick<Session, 'kind' | 'focus'>): WeightKey | null {
+/** Knee Armor and Kick Armor: a few minutes of isometrics and balance, prehab rather than a strength session. */
+const prehab = (s: { kind: string; id?: string; name?: string }) => s.kind === 'workout' && (/^(knee|kick)-/.test(s.id ?? '') || /\bArmor\b/.test(s.name ?? ''));
+
+export function weightKey(s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?: string }): WeightKey | null {
+  if (prehab(s)) return 'routine';
   if (s.kind === 'rounds') {
     if (s.focus === 'slow' || s.focus === 'distance') return 'boxEasy';
-    if (s.focus === 'power' || s.focus === 'move') return 'boxHard';
+    if (s.focus === 'power' || s.focus === 'move' || s.focus === 'pads') return 'boxHard';
     if (s.focus === 'rope' || s.focus === 'ladder') return 'footwork';
     return s.focus === 'legs' ? 'legs' : 'boxTech';
   }
   return (['amrap', 'workout', 'row', 'run', 'routine', 'walk', 'race', 'coach'] as const).find((k) => k === s.kind) ?? null;
 }
 
-export const weight = (s: Pick<Session, 'kind' | 'focus'>, w: Weights = DEFAULT_WEIGHTS): number => { const k = weightKey(s); return k ? w[k] : 0; };
+export const weight = (s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?: string }, w: Weights = DEFAULT_WEIGHTS): number => { const k = weightKey(s); return k ? w[k] : 0; };
 
 /** Hard boxing rounds. Rope, ladder and leg intervals use the same timer but are not boxing. */
 const combat = (s: Pick<Session, 'kind' | 'focus'>) => { const k = weightKey(s); return k === 'boxHard' || k === 'boxTech'; };
-const strength = (s: Pick<Session, 'kind'>) => s.kind === 'workout' || s.kind === 'amrap';
+const strength = (s: Pick<Session, 'kind'> & { id?: string; name?: string }) => (s.kind === 'workout' || s.kind === 'amrap') && !prehab(s);
 
 export interface LoadPart { id: string; name: string; min: number; intensity: number; load: number; rpe?: number }
 export interface Rating { demand: Demand; load: number; reason: string; parts: LoadPart[] }

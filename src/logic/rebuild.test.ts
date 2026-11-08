@@ -25,9 +25,9 @@ test('every session type of the plan has a transparent weight', () => {
 
 test('the score explains itself part by part', () => {
   const r = classify(FALLBACK_WEEK[3]!);
-  assert.equal(r.parts.length, 3);
+  assert.equal(r.parts.length, 4);
   assert.equal(Math.round(r.parts.reduce((a, p) => a + p.load, 0)), r.load);
-  assert.deepEqual([r.parts[2]!.min, r.parts[2]!.intensity], [39, 1]);
+  assert.deepEqual([r.parts[3]!.name, r.parts[3]!.min, r.parts[3]!.intensity], ['Heavy Bag Training', 23, 1]);
 });
 
 test('weights, thresholds and the box-and-strength rule are the user\'s to change', () => {
@@ -46,11 +46,11 @@ test('a hard rating weighs more, an easy one less, and only on sessions done', (
 });
 
 test('session status keeps planned and actual apart', () => {
-  const s = FALLBACK_WEEK[3]![2]!;
+  const s = FALLBACK_WEEK[3]!.find((x) => x.id === 'thu-bag')!;
   const log = (min: number, kind = 'rounds') => [{ block: s.id, name: s.name, kind, min }];
   assert.equal(sessionStatus(s, [], '2026-11-05', '2026-11-05'), 'planned');
   assert.equal(sessionStatus(s, [], '2026-11-05', '2026-11-06'), 'skipped');
-  assert.equal(sessionStatus(s, log(39), '2026-11-05', '2026-11-06'), 'done');
+  assert.equal(sessionStatus(s, log(23), '2026-11-05', '2026-11-06'), 'done');
   assert.equal(sessionStatus(s, log(15), '2026-11-05', '2026-11-06'), 'partial');
   assert.equal(sessionStatus(s, log(20, 'row'), '2026-11-05', '2026-11-06'), 'changed');
   assert.equal(sessionStatus(s, [], '2026-11-06', '2026-11-05', [s.id]), 'cancelled');
@@ -129,8 +129,8 @@ test('timing splits the day\'s own macros and never adds to them', () => {
   assert.equal(t.pre!.p, 45);
   assert.equal(t.pre!.c, Math.round(300 * shares[2]!));
   assert.equal(t.post!.c, Math.round(300 * shares[3]!));
-  assert.equal(t.end, '17:54');
-  assert.equal(t.post!.afterMin, 36);
+  assert.equal(t.end, '17:55');
+  assert.equal(t.post!.afterMin, 35);
   const all = base.times.map((_, i) => Math.round(300 * shares[i]!)).reduce((a, b) => a + b, 0);
   assert.ok(Math.abs(all - 300) <= 2);
 });
@@ -275,10 +275,10 @@ test('an easy day before a HIGH day gets a moderate share, and the week stays th
   const off = cycleWeek(input({ prefuel: false }), MONDAY).days;
   assert.equal(on[2]!.demand, 'low');
   assert.equal(on[2]!.prefuel, true);
-  assert.equal(on[5]!.prefuel, false, 'Saturday comes before a moderate Sunday');
+  assert.equal(on[5]!.prefuel, false, 'Saturday, Leg Day, is moderate itself');
   assert.equal(off[2]!.prefuel, false);
   assert.ok(on[2]!.c > off[2]!.c);
-  assert.ok(on[2]!.c > on[5]!.c, 'Wednesday gets more than an ordinary low day');
+  assert.ok(on[2]!.c > off[6]!.c, 'Wednesday gets more than an ordinary low day');
   for (const w of [on, off]) { const r = reconcile(plan, w); assert.equal(r.carbsFuel, r.carbsPlan); assert.equal(r.kcalFuel, r.kcalPlan); }
 });
 

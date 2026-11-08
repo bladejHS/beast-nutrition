@@ -13,10 +13,11 @@ const week: Training = { linked: true, week: FALLBACK_WEEK, log: {}, sleep: {} }
 const MONDAY = '2026-11-02';
 const input = (o: Partial<CycleIn> = {}): CycleIn => ({ plan, sex: 'm', cycling: true, factors: DEFAULT_FACTORS, rules: DEFAULT_RULES, overrides: {}, snap: {}, today: MONDAY, training: week, ...o });
 
-const thursday = (feet: Session, main: Session): Session[] => [feet, FALLBACK_WEEK[3]![1]!, main];
-const rope: Session = FALLBACK_WEEK[3]![0]!;
+const thu = (id: string): Session => FALLBACK_WEEK[3]!.find((s) => s.id === id)!;
+const thursday = (feet: Session, main: Session): Session[] => [feet, thu('thu-shadow'), thu('thu-power'), main];
+const rope: Session = thu('thu-rope');
 const ladder: Session = { ...rope, name: 'Agility Ladder', focus: 'ladder', alt: { other: 'Jumping Rope' } };
-const bag: Session = FALLBACK_WEEK[3]![2]!;
+const bag: Session = thu('thu-bag');
 const row = (name: string, min: number): Session => ({ id: 'thu-bag', name: 'Machine Row', kind: 'row', min, alt: { other: 'Heavy Bag Training', detail: name } });
 
 test('Thursday counts only the picked alternatives, with the workload of the rowing challenge', () => {
@@ -25,9 +26,9 @@ test('Thursday counts only the picked alternatives, with the workload of the row
   assert.equal(classify(thursday(rope, row('Challenge A: 1.000 m', 5))).demand, 'moderate');
   assert.equal(classify(thursday(ladder, row('Challenge D: 250 m × 8', 14))).demand, 'moderate');
   assert.equal(classify(thursday(rope, row('Challenge C: 10.000 m', 45))).demand, 'high');
-  const all = classify([rope, ladder, FALLBACK_WEEK[3]![1]!, bag, row('Challenge C: 10.000 m', 45)]);
+  const all = classify([rope, ladder, thu('thu-shadow'), thu('thu-power'), bag, row('Challenge C: 10.000 m', 45)]);
   assert.ok(classify(thursday(rope, bag)).load < all.load, 'all alternatives together would overstate the day');
-  assert.deepEqual(picks(thursday(ladder, row('Challenge B: 5.000 m', 22))), ['Agility Ladder, nu Jumping Rope', 'Machine Row (Challenge B: 5.000 m), nu Heavy Bag Training']);
+  assert.deepEqual(picks(thursday(ladder, row('Challenge B: 5.000 m', 22))), ['Agility Ladder, nu Jumping Rope', 'Shadow Kickboxing, nu Technical Sparring / Pads', 'Machine Row (Challenge B: 5.000 m), nu Heavy Bag Training']);
 });
 
 test('the boxing days keep their structure: Monday and Thursday are high, the light boxing of Tuesday and Friday is not', () => {
@@ -35,10 +36,18 @@ test('the boxing days keep their structure: Monday and Thursday are high, the li
   assert.match(classify(FALLBACK_WEEK[0]!).reason, /box și forță/);
 });
 
-test('leg intervals on the round timer are not boxing, so Sunday is not a box-and-strength day', () => {
-  const sunday = classify(FALLBACK_WEEK[6]!);
-  assert.equal(sunday.demand, 'moderate');
-  assert.doesNotMatch(sunday.reason, /box/);
+test('leg intervals on the round timer are not boxing, so legs and lunges are not a box-and-strength day', () => {
+  const legs = classify([{ name: 'Wall Sit', kind: 'rounds', focus: 'legs', min: 19 }, { name: 'Lunges', kind: 'workout', min: 15 }]);
+  assert.equal(legs.demand, 'moderate');
+  assert.doesNotMatch(legs.reason, /box/);
+});
+
+test('Knee Armor and Kick Armor count as prehab: they neither make a strength day nor push a day to HIGH', () => {
+  const tue = FALLBACK_WEEK[1]!;
+  assert.ok(tue.some((s) => s.name === 'Knee Armor'));
+  assert.equal(classify(tue).demand, 'moderate');
+  assert.equal(classify([{ id: 'mon-bag', name: 'Heavy Bag Training', kind: 'rounds', focus: 'move', min: 10 }, { id: 'kick-fri', name: 'Kick Armor', kind: 'workout', min: 10 }]).demand, 'low');
+  assert.deepEqual(FALLBACK_WEEK.map((d) => classify(d).demand), ['high', 'moderate', 'low', 'high', 'moderate', 'moderate', 'low']);
 });
 
 test('demand follows the sessions, not the weekday', () => {
@@ -108,7 +117,7 @@ test('the signature of the days ahead notices a changed Thursday', () => {
 test('the next session skips what the log shows as done', () => {
   const planned = FALLBACK_WEEK[0]!;
   assert.equal(nextSession({ planned, done: [] })!.id, 'mon-shadow');
-  assert.equal(nextSession({ planned, done: [{ block: 'mon-shadow', name: '', kind: '', min: 1 }] })!.id, 'mon-bw');
+  assert.equal(nextSession({ planned, done: [{ block: 'mon-shadow', name: '', kind: '', min: 1 }] })!.id, 'mon-bag');
   assert.equal(CARB_LABEL.low, 'LOWER CARB');
 });
 

@@ -294,6 +294,20 @@ export async function eatPlanned(date: string, mi: number) {
   ctx.toast(`${meal.name} notată.`, () => { if (syncLog(date, meal, mi, [])) meal.done = false; ctx.commit(); ctx.render(); });
 }
 
+/** Takes an eaten planned meal back out of the journal, from Azi as well as from the plan; the toast puts it back. */
+export function uneatPlanned(date: string, mi: number) {
+  const s = ctx.get();
+  const meal = s.fuel.plan[date]?.[mi];
+  if (!meal?.done) return;
+  const before = s.days[date];
+  // its food may already have been deleted by hand: then only the mark goes
+  const logged = dayMeals(s, date).some((l) => l.some((e) => e.from === meal.id));
+  if (logged && !syncLog(date, meal, mi, [])) return;
+  meal.done = false;
+  ctx.commit(); ctx.render();
+  ctx.toast(`${meal.name} scoasă din jurnal.`, () => { if (before) s.days[date] = before; meal.done = true; ctx.commit(); ctx.render(); });
+}
+
 /** Builds the day's meals, for Azi as well as for the plan. */
 export async function generateToday(date: string) {
   await loadPantry();
@@ -426,7 +440,7 @@ export function fuelAction(el: HTMLElement): boolean {
   }
   if (a === 'movego') { const [m] = plan.splice(mi, 1); (s.fuel.plan[v] ??= []).push(m!); ctx.close(); ctx.toast('Masă mutată. Vezi totalurile zilei.'); }
   if (a === 'eat') { void eatPlanned(mealDay, mi); return true; }
-  if (a === 'uneat') { if (!syncLog(mealDay, meal!, mi, [])) return true; meal!.done = false; }
+  if (a === 'uneat') { uneatPlanned(mealDay, mi); return true; }
   if (a === 'drink') { const item = drink(Number(v)); ctx.commit(); ctx.render(); ctx.toast(`Am notat ${item.ml} ml.`, () => { s.drinks[ctx.today()] = (s.drinks[ctx.today()] ?? []).filter((x) => x.id !== item.id); ctx.commit(); ctx.render(); }); return true; }
   if (a === 'dk') dk = v;
   if (a === 'undrink') s.drinks[ctx.today()] = (s.drinks[ctx.today()] ?? []).filter((x) => x.id !== v);

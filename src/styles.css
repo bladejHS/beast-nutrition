@@ -217,6 +217,9 @@ input[type=range] { min-height: 44px; padding: 0; border: 0; background: none; a
 .coach { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--t2); font-size: 14px; }
 .nextc { margin: 12px 0; padding: 16px; border-radius: 16px; background: var(--s2); }
 .nextc h2 { font: 600 14px/1.2 var(--text); color: var(--t2); }
+.nc-h { display: flex; align-items: center; gap: 4px; margin: -10px -8px 0 0; }
+.nc-h h2 { flex: 1; }
+.nc-h .lnk { min-height: 44px; }
 .nextc p { margin: 6px 0 0; }
 .nextc .ghost { background: var(--s3); }
 .next-m { display: flex; align-items: center; gap: 12px; margin-top: 6px; }

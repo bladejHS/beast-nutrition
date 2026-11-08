@@ -9,7 +9,7 @@ import { dayRows, nextMeal } from '../logic/today.ts';
 import { CARB_LABEL, type Demand } from '../logic/training.ts';
 import { waterTarget } from '../logic/wellness.ts';
 import { fastChip } from './fast.ts';
-import { eatPlanned, generateToday, waterOn } from './fuel.ts';
+import { eatPlanned, generateToday, uneatPlanned, waterOn } from './fuel.ts';
 import { openAdd } from './log.ts';
 import { lvl } from './parts.ts';
 import { dayFuel, fuelWeek, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
@@ -18,6 +18,8 @@ import { openWeigh } from './body.ts';
 let date = '';
 let seen = '';
 const openRows = new Set<string>();
+/** The meal the card shows when the user steps away from the next one (‹ ›); null follows the next meal. */
+let pick: { date: string; i: number } | null = null;
 
 export const currentDate = () => date || (date = ctx.today());
 
@@ -92,23 +94,37 @@ function slotsOf(d: string, t: DayTarget): Slot[] {
 
 const grams = (m: Meal) => m.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ');
 
-function nextCard(d: string, slot: Slot | null) {
+/** The card's header: what it shows, and ‹ › to step to the meal before or after it. */
+function cardHead(title: string, i: number | null, count: number, away: boolean) {
+  const at = i ?? count;
+  return `<div class="nc-h"><h2>${title}</h2>${away ? '<button class="lnk" data-az="mnow">Înapoi la ce urmează</button>' : ''}
+    <button class="ib" data-az="mprev" aria-label="Masa anterioară" ${at > 0 ? '' : 'disabled'}>‹</button><button class="ib" data-az="mnext" aria-label="Masa următoare" ${i != null && i < count - 1 ? '' : 'disabled'}>›</button></div>`;
+}
+
+/** The meal card: the next meal, or the one the user stepped to. An eaten planned meal can be taken back out. */
+function nextCard(d: string, slots: Slot[], shown: number | null, next: number | null) {
   const s = ctx.get();
+  const slot = shown == null ? null : slots[shown] ?? null;
   if (!slot) {
     const tomorrow = addDays(d, 1);
     const f = dayFuel(tomorrow);
     const dem = demandOn(tomorrow);
-    return `<section class="nextc"><h2>Ziua e completă</h2><p>Mâine: ${dem ? `${CARB_LABEL[dem]}, ` : ''}${nb(n0(f.kcal), 'kcal')}, ${nb(f.c, 'g')} carbohidrați.</p><button class="ghost wide" data-day="1">Vezi ziua de mâine</button></section>`;
+    return `<section class="nextc">${cardHead('Ziua e completă', null, slots.length, false)}<p>Mâine: ${dem ? `${CARB_LABEL[dem]}, ` : ''}${nb(n0(f.kcal), 'kcal')}, ${nb(f.c, 'g')} carbohidrați.</p><button class="ghost wide" data-day="1">Vezi ziua de mâine</button></section>`;
   }
   const m = slot.meal;
   const g = slot.goal;
-  const logged = dayMeals(s, d)[slot.i]!.length > 0;
-  return `<section class="nextc"><h2>Urmează</h2>
+  const logged = dayMeals(s, d)[slot.i]!.length > 0 || !!m?.done;
+  const title = shown === next ? 'Urmează' : logged ? 'Mâncat' : next == null || shown! < next ? 'Mai devreme' : 'Mai târziu';
+  const acts = m && !m.done
+    ? `<button class="primary" data-az="eat" data-m="${slot.mi}">Am mâncat</button><button class="ghost" data-add="${slot.i}">Altceva</button>`
+    : m?.done
+      ? `<button class="ghost" data-az="uneat" data-m="${slot.mi}">Scoate din jurnal</button><button class="ghost" data-add="${slot.i}">Adaugă încă ceva</button>`
+      : `<button class="primary" data-add="${slot.i}">${logged ? 'Adaugă încă ceva' : 'Adaugă mâncare'}</button>${(s.fuel.plan[d] ?? []).length ? '' : '<button class="ghost" data-az="gen">Generează mesele</button>'}`;
+  return `<section class="nextc${logged ? ' ate' : ''}">${cardHead(title, shown, slots.length, shown !== next && next != null)}
     <div class="next-m"><b class="t">${esc(slot.time)}</b><div><b>${esc(slot.title)}</b>${slot.tag ? `<small>${esc(slot.tag)}</small>` : ''}</div></div>
     ${g ? `<p class="next-g">${nb(g.c, 'g')} carbo, ${nb(g.p, 'g')} proteine, ${nb(g.f, 'g')} grăsimi</p>` : ''}
     ${m && pantry.foods.length ? `<p class="hint">${grams(m)}</p>` : ''}
-    <div class="btns">${m && !m.done ? `<button class="primary" data-az="eat" data-m="${slot.mi}">Am mâncat</button><button class="ghost" data-add="${slot.i}">Altceva</button>`
-      : `<button class="primary" data-add="${slot.i}">${logged ? 'Adaugă încă ceva' : 'Adaugă mâncare'}</button>${(s.fuel.plan[d] ?? []).length ? '' : '<button class="ghost" data-az="gen">Generează mesele</button>'}`}</div></section>`;
+    <div class="btns">${acts}</div></section>`;
 }
 
 function entryRow(e: Entry, i: number) {
@@ -123,7 +139,7 @@ function mealRow(x: Slot, list: Entry[], isNext: boolean) {
     return `<li class="r ${isNext ? 'next' : ''}"><button class="r-b" data-add="${x.i}"><span class="sr">Adaugă la</span><span class="t">${esc(x.time)}</span><span class="b"><b>${esc(x.title)}</b>${sub}</span><span class="k">${x.goal ? `${n0(x.goal.kcal)}<small>kcal</small>` : ''}</span><i class="plus" aria-hidden="true"></i></button></li>`;
   }
   return `<li class="r done"><details data-row="${x.key}" ${openRows.has(x.key) ? 'open' : ''}><summary class="r-b"><span class="t">${esc(x.time)}</span><span class="b"><b>${esc(x.title)}</b>${sub}</span><span class="k">${n0(sum.kcal)}<small>kcal</small></span><i class="chev" aria-hidden="true"></i></summary>
-    ${list.map((e) => entryRow(e, x.i)).join('')}<button class="ghost wide" data-add="${x.i}">Adaugă la ${esc(x.title)}</button></details></li>`;
+    ${list.map((e) => entryRow(e, x.i)).join('')}<button class="ghost wide" data-add="${x.i}">Adaugă la ${esc(x.title)}</button>${x.meal?.done ? `<button class="ghost wide" data-az="uneat" data-m="${x.mi}">Scoate ${esc(x.title)} din jurnal</button>` : ''}</details></li>`;
 }
 
 function dayList(d: string, slots: Slot[], next: Slot | null) {
@@ -175,6 +191,8 @@ export function todayHtml() {
   const logged = slots.map((x) => journal[x.i]!.length > 0 || !!x.meal?.done);
   const idx = d === today ? nextMeal(logged, slots.map((x) => x.time), nowMinutes()) : -1;
   const next = idx != null && idx >= 0 ? slots[idx]! : null;
+  if (pick && (pick.date !== d || pick.i >= slots.length)) pick = null;
+  const shown = pick ? pick.i : idx != null && idx >= 0 ? idx : null;
   if (s.fuel.plan[d]?.length && !pantry.foods.length) void loadPantry().then(() => ctx.render()).catch(() => { /* the meals still show, without their foods */ });
   const yesterday = dayMeals(s, addDays(d, -1)).flat().length > 0;
   const note = notice.text;
@@ -184,7 +202,7 @@ export function todayHtml() {
   ${hero(d, t)}
   ${note ? `<p class="updated">${esc(note)}</p>` : ''}
   ${numbers(t, sum)}
-  ${d === today ? nextCard(d, next) : ''}
+  ${d === today ? nextCard(d, slots, shown, idx != null && idx >= 0 ? idx : null) : ''}
   ${dayList(d, slots, next)}
   ${extras(d)}
   ${yesterday && d >= today && !journal.flat().length ? '<button class="ghost wide" data-az="copy">Copiază mesele de ieri</button>' : ''}`;
@@ -199,15 +217,21 @@ export function todayAction(el: HTMLElement): boolean {
     const day = currentDate();
     const [i, id] = d['del'].split(':');
     const before = s.days[day];
+    const gone = dayMeals(s, day)[Number(i)]?.find((e) => e.id === id);
     s.days[day] = dayMeals(s, day).map((m, k) => (k === Number(i) ? m.filter((e) => e.id !== id) : m));
+    // the last food of an eaten planned meal: the meal is not eaten any more, so the card can come back to it
+    const meal = gone?.from ? (s.fuel.plan[day] ?? []).find((m) => m.id === gone.from && m.done) : undefined;
+    if (meal && !s.days[day].some((l) => l.some((e) => e.from === meal.id))) meal.done = false;
     ctx.commit(); ctx.render();
-    ctx.toast('Aliment șters.', () => { if (before) s.days[day] = before; ctx.commit(); ctx.render(); });
+    ctx.toast('Aliment șters.', () => { if (before) s.days[day] = before; if (meal) meal.done = true; ctx.commit(); ctx.render(); });
     return true;
   }
   const a = d['az'];
   if (!a) return false;
-  if (a === 'today') { date = ctx.today(); ctx.render(); }
-  if (a === 'eat') void eatPlanned(currentDate(), Number(d['m']));
+  if (a === 'today') { date = ctx.today(); pick = null; ctx.render(); }
+  if (a === 'mprev' || a === 'mnext' || a === 'mnow') { stepMeal(a); return true; }
+  if (a === 'eat') { pick = null; void eatPlanned(currentDate(), Number(d['m'])); }
+  if (a === 'uneat') uneatPlanned(currentDate(), Number(d['m']));
   if (a === 'gen') void generateToday(currentDate()).catch(() => ctx.toast('Baza de alimente nu s-a încărcat. Verifică internetul.'));
   if (a === 'weigh') openWeigh();
   if (a === 'copy') {
@@ -219,6 +243,20 @@ export function todayAction(el: HTMLElement): boolean {
     ctx.toast('Mesele de ieri au fost copiate.', () => { if (before) s.days[day] = before; else delete s.days[day]; ctx.commit(); ctx.render(); });
   }
   return true;
+}
+
+/** ‹ › on the meal card: the meal before or after the one shown; landing on the next meal follows it again. */
+function stepMeal(a: string) {
+  const d = currentDate();
+  const t = dayFuel(d);
+  const slots = slotsOf(d, t);
+  const journal = dayMeals(ctx.get(), d);
+  const logged = slots.map((x) => journal[x.i]!.length > 0 || !!x.meal?.done);
+  const n = nextMeal(logged, slots.map((x) => x.time), nowMinutes());
+  const at = pick?.date === d ? pick.i : n ?? slots.length;
+  const to = a === 'mnow' ? n ?? slots.length : Math.max(0, Math.min(slots.length - 1, at + (a === 'mprev' ? -1 : 1)));
+  pick = a === 'mnow' || to === n ? null : { date: d, i: to };
+  ctx.render();
 }
 
 export function todayBind() {

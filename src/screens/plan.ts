@@ -8,7 +8,10 @@ import {
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf } from '../logic/review.ts';
 import { dayMeals, hasDamagedSave, parseBackup, totals } from '../logic/store.ts';
 import { exportFiles, isMfp, mergeMfp, readMfp } from '../logic/mfp.ts';
-import { dayFuel } from './state.ts';
+import { dayFuel, fx, latestKg, training } from './state.ts';
+import { classify } from '../logic/training.ts';
+import { fatFloorShare, minusMinutes, nextBreak, proteinPerMeal, sleepAverage } from '../logic/perf.ts';
+import { waterTarget } from '../logic/wellness.ts';
 import { banner, back } from './parts.ts';
 import { PRINCIPLES } from '../content.ts';
 
@@ -73,6 +76,7 @@ export function planHtml() {
     ${fatKg < 0.5 ? `<p class="warn">Grăsimile sunt ${fatKg.toLocaleString('ro-RO', { maximumFractionDigits: 2 })} g/kg, sub reperul de 0,5 g/kg. Un ritm mai mic sau o împărțire 60/40 le ridică.</p>` : ''}
     ${plan.phase === 'cut' && isBreakWeek(plan, today) ? '<p class="coach">Săptămâna asta e pauză: mănânci la mențineri.</p>' : ''}
     <button class="ghost wide" data-edit>Schimbă datele și planul</button></section>
+  ${perfHtml()}
   <section class="card"><h2>Faza următoare</h2><p class="hint">Dieta nu se termină, se schimbă faza. Reverse pornește de la caloriile de acum și urcă săptămânal, menținerea pornește de la menținerile tale.</p>
     <div class="seg">${(['cut', 'maintain', 'reverse'] as Phase[]).filter((x) => x !== plan.phase).map((x) => `<button data-phase="${x}">${phaseName(x)}</button>`).join('')}</div></section>
   ${plan.adjustments.length ? `<details class="card"><summary><b>Ajustări</b> <span class="hint">${plan.adjustments.length}</span></summary>${[...plan.adjustments].reverse().map((a) => `<div class="line"><span>${esc(new Date(`${a.date}T12:00:00`).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }))}, ${esc(a.note)}</span><b>${a.pct > 0 ? '+' : ''}${String(a.pct).replace('.', ',')}%</b><em>${nb(n0(a.to), 'kcal')}</em></div>`).join('')}</details>` : ''}
@@ -90,6 +94,115 @@ export function planHtml() {
 
 export const mindHtml = () => `${back('Fuel', 'data-tab="fuel"')}<h1 class="title">Mentalitate</h1><p class="hint">Cele 12 principii din <i>Fat Loss Forever</i>, de Layne Norton.</p>
   ${PRINCIPLES.map((x, i) => `<section class="card pr"><span>${i + 1}</span><div><h2>${esc(x.title)}</h2><p>${esc(x.body)}</p><small>${esc(x.ch)}</small></div></section>`).join('')}`;
+
+const RO_DAYS = ['luni', 'marți', 'miercuri', 'joi', 'vineri', 'sâmbătă', 'duminică'];
+const andList = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} și ${xs.at(-1)}` : xs[0] ?? '');
+const shortDay = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString('ro-RO', { day: 'numeric', month: 'long' });
+const g1 = (v: number) => v.toLocaleString('ro-RO', { maximumFractionDigits: 2 });
+/** The diet breaks the plan recommends: four weeks of deficit and one at maintenance, the shortest of the book's options. */
+const BREAKS = { on: 4, off: 1 } as const;
+
+interface PerfItem { ok: boolean | null; title: string; body: string; src: string; act?: string }
+
+/** The performance plan: what the consensus positions in sports nutrition ask of a fat-loss phase that keeps
+ *  strength and fuels kickboxing, on the user's own numbers. Each item shows whether the app already does it and,
+ *  where it can, the tap that applies it. Nothing changes until the user taps. */
+function perfItems(): PerfItem[] {
+  const s = ctx.get();
+  const plan = s.plan!, p = s.profile!;
+  const today = ctx.today();
+  const m = plan.macros;
+  const kg = latestKg();
+  const lbm = lbmKg(p);
+  const meals = s.fuel.prefs.meals || 4;
+  const per = proteinPerMeal(m.p, meals);
+  const share = plan.phase === 'cut' || plan.phase === 'maintain' ? fatFloorShare(m, plan.carbShare, kg) : null;
+  const fatAfter = share != null ? macrosFor(m.kcal, m.p, share).f : m.f;
+  // the planned class of each weekday, from the training week and the user's rules (this week's past days are rated
+  // on what was done, so they would hide the plan)
+  const t = training();
+  const rules = { limits: s.fuel.limits, weights: s.fuel.weights, boxStrength: s.fuel.boxStrength };
+  const highs = RO_DAYS.filter((_, i) => classify(t.week[i] ?? [], rules).demand === 'high');
+  const hour = s.fuel.trainingHour || '17:00';
+  const water = waterTarget(kg, s.waterMlKg) / 1000;
+  const creatine = s.supps.some((x) => /creatin/i.test(`${x.ingredient} ${x.product}`));
+  const sleep = sleepAverage(t.sleep, today);
+  const brk = nextBreak(plan, today);
+  return [
+    { ok: s.fuel.cycling, title: 'Carbohidrații urmează antrenamentul',
+      body: s.fuel.cycling
+        ? `Pornit: ${highs.length ? `${andList(highs)}, zilele HIGH,` : 'zilele grele'} primesc mai mulți carbohidrați, iar ziua dinaintea uneia HIGH își face rezerva. Proteinele, grăsimile și caloriile săptămânii rămân aceleași.`
+        : `Acum fiecare zi are aceeași țintă. Pornit, ${highs.length ? `${andList(highs)}, zilele cele mai grele din antrenamentul tău,` : 'zilele grele'} primesc mai mulți carbohidrați, iar caloriile săptămânii rămân aceleași.`,
+      src: 'Burke și Impey, „fuel for the work required”; consensul IOC, 2018', act: s.fuel.cycling ? undefined : 'cyc' },
+    { ok: share == null, title: 'Grăsimi de cel puțin 0,5 g/kg',
+      body: share == null
+        ? `${m.f} g pe zi, adică ${g1(m.f / kg)} g/kg: destul pentru hormoni și pentru vitaminele A, D, E și K.`
+        : `Acum ${m.f} g, adică ${g1(m.f / kg)} g/kg. Sub 0,5 g/kg au de suferit hormonii și vitaminele A, D, E și K. Le ridici la ${fatAfter} g, luate din carbohidrați: caloriile și proteinele rămân.`,
+      src: 'ACSM, AND și DC, 2016; Helms și colab., 2014', act: share == null ? undefined : 'fat' },
+    { ok: true, title: `Proteine ${m.p} g, în ${meals} mese`,
+      body: `${g1(m.p / lbm)} g/kg de masă slabă, cât cere un deficit cu antrenament de forță. Câte ~${per} g la fiecare masă, din surse complete; ultima poate fi brânză de vaci sau iaurt grecesc, care se digeră lent peste noapte.`,
+      src: 'Helms și colab., 2014; ISSN, 2017; Schoenfeld și Aragon, 2018' },
+    { ok: true, title: 'Masa dinainte și cea de după',
+      body: `Pentru antrenamentul de la ${esc(hour)}: masa cu 2–3 ore înainte, pe la ${minusMinutes(hour, 150)}, cu carbohidrați și puține grăsimi și fibre. După, în primele 2 ore, ~${per} g proteine și carbohidrați. Azi le arată la fiecare masă.`,
+      src: 'ISSN, timingul nutrienților, 2017; ACSM, AND și DC, 2016' },
+    { ok: s.sweat.length > 0, title: 'Apă și sare',
+      body: `${n1(water)} L pe zi, plus ce pierzi la antrenament. ${s.sweat.length ? 'Ai făcut testul de transpirație: Hidratare îți arată cât să bei la fiecare sesiune.' : 'Cântărește-te o dată înainte și după un antrenament (testul de transpirație): bei 1,25–1,5 L pentru fiecare kg pierdut, cu sare dacă transpiri mult.'}`,
+      src: 'ACSM, înlocuirea lichidelor, 2007', act: s.sweat.length ? undefined : 'water' },
+    { ok: creatine, title: 'Creatină, 3–5 g pe zi',
+      body: `${creatine ? 'E în suplimentele tale.' : 'Cel mai bine susținut supliment pentru forță și putere; ajută și la păstrarea mușchilor în deficit.'} Oricând, cu o masă, fără încărcare. Cofeina e opțională: cel mult 200 mg, cu 45–60 de minute înainte, doar dacă nu-ți strică somnul.`,
+      src: 'ISSN, creatina, 2017; consensul IOC, 2018; EFSA', act: creatine ? undefined : 'crea' },
+    { ok: sleep == null ? null : sleep >= 7, title: 'Somn de cel puțin 7 ore',
+      body: `${sleep == null ? '' : `Media ta pe 7 zile: ${n1(sleep)} h. `}Într-un deficit, 5,5 ore de somn în loc de 8,5 au înjumătățit grăsimea pierdută și au crescut pierderea de mușchi. Sub 7 ore, nu tăia mai mult din calorii.`,
+      src: 'Nedeltcheva și colab., 2010' },
+    { ok: plan.phase !== 'cut' || !!plan.breaks, title: 'Ajustări și pauze de dietă',
+      body: `Te cântărești dimineața, iar media săptămânii decide. Două check-in-uri la rând sub jumătate din ritm: caloriile scad cu 5%. Dacă forța scade două săptămâni la rând, nu tăia mai mult. ${plan.breaks ? `Pauze: ${plan.breaks.on} săptămâni deficit + ${plan.breaks.off} la mențineri${brk ? `, următoarea din ${shortDay(brk)}` : ''}.` : `Pauze de dietă: ${BREAKS.on} săptămâni de deficit și ${BREAKS.off} la mențineri, pentru antrenament și pentru metabolism.`}`,
+      src: 'Fat Loss Forever, Norton și Baker; Byrne și colab., 2018 (MATADOR)', act: plan.phase === 'cut' && !plan.breaks ? 'breaks' : undefined },
+  ];
+}
+
+function perfHtml() {
+  const items = perfItems();
+  const todo = items.filter((x) => x.act && x.act !== 'water').length;
+  const mark = (ok: boolean | null) => (ok == null ? 'na' : ok ? 'ok' : 'todo');
+  const btn: Record<string, string> = {
+    cyc: '<button class="ghost" data-perf="cyc">Pornește</button>',
+    fat: '<button class="ghost" data-perf="fat">Ridică grăsimile</button>',
+    water: '<button class="ghost" data-tab="fuel" data-sub="water">Fă testul</button>',
+    crea: '<button class="ghost" data-perf="crea">Adaug-o la suplimente</button>',
+    breaks: `<button class="ghost" data-perf="breaks">Programează ${BREAKS.on} + ${BREAKS.off}</button>`,
+  };
+  return `<section class="card perf"><h2>Planul de performanță</h2>
+    <p class="hint">Ce cer pozițiile de consens din nutriția sportivă pentru o slăbire care păstrează forța și alimentează kickboxing-ul, pe cifrele tale. Auriu: aplicat. Albastru: de făcut. Nimic nu se schimbă până nu apeși.</p>
+    ${items.map((x, i) => `<div class="pf ${mark(x.ok)}"><i class="pf-s" aria-hidden="true"></i><b><span>${i + 1}</span>${esc(x.title)}</b><p>${esc(x.body)}</p><small>${esc(x.src)}</small>${x.act ? `<div class="btns">${btn[x.act]}</div>` : ''}</div>`).join('')}
+    ${todo > 1 ? '<button class="primary wide" data-perf="all">Aplică tot ce lipsește</button>' : ''}
+  </section>`;
+}
+
+/** Applies one item of the performance plan, or all of them; the toast puts everything back as it was. */
+function applyPerf(what: string) {
+  const s = ctx.get();
+  const before = { plan: s.plan, cycling: s.fuel.cycling, sig: s.fuel.sig, supps: [...s.supps] };
+  const kg = latestKg();
+  const done: string[] = [];
+  const all = what === 'all';
+  if ((all || what === 'cyc') && !s.fuel.cycling) { s.fuel.cycling = true; s.fuel.sig = ''; fx.recalc = true; done.push('carb cycling pornit'); }
+  if (all || what === 'fat') {
+    const share = fatFloorShare(s.plan!.macros, s.plan!.carbShare, kg);
+    if (share != null) { s.plan = buildPlan(s.profile!, { ...s.plan!, carbShare: share, adjustments: s.plan!.adjustments }); done.push(`grăsimi ${s.plan.macros.f} g`); }
+  }
+  if ((all || what === 'crea') && !s.supps.some((x) => /creatin/i.test(`${x.ingredient} ${x.product}`))) {
+    s.supps.push({ id: crypto.randomUUID(), product: 'Creatină monohidrat', brand: '', ingredient: 'Creatină', serving: '5 g', mgPerDay: 5000, time: 'Cu o masă', freq: 'Zilnic', start: ctx.today(), notes: 'Din planul de performanță' });
+    done.push('creatină la suplimente');
+  }
+  if ((all || what === 'breaks') && s.plan!.phase === 'cut' && !s.plan!.breaks) {
+    s.plan = buildPlan(s.profile!, { ...s.plan!, breaks: { ...BREAKS }, adjustments: s.plan!.adjustments });
+    const brk = nextBreak(s.plan, ctx.today());
+    done.push(`pauze ${BREAKS.on} + ${BREAKS.off}${brk ? `, prima din ${shortDay(brk)}` : ''}`);
+  }
+  if (!done.length) return;
+  ctx.commit(); ctx.render();
+  ctx.toast(`Aplicat: ${done.join(', ')}.`, () => { s.plan = before.plan; s.fuel.cycling = before.cycling; s.fuel.sig = before.sig; s.supps = before.supps; fx.recalc = true; ctx.commit(); ctx.render(); });
+}
 
 const dayLong = (d: string) => { const w = new Date(`${d}T12:00:00`).toLocaleDateString('ro-RO', { weekday: 'long' }); return w.charAt(0).toUpperCase() + w.slice(1); };
 
@@ -260,6 +373,7 @@ export function planAction(el: HTMLElement): boolean {
   const s = ctx.get();
   const d = el.dataset;
   if (d['phase']) { changePhase(d['phase'] as Phase); return true; }
+  if (d['perf']) { applyPerf(d['perf']); return true; }
   if (d['mfpUse'] != null) { useDataMaintenance(); return true; }
   if (d['mfpCopy'] != null) {
     const text = mfpWeek().map((x) => x.line).join('\n');

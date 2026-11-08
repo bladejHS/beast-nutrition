@@ -26,6 +26,8 @@ const openMeals = new Set<string>();
 
 /** The catalogue again, when its tab is tapped from inside a section. */
 export function fuelHome() { sub = 'home'; }
+/** A section of Fuel opened from another tab (the performance plan in Plan links to water and supplements). */
+export function fuelSub(v: string) { if (['carbs', 'meals', 'water', 'supp', 'micro', 'report', 'recovery'].includes(v)) sub = v as Sub; }
 const fuelOpen = (v: Sub) => { sub = v; };
 
 /** Opens one day of Carb Cycling from anywhere in the app. */

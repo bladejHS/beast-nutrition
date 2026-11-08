@@ -3,7 +3,7 @@ import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
-import { fuelAction, fuelBind, fuelHome, fuelHtml } from './screens/fuel.ts';
+import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml } from './screens/fuel.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
 import { freshFuel, syncFuel } from './screens/state.ts';
@@ -89,7 +89,7 @@ document.addEventListener('click', (ev) => {
   if (el.dataset['close'] != null) { close(); return; }
   if (el.dataset['tab']) {
     // A tab always leads to its first screen, also from deep inside it.
-    if (el.dataset['tab'] === 'fuel') fuelHome();
+    if (el.dataset['tab'] === 'fuel') { fuelHome(); if (el.dataset['sub']) fuelSub(el.dataset['sub']); }
     tab = el.dataset['tab'] as Tab; render(); scrollTo(0, 0);
     return;
   }

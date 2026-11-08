@@ -74,7 +74,7 @@ function render() {
   syncFuel();
   const views: Record<Tab, () => string> = { azi: todayHtml, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: planHtml, minte: mindHtml };
   app.innerHTML = `<main>${views[tab]()}</main>
-    <nav class="tabs" aria-label="Navigare">${(Object.keys(ICONS) as Main[]).map((t) =>
+    <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
   afterRender(app);
   if (tab === 'azi') todayBind();

@@ -7,6 +7,8 @@ import {
 } from '../logic/calc.ts';
 import { addDays, finishedWeeks, maintenanceFromData, mondayOf } from '../logic/review.ts';
 import { dayMeals, hasDamagedSave, parseBackup, totals } from '../logic/store.ts';
+import { exportFiles, isMfp, mergeMfp, readMfp } from '../logic/mfp.ts';
+import { dayFuel } from './state.ts';
 import { banner, back } from './parts.ts';
 import { PRINCIPLES } from '../content.ts';
 
@@ -74,6 +76,7 @@ export function planHtml() {
   <section class="card"><h2>Faza următoare</h2><p class="hint">Dieta nu se termină, se schimbă faza. Reverse pornește de la caloriile de acum și urcă săptămânal, menținerea pornește de la menținerile tale.</p>
     <div class="seg">${(['cut', 'maintain', 'reverse'] as Phase[]).filter((x) => x !== plan.phase).map((x) => `<button data-phase="${x}">${phaseName(x)}</button>`).join('')}</div></section>
   ${plan.adjustments.length ? `<details class="card"><summary><b>Ajustări</b> <span class="hint">${plan.adjustments.length}</span></summary>${[...plan.adjustments].reverse().map((a) => `<div class="line"><span>${esc(new Date(`${a.date}T12:00:00`).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }))}, ${esc(a.note)}</span><b>${a.pct > 0 ? '+' : ''}${String(a.pct).replace('.', ',')}%</b><em>${nb(n0(a.to), 'kcal')}</em></div>`).join('')}</details>` : ''}
+  ${mfpHtml(fromData)}
   <section class="card"><h2>Datele tale</h2><p class="hint">Totul stă doar în acest browser, fără cont și fără server. ${backup}</p>
     ${hasDamagedSave() ? '<p class="warn">Un salvat deteriorat a fost pus deoparte. Încarcă un backup dacă lipsesc date.</p>' : ''}
     <div class="btns"><button class="${s.backedUp && daysSince(s.backedUp, today) < 14 ? 'ghost' : 'primary'}" data-export>Descarcă backup</button><label class="ghost file">Încarcă backup<input type="file" id="imp" accept="application/json"></label></div></section>
@@ -87,6 +90,67 @@ export function planHtml() {
 
 export const mindHtml = () => `${back('Fuel', 'data-tab="fuel"')}<h1 class="title">Mentalitate</h1><p class="hint">Cele 12 principii din <i>Fat Loss Forever</i>, de Layne Norton.</p>
   ${PRINCIPLES.map((x, i) => `<section class="card pr"><span>${i + 1}</span><div><h2>${esc(x.title)}</h2><p>${esc(x.body)}</p><small>${esc(x.ch)}</small></div></section>`).join('')}`;
+
+const dayLong = (d: string) => { const w = new Date(`${d}T12:00:00`).toLocaleDateString('ro-RO', { weekday: 'long' }); return w.charAt(0).toUpperCase() + w.slice(1); };
+
+/** This week's targets, one line per day, as MyFitnessPal Premium's goals by day take them. */
+function mfpWeek(): { date: string; line: string; kcal: number; p: number; c: number; f: number }[] {
+  const mon = mondayOf(ctx.today());
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(mon, i);
+    const t = dayFuel(date);
+    return { date, kcal: t.kcal, p: t.p, c: t.c, f: t.f, line: `${dayLong(date)}: ${Math.round(t.kcal)} kcal, proteine ${t.p} g, carbohidrați ${t.c} g, grăsimi ${t.f} g` };
+  });
+}
+
+/** MyFitnessPal both ways (logic/mfp.ts): the targets to type in, and the export brought back. */
+function mfpHtml(fromData: number | null) {
+  const s = ctx.get();
+  const plan = s.plan!;
+  const week = mfpWeek();
+  const imported = Object.keys(s.days).filter((d) => s.days[d]!.some((m) => m.some(isMfp))).sort();
+  const last = imported.at(-1);
+  const useData = fromData && Math.abs(fromData - plan.maintenance) >= 50;
+  return `<section class="card"><h2>MyFitnessPal</h2>
+    <p class="hint">Țintele săptămânii pentru Obiective în MyFitnessPal Premium, unde le setezi pe zile, în grame. Le actualizezi lunea sau când se schimbă planul.</p>
+    ${week.map((x) => `<div class="line"><span>${esc(dayLong(x.date))}</span><b>${nb(n0(x.kcal), 'kcal')} · P ${x.p} · C ${x.c} · G ${x.f}</b></div>`).join('')}
+    <div class="btns"><button class="ghost" data-mfp-copy>Copiază țintele</button></div>
+    <h3>Ce mănânci în MyFitnessPal</h3>
+    <p class="hint">În MyFitnessPal Premium: Reports → Export Data sau Export în ecranele Progress și Nutrition. Primești pe e-mail un ZIP; îl încarci aici întreg sau alegi fișierele CSV din el. Mesele intră în jurnal, iar cântăririle la greutate. Un import nou înlocuiește doar ce a pus importul de dinainte.</p>
+    <div class="btns"><label class="primary file">Încarcă exportul<input type="file" id="mfp" accept=".zip,.csv,application/zip,text/csv" multiple></label></div>
+    ${last ? `<div class="line"><span>Zile aduse din MyFitnessPal</span><b>${imported.length}, ultima ${esc(new Date(`${last}T12:00:00`).toLocaleDateString('ro-RO', { day: 'numeric', month: 'short' }))}</b></div>` : ''}
+    <p class="hint">După trei săptămâni cu mâncare și cântăriri, aplicația îți calculează menținerile din datele tale (cartea, capitolul 11).</p>
+    ${useData ? `<div class="line"><span>Mențineri din datele tale</span><b>${nb(n0(fromData), 'kcal')}</b></div><div class="btns"><button class="primary" data-mfp-use>Folosește-le pentru plan</button></div>` : ''}
+  </section>`;
+}
+
+/** Rebuilds the plan on the maintenance the user's own data shows, keeping the phase and its settings. */
+function useDataMaintenance() {
+  const s = ctx.get();
+  const fromData = dataMaintenance();
+  if (!fromData) return;
+  const before = { profile: s.profile, plan: s.plan };
+  const profile = { ...s.profile!, weightKg: latestWeight() };
+  s.profile = profile;
+  s.plan = buildPlan(profile, { ...s.plan!, maintenance: fromData, adjustments: s.plan!.adjustments });
+  ctx.commit(); ctx.render();
+  ctx.toast(`Menținerile tale: ${n0(fromData)} kcal. Țintele s-au recalculat.`, () => { s.profile = before.profile; s.plan = before.plan; ctx.commit(); ctx.render(); });
+}
+
+/** A picked export (the ZIP from the e-mail, or its CSV files) into the journal and the weights; undo puts them back. */
+export async function importMfp(files: File[]) {
+  const s = ctx.get();
+  try {
+    const data = readMfp(await exportFiles(files), latestWeight());
+    if (!data.read) { ctx.toast('Nu găsesc datele MyFitnessPal. Alege ZIP-ul din e-mail sau fișierele CSV din el.'); return; }
+    const before = JSON.stringify({ days: s.days, weights: s.weights });
+    const r = mergeMfp(s, data);
+    ctx.commit(); ctx.render();
+    ctx.toast(`Din MyFitnessPal: ${r.days} zile de mâncare, ${r.weighIns} cântăriri.`, () => { const b = JSON.parse(before) as { days: typeof s.days; weights: typeof s.weights }; s.days = b.days; s.weights = b.weights; ctx.commit(); ctx.render(); });
+  } catch (e) {
+    ctx.toast(e instanceof Error && /ZIP/.test(e.message) ? e.message : 'Fișierul nu a putut fi citit. Dezarhivează ZIP-ul și alege fișierele CSV.');
+  }
+}
 
 const ACT: [number, string][] = [[1.2, 'Sedentar: birou, fără sport'], [1.375, 'Ușor: birou și puțin sport'], [1.55, 'Moderat: birou și antrenament serios'], [1.725, 'Foarte activ: antrenament și mers mult'], [1.9, 'Extrem: muncă fizică și sală']];
 
@@ -196,6 +260,12 @@ export function planAction(el: HTMLElement): boolean {
   const s = ctx.get();
   const d = el.dataset;
   if (d['phase']) { changePhase(d['phase'] as Phase); return true; }
+  if (d['mfpUse'] != null) { useDataMaintenance(); return true; }
+  if (d['mfpCopy'] != null) {
+    const text = mfpWeek().map((x) => x.line).join('\n');
+    navigator.clipboard?.writeText(text).then(() => ctx.toast('Țintele săptămânii sunt copiate.'), () => ctx.toast('Copierea nu a mers; le găsești pe ecran.'));
+    return true;
+  }
   if (d['opening']) { try { localStorage.setItem('beast-nutrition:opening', d['opening']); } catch { /* storage blocked: the intro stays as it was */ } ctx.render(); return true; }
   if (d['edit'] != null) { editing.on = true; ctx.render(); scrollTo(0, 0); return true; }
   if (d['cancel'] != null) { editing.on = false; ctx.render(); return true; }

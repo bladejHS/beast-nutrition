@@ -112,7 +112,8 @@ function nextCard(d: string, slot: Slot | null) {
 }
 
 function entryRow(e: Entry, i: number) {
-  return `<div class="entry"><div><b>${esc(e.name)}</b><small>${nb(n0(e.g), 'g')}, ${nb(n0(e.kcal), 'kcal')}, ${nb(n0(e.p), 'g')} proteine</small></div><button class="xs" data-del="${i}:${e.id}" aria-label="Șterge ${esc(e.name)}">×</button></div>`;
+  // an entry brought from MyFitnessPal has no weight, only the meal's totals
+  return `<div class="entry"><div><b>${esc(e.name)}</b><small>${e.g ? `${nb(n0(e.g), 'g')}, ` : ''}${nb(n0(e.kcal), 'kcal')}, ${nb(n0(e.p), 'g')} proteine</small></div><button class="xs" data-del="${i}:${e.id}" aria-label="Șterge ${esc(e.name)}">×</button></div>`;
 }
 
 function mealRow(x: Slot, list: Entry[], isNext: boolean) {

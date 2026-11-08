@@ -5,7 +5,7 @@ import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelHtml } from './screens/fuel.ts';
 import { logAction, logInput } from './screens/log.ts';
-import { importBackup, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
+import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
 import { freshFuel, syncFuel } from './screens/state.ts';
 import { followToday, todayAction, todayBind, todayHtml } from './screens/today.ts';
 
@@ -105,6 +105,7 @@ document.addEventListener('input', (ev) => {
 
 document.addEventListener('change', async (ev) => {
   const t = ev.target as HTMLInputElement;
+  if (t.id === 'mfp' && t.files?.length) { await importMfp([...t.files]); t.value = ''; return; }
   if (t.id !== 'imp' || !t.files?.[0]) return;
   importBackup(await t.files[0].text(), (next) => { s = next; });
 });

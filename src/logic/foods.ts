@@ -1,5 +1,7 @@
 /* Food database: USDA FoodData Central generic foods (shipped with the app), USDA branded products
    (static shards in public/branded, read on demand) and Open Food Facts. */
+import { sameCode } from './scan.ts';
+
 export interface Food {
   id: string;
   name: string;
@@ -15,6 +17,8 @@ export interface Food {
   noFiber?: boolean;
   /** Allergens printed by the producer. */
   allergens?: string;
+  /** The barcode, on a product the user saved by hand: the next scan finds it. */
+  code?: string;
 }
 
 type Row = [number, string, number, number, number, number, number, number, number, number, number, [string, number][], (number | null)[]];
@@ -171,22 +175,34 @@ export async function usdaBarcode(code: string, load: Loader = fromSite): Promis
   return row ? brandRowToFood(row) : null;
 }
 
-const offToFood = (p: Record<string, unknown>): Food | null => {
+export const offToFood = (p: Record<string, unknown>): Food | null => {
   const n = (p['nutriments'] ?? {}) as Record<string, number>;
   const kcal = Number(n['energy-kcal_100g'] ?? (n['energy-kj_100g'] != null ? n['energy-kj_100g'] / 4.184 : NaN));
-  if (!p['product_name'] || !Number.isFinite(kcal)) return null;
+  const title = String(p['product_name_ro'] || p['product_name'] || p['product_name_en'] || '').trim();
+  if (!title || !Number.isFinite(kcal)) return null;
   const v = (k: string) => Math.round((Number(n[k]) || 0) * 10) / 10;
   const brands = p['brands'];
   const brand = (Array.isArray(brands) ? String(brands[0] ?? '') : String(brands ?? '')).split(',')[0]?.trim();
   return {
-    id: `o${String(p['code'])}`, name: `${String(p['product_name'])}${brand ? ` · ${brand}` : ''}`, cat: 'Produs de marcă',
+    id: `o${String(p['code'])}`, name: `${title}${brand ? ` · ${brand}` : ''}`, cat: 'Produs de marcă · Open Food Facts',
     kcal: Math.round(kcal), p: v('proteins_100g'), c: v('carbohydrates_100g'), f: v('fat_100g'), fiber: v('fiber_100g'),
     sugar: v('sugars_100g'), sat: v('saturated-fat_100g'), sodium: Math.round((Number(n['sodium_100g']) || 0) * 1000),
-    portions: [], source: 'off',
+    portions: offPortions(p), source: 'off', ...(n['fiber_100g'] == null ? { noFiber: true } : {}),
   };
 };
 
-const FIELDS = 'code,product_name,brands,nutriments';
+/** The serving and the whole pack, when the producer gave them in grams or millilitres. */
+function offPortions(p: Record<string, unknown>): [string, number][] {
+  const out: [string, number][] = [];
+  const unit = (k: string) => (/^(ml|cl|l)$/i.test(String(p[k] ?? '')) ? 'ml' : 'g');
+  const serving = Math.round(Number(p['serving_quantity']) * 10) / 10;
+  if (serving > 0 && serving < 2000) out.push([`1 porție (${serving} ${unit('serving_quantity_unit')})`, serving]);
+  const pack = Math.round(Number(p['product_quantity']));
+  if (pack > 0 && pack < 5000 && pack !== serving) out.push([`tot pachetul (${pack} ${unit('product_quantity_unit')})`, pack]);
+  return out;
+}
+
+const FIELDS = 'code,product_name,product_name_ro,product_name_en,brands,nutriments,serving_quantity,serving_quantity_unit,product_quantity,product_quantity_unit';
 
 export async function searchBranded(query: string): Promise<Food[]> {
   const url = `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page_size=25&fields=${FIELDS}`;
@@ -196,8 +212,10 @@ export async function searchBranded(query: string): Promise<Food[]> {
   return (json.products ?? []).map(offToFood).filter((f): f is Food => !!f);
 }
 
-/** USDA first, it is the checked data; Open Food Facts covers what is sold in Romania. */
-export async function byBarcode(code: string): Promise<Food | null> {
+/** The user's own products first, then USDA, the checked data; Open Food Facts covers what is sold in Romania. */
+export async function byBarcode(code: string, mine: Food[] = []): Promise<Food | null> {
+  const own = mine.find((f) => f.code && sameCode(f.code, code));
+  if (own) return own;
   const usda = await usdaBarcode(code).catch(() => null);
   if (usda) return usda;
   const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${FIELDS}`);

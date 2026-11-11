@@ -3,6 +3,7 @@ import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
 import { byBarcode, loadFoods, search, searchBranded, searchUsdaBrands, type Food } from '../logic/foods.ts';
 import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
 import { dayFuel } from './state.ts';
+import { openScanner } from './scanner.ts';
 
 let meal = 0;
 let logDate = '';
@@ -73,7 +74,7 @@ function searchSheet() {
     <p class="hint" id="left">${leftLine()}</p>
     <div class="seg"><button data-mode="db" class="${mode === 'db' ? 'on' : ''}">Alimente</button><button data-mode="brand" class="${mode === 'brand' ? 'on' : ''}">Produse de marcă</button></div>
     <label class="sr" for="q">Caută un aliment</label><input id="q" type="search" placeholder="piept de pui, ovăz, Chicken Tenders" autocomplete="off" enterkeyhint="search">
-    <div class="btns"><button class="ghost" data-scan>Cod de bare</button><button class="ghost" data-manual>Introdu manual</button></div>
+    <div class="btns"><button class="ghost scanbtn" data-scan><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M10.5 8v8M13.5 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Scanează codul</button><button class="ghost" data-manual>Introdu manual</button></div>
     <div id="res"></div>
     ${added.length ? '<button class="primary wide stick" data-close>Gata</button>' : ''}`, MEALS[meal]);
   showRecent();
@@ -128,8 +129,8 @@ function openQuantity(f: Food) {
   });
 }
 
-function openManual() {
-  ctx.open(`<h2>Aliment propriu</h2><p class="hint">Valorile de pe etichetă, la 100 g. Rămâne salvat la Recente.</p>
+function openManual(code = '') {
+  ctx.open(`<h2>Aliment propriu</h2><p class="hint">Valorile de pe etichetă, la 100 g. Rămâne salvat la Recente.${code ? ` Codul ${code} rămâne legat de el: data viitoare îl găsești la scanare.` : ''}</p>
     <form id="mf"><label class="field">Nume<input name="name" required autocomplete="off"></label>
     <div class="grid2">${[['kcal', 'Calorii'], ['p', 'Proteine, g'], ['c', 'Carbohidrați, g'], ['f', 'Grăsimi, g'], ['fiber', 'Fibre, g (opțional)']].map(([k, l]) => `<label class="field">${l}<input name="${k}" type="text" inputmode="decimal" ${k === 'fiber' ? '' : 'required'} autocomplete="off"></label>`).join('')}</div>
     <button class="primary wide">Salvează</button></form>`, 'Aliment propriu');
@@ -137,45 +138,26 @@ function openManual() {
     ev.preventDefault();
     const d = new FormData(ev.target as HTMLFormElement);
     const num = (k: string) => parseNum(d.get(k)) || 0;
-    const f: Food = { id: `m${crypto.randomUUID()}`, name: String(d.get('name')), cat: 'Alimentele mele', kcal: num('kcal'), p: num('p'), c: num('c'), f: num('f'), fiber: num('fiber'), sugar: 0, sat: 0, sodium: 0, portions: [], source: 'mine' };
+    const f: Food = { id: `m${crypto.randomUUID()}`, name: String(d.get('name')), cat: 'Alimentele mele', kcal: num('kcal'), p: num('p'), c: num('c'), f: num('f'), fiber: num('fiber'), sugar: 0, sat: 0, sodium: 0, portions: [], source: 'mine', ...(code ? { code } : {}) };
     ctx.get().custom.unshift(f); ctx.commit(); openQuantity(f);
   });
 }
 
+/** Scan, then the amount; a product no database knows can be saved once, by hand, under its code. */
 function openBarcode() {
-  const hasCam = 'BarcodeDetector' in window;
-  ctx.open(`<h2>Cod de bare</h2>${hasCam ? '<video id="cam" playsinline muted></video>' : '<p class="hint">Browserul nu poate citi codul cu camera. Scrie cifrele de sub cod.</p>'}
-    <label class="field">Cifrele codului<input id="code" type="text" inputmode="numeric" autocomplete="off"></label><button class="primary wide" id="find">Caută</button>`, 'Cod de bare');
-  let stream: MediaStream | null = null;
-  const stop = () => stream?.getTracks().forEach((t) => t.stop());
-  const lookup = async (code: string) => {
-    stop();
-    try {
-      const f = await byBarcode(code);
-      if (f) openQuantity(f); else ctx.toast('Codul nu este în USDA sau Open Food Facts.');
-    } catch { ctx.toast('Căutarea are nevoie de internet.'); }
-  };
-  document.querySelector('#find')!.addEventListener('click', () => {
-    const v = document.querySelector<HTMLInputElement>('#code')!.value.trim();
-    if (/^\d{8,14}$/.test(v)) void lookup(v); else ctx.toast('Codul are 8–14 cifre.');
-  });
-  if (hasCam) void (async () => {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      const video = document.querySelector<HTMLVideoElement>('#cam');
-      if (!video) { stop(); return; }
-      video.srcObject = stream; await video.play();
-      const Det = (window as unknown as { BarcodeDetector: new (o: object) => { detect(v: HTMLVideoElement): Promise<{ rawValue: string }[]> } }).BarcodeDetector;
-      const det = new Det({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-      const tick = async () => {
-        if (!video.isConnected) { stop(); return; }
-        const hit = (await det.detect(video).catch(() => []))[0];
-        if (hit) void lookup(hit.rawValue); else setTimeout(() => void tick(), 300);
-      };
-      void tick();
-    } catch { ctx.toast('Nu am acces la cameră. Scrie cifrele.'); }
-  })();
+  openScanner((code) => void (async () => {
+    ctx.open(`<h2>Caut produsul</h2><p class="hint">Cod ${code}</p>`, 'Caut produsul');
+    let f: Food | null = null, offline = false;
+    try { f = await byBarcode(code, ctx.get().custom); } catch { offline = true; }
+    if (f) { openQuantity(f); return; }
+    notFoundCode = code;
+    ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este în USDA și nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
+      <button class="primary wide" data-manual-code>Adaugă-l de pe etichetă</button>
+      <div class="btns"><button class="ghost" data-scan>Scanează din nou</button><button class="ghost" data-back-search>Înapoi la căutare</button></div>`, 'Produs negăsit');
+  })());
 }
+
+let notFoundCode = '';
 
 export function logAction(el: HTMLElement): boolean {
   const d = el.dataset;
@@ -187,6 +169,7 @@ export function logAction(el: HTMLElement): boolean {
   }
   if (d['food']) { const f = shown.get(d['food']); if (f) openQuantity(f); return true; }
   if (d['manual'] != null) { openManual(); return true; }
+  if (d['manualCode'] != null) { openManual(notFoundCode); return true; }
   if (d['scan'] != null) { openBarcode(); return true; }
   if (d['backSearch'] != null) { searchSheet(); return true; }
   return false;

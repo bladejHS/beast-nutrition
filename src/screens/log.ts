@@ -1,6 +1,6 @@
 /* Logging food: search, amount, and back to the search for the next food, so a meal is one sheet, not four. */
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
-import { byBarcode, loadFoods, search, searchBranded, searchUsdaBrands, type Food } from '../logic/foods.ts';
+import { byBarcode, loadFoods, search, searchBranded, searchOffRo, searchUsdaBrands, type Food } from '../logic/foods.ts';
 import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
@@ -32,21 +32,24 @@ function showRecent() {
   shown.clear();
   const s = ctx.get();
   const list = [...s.custom, ...s.recent.filter((r) => !s.custom.some((c) => c.id === r.id))].slice(0, 15);
-  res.innerHTML = list.length ? `<h3>Recente</h3>${list.map(foodRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă. Poți căuta în română.</p>';
+  res.innerHTML = list.length ? `<h3>Recente</h3>${list.map(foodRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România. Poți căuta în română.</p>';
 }
 
-/** USDA answers from the app's own files; Open Food Facts is slower, can fail and only adds to the list. */
+/** The Romanian shelf and USDA answer from the app's own files; Open Food Facts online is slower, can fail and only adds to the list. */
 async function runBrandSearch(q: string, res: Element, run: number) {
   res.innerHTML = '<p class="hint pad">Caut în produsele de marcă…</p>';
-  const usda = await searchUsdaBrands(q).catch(() => null);
+  const [ro, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
   if (run !== searchRun) return;
-  const more = usda && usda.total > usda.foods.length ? `<p class="hint pad">${usda.total.toLocaleString('ro-RO')} produse găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
-  const local = usda?.foods.length ? `${more}${usda.foods.map(foodRow).join('')}` : '';
+  const found = (ro?.total ?? 0) + (usda?.total ?? 0), shown = (ro?.foods.length ?? 0) + (usda?.foods.length ?? 0);
+  const more = found > shown ? `<p class="hint pad">${found.toLocaleString('ro-RO')} produse găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
+  const list = (title: string, foods: Food[] | undefined) => (foods?.length ? `<h3>${title}</h3>${foods.map(foodRow).join('')}` : '');
+  const local = `${more}${list('România', ro?.foods)}${list('USDA', usda?.foods)}`;
   res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
   const off = await searchBranded(q).catch(() => null);
   if (run !== searchRun) return;
-  const extra = off?.length ? `<h3>Open Food Facts</h3>${off.map(foodRow).join('')}` : '';
-  res.innerHTML = local + extra || `<p class="hint pad">${usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă au nevoie de internet. Poți folosi Alimente sau introdu valorile manual.'}</p>`;
+  const seen = new Set(ro?.foods.map((f) => f.id));
+  const extra = list('Open Food Facts, online', off?.filter((f) => !seen.has(f.id)));
+  res.innerHTML = (shown ? local : '') + extra || `<p class="hint pad">${ro || usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă nu s-au încărcat. Încearcă din nou, folosește Alimente sau introdu valorile manual.'}</p>`;
 }
 
 async function runSearch(q: string) {
@@ -151,7 +154,7 @@ function openBarcode() {
     try { f = await byBarcode(code, ctx.get().custom); } catch { offline = true; }
     if (f) { openQuantity(f); return; }
     notFoundCode = code;
-    ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este în USDA și nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
+    ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este nici pe rafturile din România, nici în USDA, nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
       <button class="primary wide" data-manual-code>Adaugă-l de pe etichetă</button>
       <div class="btns"><button class="ghost" data-scan>Scanează din nou</button><button class="ghost" data-back-search>Înapoi la căutare</button></div>`, 'Produs negăsit');
   })());

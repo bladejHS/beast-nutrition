@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanCode, Confirm, expandUpcE, sameCode, validGtin } from './scan.ts';
-import { byBarcode, offToFood, type Food } from './foods.ts';
+import { brandRowToFood, byBarcode, offRoBarcode, offToFood, searchOffRo, type BrandRow, type Food } from './foods.ts';
 
 test('the check digit accepts real codes and refuses a wrong digit', () => {
   assert.equal(validGtin('5449000000996'), true); // Coca-Cola, EAN-13
@@ -48,4 +48,17 @@ test('an Open Food Facts product keeps its Romanian name, its serving and its pa
   assert.deepEqual(f.portions, [['1 porție (250 ml)', 250], ['tot pachetul (330 ml)', 330]]);
   assert.equal(f.noFiber, true);
   assert.equal(offToFood({ code: '1', product_name: 'Fără valori', nutriments: {} }), null);
+});
+
+test('a Romanian shelf row carries its barcode, its serving and its pack, and is found by code before USDA', async () => {
+  const row: BrandRow = ['5941234567890', 'Iaurt grecesc · Olympus', 97, 6.4, 3.9, 6, null, 3.9, 4, 50, 150, 0, '', 400];
+  const f = brandRowToFood(row);
+  assert.equal(f.id, 'o5941234567890');
+  assert.equal(f.source, 'off');
+  assert.equal(f.code, '5941234567890');
+  assert.equal(f.noFiber, true);
+  assert.deepEqual(f.portions, [['1 porție (150 g)', 150], ['tot pachetul (400 g)', 400]]);
+  const fake = async (path: string) => ({ 'b/890.json': { '5941234567890': 0 }, 'p/0.json': [row] } as Record<string, unknown>)[path] ?? null;
+  assert.equal((await offRoBarcode('05941234567890', fake))?.id, 'o5941234567890');
+  assert.equal((await searchOffRo('iaurt', async (p) => ({ 'w/ia.json': { iaurt: '0' }, 'p/0.json': [row] } as Record<string, unknown>)[p] ?? null)).foods[0]?.id, 'o5941234567890');
 });

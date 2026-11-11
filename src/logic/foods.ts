@@ -101,23 +101,28 @@ export function search(list: Food[], query: string, limit = 40): Food[] {
   return scored.sort((a, b) => b[0] - a[0]).slice(0, limit).map((x) => x[1]);
 }
 
-// ---- USDA branded products: static files, see scripts/usda-branded.py ----
+// ---- Branded products in static files: USDA (scripts/usda-branded.py) and the products sold in Romania from
+// Open Food Facts (scripts/off-ro.py, ODbL). Same layout, read by the same code. ----
 const BRANDED = 'branded/2026-10-29';
+const OFF_RO = 'branded/off-ro-2026-11-11';
 const CHUNK = 256;
 /** How many product files one search may open; the brand sort keeps a brand inside few of them. */
 const MAX_CHUNKS = 10;
 const STOP = new Set(['and', 'the', 'with', 'of', 'in', 'for', 'or', 'an']);
 
-export type BrandRow = [number, string, number, number, number, number, number | null, number | null, number | null, number | null, number, number, string];
+/** A USDA row starts with its FDC number; an Open Food Facts row with its barcode, and ends with the pack size. */
+export type BrandRow = [number | string, string, number, number, number, number, number | null, number | null, number | null, number | null, number, number, string, number?];
 /** Reads one shard; null when it does not exist, which only means no word or code lands there. */
 export type Loader = (path: string) => Promise<unknown>;
 
-const fromSite: Loader = async (path) => {
-  const res = await fetch(`${import.meta.env.BASE_URL}${BRANDED}/${path}`);
+const fromPack = (folder: string): Loader => async (path) => {
+  const res = await fetch(`${import.meta.env.BASE_URL}${folder}/${path}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('Produsele de marcă nu s-au încărcat.');
   return res.json();
 };
+const fromSite = fromPack(BRANDED);
+const fromOffRo = fromPack(OFF_RO);
 
 const tokens = (q: string) => fold(q).split(/[^a-z0-9]+/).filter((w) => w.length >= 2 && !STOP.has(w));
 
@@ -128,11 +133,15 @@ export function decodeIds(s: string): number[] {
 }
 
 export function brandRowToFood(r: BrandRow): Food {
-  const [id, name, kcal, p, c, f, fiber, sugar, sat, sodium, size, ml, label] = r;
+  const [id, name, kcal, p, c, f, fiber, sugar, sat, sodium, size, ml, label, pack] = r;
   const unit = ml ? 'ml' : 'g';
+  const off = typeof id === 'string';
+  const portions: [string, number][] = size ? [[`${label || '1 porție'} (${size} ${unit})`, size]] : [];
+  if (pack && pack !== size) portions.push([`tot pachetul (${pack} ${unit})`, pack]);
   return {
-    id: `b${id}`, name, en: name, cat: 'Produs de marcă · USDA', kcal, p, c, f, fiber: fiber ?? 0, sugar: sugar ?? 0, sat: sat ?? 0, sodium: sodium ?? 0,
-    portions: size ? [[`${label || '1 porție'} (${size} ${unit})`, size]] : [], source: 'fdc', ...(fiber == null ? { noFiber: true } : {}),
+    id: off ? `o${id}` : `b${id}`, name, en: name, cat: off ? 'Produs de marcă · Open Food Facts România' : 'Produs de marcă · USDA',
+    kcal, p, c, f, fiber: fiber ?? 0, sugar: sugar ?? 0, sat: sat ?? 0, sodium: sodium ?? 0,
+    portions, source: off ? 'off' : 'fdc', ...(fiber == null ? { noFiber: true } : {}), ...(off ? { code: id } : {}),
   };
 }
 
@@ -146,7 +155,11 @@ async function matches(word: string, load: Loader): Promise<Set<number>> {
   return out;
 }
 
-export async function searchUsdaBrands(query: string, load: Loader = fromSite, limit = 40): Promise<{ foods: Food[]; total: number }> {
+export const searchUsdaBrands = (query: string, load: Loader = fromSite, limit = 40) => searchPack(query, load, limit);
+/** The products sold in Romania, from the app's own files. */
+export const searchOffRo = (query: string, load: Loader = fromOffRo, limit = 40) => searchPack(query, load, limit);
+
+async function searchPack(query: string, load: Loader, limit: number): Promise<{ foods: Food[]; total: number }> {
   const words = tokens(query);
   if (!words.length) return { foods: [], total: 0 };
   const sets = (await Promise.all(words.map((w) => matches(w, load)))).sort((a, b) => a.size - b.size);
@@ -165,7 +178,10 @@ export async function searchUsdaBrands(query: string, load: Loader = fromSite, l
   return { foods: search(rows.flat().map(brandRowToFood), words.join(' '), limit), total: hits.length };
 }
 
-export async function usdaBarcode(code: string, load: Loader = fromSite): Promise<Food | null> {
+export const usdaBarcode = (code: string, load: Loader = fromSite) => packBarcode(code, load);
+export const offRoBarcode = (code: string, load: Loader = fromOffRo) => packBarcode(code, load);
+
+async function packBarcode(code: string, load: Loader): Promise<Food | null> {
   const key = code.replace(/^0+/, '');
   const shard = await load(`b/${key.slice(-3)}.json`) as Record<string, number> | null;
   const n = shard?.[key];
@@ -212,10 +228,12 @@ export async function searchBranded(query: string): Promise<Food[]> {
   return (json.products ?? []).map(offToFood).filter((f): f is Food => !!f);
 }
 
-/** The user's own products first, then USDA, the checked data; Open Food Facts covers what is sold in Romania. */
+/** The user's own products first, then the Romanian shelf (offline), then USDA, then Open Food Facts online. */
 export async function byBarcode(code: string, mine: Food[] = []): Promise<Food | null> {
   const own = mine.find((f) => f.code && sameCode(f.code, code));
   if (own) return own;
+  const ro = await offRoBarcode(code).catch(() => null);
+  if (ro) return ro;
   const usda = await usdaBarcode(code).catch(() => null);
   if (usda) return usda;
   const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${FIELDS}`);

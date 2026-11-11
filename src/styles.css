@@ -400,6 +400,8 @@ input[type=range]:focus { box-shadow: none; }
 .chart text { fill: var(--t2); font: 450 13px var(--font); }
 .chart .end { fill: var(--t1); font: 900 extra-condensed 22px var(--font); }
 .chart .ax { stroke: var(--line); }
+.chart polyline.goal { stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 4 5; opacity: .85; }
+.chart .goal-t { fill: var(--gold); font: 700 semi-condensed 11px var(--font); letter-spacing: .06em; text-transform: uppercase; }
 .photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
 .photos figure { margin: 0; }
 .photos img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border: 1px solid var(--line); }

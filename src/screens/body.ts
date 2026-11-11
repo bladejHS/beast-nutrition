@@ -17,18 +17,22 @@ let range = 84;
 /** A check-in describes the last days: from Monday to Wednesday it still belongs to the week that just ended. */
 export const checkinWeek = (today: string) => mondayOf(addDays(today, -3));
 
-function trendChart(points: TrendPoint[]) {
+/** `rate`: the plan's expected change per week in %, drawn as a dashed target from the first visible point (0 = hold). */
+function trendChart(points: TrendPoint[], rate = 0) {
   if (points.length < 2) return '<p class="hint pad">Graficul apare după câteva cântăriri.</p>';
   const W = 358, H = 168, L = 8, R = 46, T = 10, B = 22;
   const first = Date.parse(points[0]!.date), last = Date.parse(points.at(-1)!.date);
   const span = Math.max(1, last - first);
-  const [lo, hi] = chartRange(points.flatMap((p) => [p.kg, p.trend]));
+  const weeks = (d: string) => (Date.parse(d) - first) / (7 * 864e5);
+  const target = (d: string) => points[0]!.trend * (1 + rate / 100) ** weeks(d);
+  const [lo, hi] = chartRange(points.flatMap((p) => [p.kg, p.trend]).concat(rate ? [target(points.at(-1)!.date)] : []));
   const x = (d: string) => L + ((Date.parse(d) - first) / span) * (W - L - R);
   const y = (v: number) => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
   const end = points.at(-1)!;
   return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Greutatea, de la ${n1(points[0]!.trend)} la ${n1(end.trend)} kilograme">
     <line class="ax" x1="${L}" x2="${W - R}" y1="${H - B + 4}" y2="${H - B + 4}"/>
     ${points.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.kg).toFixed(1)}" r="2.2"/>`).join('')}
+    ${rate ? `<polyline class="goal" points="${points.map((p) => `${x(p.date).toFixed(1)},${y(target(p.date)).toFixed(1)}`).join(' ')}"/><text class="goal-t" x="${W - R + 6}" y="${(y(target(end.date)) + (y(target(end.date)) > y(end.trend) ? 16 : -8)).toFixed(1)}">ținta ${n1(target(end.date))}</text>` : ''}
     <polyline points="${points.map((p) => `${x(p.date).toFixed(1)},${y(p.trend).toFixed(1)}`).join(' ')}"/>
     <text class="end" x="${W - R + 6}" y="${(y(end.trend) + 5).toFixed(1)}">${n1(end.trend)}</text>
     <text x="${L}" y="${H - 4}">${shortDate(points[0]!.date)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end">${shortDate(end.date)}</text></svg>`;
@@ -57,7 +61,7 @@ function weighCard(points: TrendPoint[]) {
   return `<section class="card">
     ${end ? `<p class="big"><b>${n1(end.trend)}</b> kg, tendința</p><p class="hint">${change == null ? 'Punctele sunt cântăririle, linia e tendința.' : `${change > 0 ? '+' : '−'}${nb(n1(Math.abs(change)), 'kg')} în 7 zile. Punctele sunt cântăririle, linia e tendința.`}</p>` : ''}
     <div class="seg small">${RANGES.map(([v, l]) => `<button data-range="${v}" class="${range === v ? 'on' : ''}">${l}</button>`).join('')}</div>
-    ${trendChart(points.filter((p) => p.date >= from))}
+    ${trendChart(points.filter((p) => p.date >= from), s.plan?.phase === 'cut' ? -s.plan.ratePct : 0)}
     <button class="${s.weights[today] == null ? 'primary' : 'ghost'} wide" data-weigh>${s.weights[today] == null ? 'Notează greutatea de azi' : `Azi: ${nb(n1(s.weights[today]!), 'kg')}, schimbă`}</button>
     <p class="hint">Dimineața, după baie, pe același cântar.</p></section>`;
 }

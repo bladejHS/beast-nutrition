@@ -32,7 +32,7 @@ function trendChart(points: TrendPoint[], rate = 0) {
   return `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img" aria-label="Greutatea, de la ${n1(points[0]!.trend)} la ${n1(end.trend)} kilograme">
     <line class="ax" x1="${L}" x2="${W - R}" y1="${H - B + 4}" y2="${H - B + 4}"/>
     ${points.map((p) => `<circle cx="${x(p.date).toFixed(1)}" cy="${y(p.kg).toFixed(1)}" r="2.2"/>`).join('')}
-    ${rate ? `<polyline class="goal" points="${points.map((p) => `${x(p.date).toFixed(1)},${y(target(p.date)).toFixed(1)}`).join(' ')}"/><text class="goal-t" x="${W - R + 6}" y="${(y(target(end.date)) + (y(target(end.date)) > y(end.trend) ? 16 : -8)).toFixed(1)}">ținta ${n1(target(end.date))}</text>` : ''}
+    ${rate ? `<polyline class="goal" points="${points.map((p) => `${x(p.date).toFixed(1)},${y(target(p.date)).toFixed(1)}`).join(' ')}"/><text class="goal-t" x="${W - R - 6}" y="${(y(target(end.date)) + (y(target(end.date)) > y(end.trend) ? 14 : -6)).toFixed(1)}" text-anchor="end">ținta ${n1(target(end.date))}</text>` : ''}
     <polyline points="${points.map((p) => `${x(p.date).toFixed(1)},${y(p.trend).toFixed(1)}`).join(' ')}"/>
     <text class="end" x="${W - R + 6}" y="${(y(end.trend) + 5).toFixed(1)}">${n1(end.trend)}</text>
     <text x="${L}" y="${H - 4}">${shortDate(points[0]!.date)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end">${shortDate(end.date)}</text></svg>`;

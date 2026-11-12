@@ -82,6 +82,7 @@ function render() {
   if (tab === 'azi') todayBind();
   if (tab === 'corp') bodyBind();
   fuelBind(); fastBind();
+  ctx.fresh = false;
 }
 
 document.addEventListener('click', (ev) => {
@@ -92,7 +93,7 @@ document.addEventListener('click', (ev) => {
   if (el.dataset['tab']) {
     // A tab always leads to its first screen, also from deep inside it.
     if (el.dataset['tab'] === 'fuel') { fuelHome(); if (el.dataset['sub']) fuelSub(el.dataset['sub']); }
-    tab = el.dataset['tab'] as Tab; render(); scrollTo(0, 0);
+    tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
   if (fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;

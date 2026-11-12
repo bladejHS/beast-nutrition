@@ -11,7 +11,7 @@ import { waterTarget } from '../logic/wellness.ts';
 import { fastChip } from './fast.ts';
 import { eatPlanned, generateToday, uneatPlanned, waterOn } from './fuel.ts';
 import { openAdd } from './log.ts';
-import { lvl } from './parts.ts';
+import { icon, lvl } from './parts.ts';
 import { dayFuel, fuelWeek, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 import { openWeigh } from './body.ts';
 
@@ -20,6 +20,8 @@ let seen = '';
 const openRows = new Set<string>();
 /** The meal the card shows when the user steps away from the next one (‹ ›); null follows the next meal. */
 let pick: { date: string; i: number } | null = null;
+/** Which way the meal card slides after ‹ ›, for one render. */
+let slide = '';
 
 export const currentDate = () => date || (date = ctx.today());
 
@@ -58,19 +60,22 @@ function hero(d: string, t: DayTarget) {
   </button>${fastChip(d)}`;
 }
 
-/** The track runs 20% past the target, so going over shows as plainly as falling short. */
-function bullet(key: string, label: string, val: number, target: number, unit: string) {
-  return `<div class="bl ${key}"><div class="bl-h"><span>${label}</span><b>${n0(val)}<small> din ${nb(n0(target), unit)}</small></b></div>
+/** One macro: its name, the grams counting up, the target, a bar that runs 20 % past it so going over shows. */
+function macro(key: string, label: string, val: number, target: number) {
+  return `<div class="mc ${key}"><div class="mc-h"><span>${label}</span><b><span data-count="az-${key}" data-to="${Math.round(val)}">${n0(val)}</span><small> / ${n0(target)} g</small></b></div>
     <div class="bl-t"><div data-bar="az-${key}" data-to="${Math.min(1, val / (target * 1.2 || 1)).toFixed(3)}"></div><i></i></div></div>`;
 }
 
+/** The day's fuel: the calories left in a ring that fills as the day is eaten, the three macros beside it. */
 function numbers(t: DayTarget, sum: ReturnType<typeof totals>) {
   const left = t.kcal - sum.kcal;
-  return `<section class="nums">
-    <p class="left"><b>${n0(Math.abs(left))}</b><span>kcal ${left < 0 ? 'peste țintă' : 'rămase'}</span><em>din ${n0(t.kcal)}</em></p>
-    <div class="bl-t main"><div data-bar="az-k" data-to="${Math.min(1, sum.kcal / (t.kcal * 1.2 || 1)).toFixed(3)}"></div><i></i></div>
-    ${bullet('p', 'Proteine', sum.p, t.p, 'g')}${bullet('c', 'Carbohidrați', sum.c, t.c, 'g')}${bullet('f', 'Grăsimi', sum.f, t.f, 'g')}
-    <p class="fib">Fibre <b>${n0(sum.fiber)}</b> din ${nb(`${t.fiberMin}–${t.fiberMax}`, 'g')}</p>
+  const fill = Math.min(1, sum.kcal / (t.kcal || 1));
+  const state = left < -50 ? 'over' : Math.abs(left) <= t.kcal * 0.05 && sum.kcal > 0 ? 'hit' : '';
+  return `<section class="dash ${state}">
+    <div class="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rt" cx="60" cy="60" r="52"/><circle class="rv" cx="60" cy="60" r="52" pathLength="100" data-ring="az-k" data-to="${fill.toFixed(3)}"/></svg>
+      <div class="ring-in"><b data-count="az-left" data-to="${Math.round(Math.abs(left))}">${n0(Math.abs(left))}</b><span>kcal ${left < 0 ? 'peste' : 'rămase'}</span><em>din ${n0(t.kcal)}</em></div></div>
+    <div class="macros">${macro('p', 'Proteine', sum.p, t.p)}${macro('c', 'Carbo', sum.c, t.c)}${macro('f', 'Grăsimi', sum.f, t.f)}
+      <p class="fib">Fibre <b>${n0(sum.fiber)}</b> din ${nb(`${t.fiberMin}–${t.fiberMax}`, 'g')}</p></div>
     ${left < -50 ? '<p class="coach">Nu e un eșec și nu trebuie compensat cu foame. Contează media săptămânii, continui normal de la masa următoare.</p>' : ''}
   </section>`;
 }
@@ -120,7 +125,8 @@ function nextCard(d: string, slots: Slot[], shown: number | null, next: number |
     : m?.done
       ? `<button class="ghost" data-az="uneat" data-m="${slot.mi}">Scoate din jurnal</button><button class="ghost" data-add="${slot.i}">Adaugă încă ceva</button>`
       : `<button class="primary" data-add="${slot.i}">${logged ? 'Adaugă încă ceva' : 'Adaugă mâncare'}</button>${(s.fuel.plan[d] ?? []).length ? '' : '<button class="ghost" data-az="gen">Generează mesele</button>'}`;
-  return `<section class="nextc${logged ? ' ate' : ''}">${cardHead(title, shown, slots.length, shown !== next && next != null)}
+  const dir = slide; slide = '';
+  return `<section class="nextc${logged ? ' ate' : ''}${dir ? ` slide-${dir}` : ''}">${cardHead(title, shown, slots.length, shown !== next && next != null)}
     <div class="next-m"><b class="t">${esc(slot.time)}</b><div><b>${esc(slot.title)}</b>${slot.tag ? `<small>${esc(slot.tag)}</small>` : ''}</div></div>
     ${g ? `<p class="next-g">${nb(g.c, 'g')} carbo, ${nb(g.p, 'g')} proteine, ${nb(g.f, 'g')} grăsimi</p>` : ''}
     ${m && pantry.foods.length ? `<p class="hint">${grams(m)}</p>` : ''}
@@ -138,7 +144,7 @@ function mealRow(x: Slot, list: Entry[], isNext: boolean) {
   if (!list.length) {
     return `<li class="r ${isNext ? 'next' : ''}"><button class="r-b" data-add="${x.i}"><span class="sr">Adaugă la</span><span class="t">${esc(x.time)}</span><span class="b"><b>${esc(x.title)}</b>${sub}</span><span class="k">${x.goal ? `${n0(x.goal.kcal)}<small>kcal</small>` : ''}</span><i class="plus" aria-hidden="true"></i></button></li>`;
   }
-  return `<li class="r done"><details data-row="${x.key}" ${openRows.has(x.key) ? 'open' : ''}><summary class="r-b"><span class="t">${esc(x.time)}</span><span class="b"><b>${esc(x.title)}</b>${sub}</span><span class="k">${n0(sum.kcal)}<small>kcal</small></span><i class="chev" aria-hidden="true"></i></summary>
+  return `<li class="r done"><details data-row="${x.key}" ${openRows.has(x.key) ? 'open' : ''}><summary class="r-b"><span class="t">${esc(x.time)}</span><span class="b"><b>${esc(x.title)}</b>${sub}</span><span class="k">${n0(sum.kcal)}<small>kcal</small></span><span class="ok" aria-label="Mâncat">${icon('check')}</span><i class="chev" aria-hidden="true"></i></summary>
     ${list.map((e) => entryRow(e, x.i)).join('')}<button class="ghost wide" data-add="${x.i}">Adaugă la ${esc(x.title)}</button>${x.meal?.done ? `<button class="ghost wide" data-az="uneat" data-m="${x.mi}">Scoate ${esc(x.title)} din jurnal</button>` : ''}</details></li>`;
 }
 
@@ -147,11 +153,11 @@ function dayList(d: string, slots: Slot[], next: Slot | null) {
   const journal = dayMeals(s, d);
   const tm = timingFor(d);
   const rows = dayRows(slots.map((x) => x.time), tm.hasSession ? { start: tm.start, end: tm.end } : null, d === ctx.today() ? nowTime() : null);
-  return `<ol class="daylist">${rows.map((r) => {
+  return `<ol class="daylist">${rows.map((r, k) => {
     if (r.kind === 'now') return `<li class="r nowm"><span>acum, ${esc(r.time)}</span></li>`;
     if (r.kind === 'train') return `<li class="r tr"><button class="r-b" data-f="dayopen" data-v="${d}"><span class="t">${esc(r.time)}</span><span class="b"><b>Antrenament</b><small>până la ${esc(r.end)}, ${tm.minutes} min</small></span><i class="chev" aria-hidden="true"></i></button></li>`;
     const x = slots[r.i]!;
-    return mealRow(x, journal[x.i] ?? [], x === next);
+    return mealRow(x, journal[x.i] ?? [], x === next).replace('<li class="r ', `<li style="--i:${k}" class="r `);
   }).join('')}</ol>`;
 }
 
@@ -168,16 +174,24 @@ function weekBank() {
   return { planned, eaten, logged };
 }
 
-function extras(d: string) {
+/** Three things done in one tap, right under the numbers: a glass of water, the weighing, food. */
+function quick(d: string, addTo: number) {
   const s = ctx.get();
   if (d !== ctx.today()) return '';
   const lastKg = latestKg();
-  const bank = weekBank();
-  return `<div class="list">
-    ${s.weights[d] == null ? `<button class="row" data-az="weigh"><span><b>Cântărirea de azi</b><small>Ultima a fost ${nb(n1(lastKg), 'kg')}</small></span><i class="plus" aria-hidden="true"></i></button>` : ''}
-    <div class="row"><span><b>Apă</b><small>${n1(waterOn(d) / 1000)} din ${nb(n1(waterTarget(lastKg, s.waterMlKg) / 1000), 'L')}</small></span><button class="chip" data-f="drink" data-v="250">+250 ml</button></div>
-    ${bank.logged ? `<div class="row"><span><b>Media săptămânii</b><small>${bank.logged} ${bank.logged === 1 ? 'zi încheiată' : 'zile încheiate'}</small></span><em>${nb(n0(bank.eaten / bank.logged), 'kcal')}<small>din ${n0(bank.planned / bank.logged)}</small></em></div>` : ''}
+  const water = waterOn(d), wt = waterTarget(lastKg, s.waterMlKg);
+  const weighed = s.weights[d] != null;
+  return `<div class="quick">
+    <button class="qk" data-f="drink" data-v="250"><span class="qk-ic">${icon('water')}</span><b><span data-count="az-water" data-fmt="1" data-to="${(water / 1000).toFixed(1)}">${n1(water / 1000)}</span><small>/${n1(wt / 1000)} L</small></b><small>+250 ml</small><i class="fbar"><u data-bar="az-w" data-to="${Math.min(1, water / wt).toFixed(3)}"></u></i></button>
+    <button class="qk ${weighed ? 'done' : ''}" data-az="weigh"><span class="qk-ic">${icon(weighed ? 'check' : 'scale')}</span><b>${n1(weighed ? s.weights[d]! : lastKg)}<small> kg</small></b><small>${weighed ? 'Cântărit azi' : 'Cântărește-te'}</small></button>
+    <button class="qk" data-add="${addTo}"><span class="qk-ic">${icon('plus')}</span><b>Adaugă</b><small>mâncare</small></button>
   </div>`;
+}
+
+function weekRow(d: string) {
+  if (d !== ctx.today()) return '';
+  const bank = weekBank();
+  return bank.logged ? `<div class="list"><div class="row"><span><b>Media săptămânii</b><small>${bank.logged} ${bank.logged === 1 ? 'zi încheiată' : 'zile încheiate'}</small></span><em>${nb(n0(bank.eaten / bank.logged), 'kcal')}<small>din ${n0(bank.planned / bank.logged)}</small></em></div></div>` : '';
 }
 
 export function todayHtml() {
@@ -197,21 +211,27 @@ export function todayHtml() {
   const yesterday = dayMeals(s, addDays(d, -1)).flat().length > 0;
   const note = notice.text;
   notice.text = '';
-  return `<header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
+  const addTo = next?.i ?? slots.find((x) => !journal[x.i]!.length)?.i ?? 0;
+  // the entrance plays once per visit (ctx.fresh), never when an action redraws the screen
+  return `<div class="azi${ctx.fresh ? ' enter' : ''}">
+  <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
   ${d === today ? '' : '<button class="backbtn" data-az="today">‹ Înapoi la azi</button>'}
   ${hero(d, t)}
   ${note ? `<p class="updated">${esc(note)}</p>` : ''}
   ${numbers(t, sum)}
+  ${quick(d, addTo)}
   ${d === today ? nextCard(d, slots, shown, idx != null && idx >= 0 ? idx : null) : ''}
+  <h3 class="az-sec">Ziua</h3>
   ${dayList(d, slots, next)}
-  ${extras(d)}
-  ${yesterday && d >= today && !journal.flat().length ? '<button class="ghost wide" data-az="copy">Copiază mesele de ieri</button>' : ''}`;
+  ${weekRow(d)}
+  ${yesterday && d >= today && !journal.flat().length ? '<button class="ghost wide" data-az="copy">Copiază mesele de ieri</button>' : ''}
+  </div>`;
 }
 
 export function todayAction(el: HTMLElement): boolean {
   const s = ctx.get();
   const d = el.dataset;
-  if (d['day']) { date = addDays(currentDate(), Number(d['day'])); ctx.render(); return true; }
+  if (d['day']) { date = addDays(currentDate(), Number(d['day'])); ctx.fresh = true; ctx.render(); return true; }
   if (d['add'] != null) { openAdd(currentDate(), Number(d['add'])); return true; }
   if (d['del']) {
     const day = currentDate();
@@ -228,7 +248,7 @@ export function todayAction(el: HTMLElement): boolean {
   }
   const a = d['az'];
   if (!a) return false;
-  if (a === 'today') { date = ctx.today(); pick = null; ctx.render(); }
+  if (a === 'today') { date = ctx.today(); pick = null; ctx.fresh = true; ctx.render(); }
   if (a === 'mprev' || a === 'mnext' || a === 'mnow') { stepMeal(a); return true; }
   if (a === 'eat') { pick = null; void eatPlanned(currentDate(), Number(d['m'])); }
   if (a === 'uneat') uneatPlanned(currentDate(), Number(d['m']));
@@ -255,6 +275,7 @@ function stepMeal(a: string) {
   const n = nextMeal(logged, slots.map((x) => x.time), nowMinutes());
   const at = pick?.date === d ? pick.i : n ?? slots.length;
   const to = a === 'mnow' ? n ?? slots.length : Math.max(0, Math.min(slots.length - 1, at + (a === 'mprev' ? -1 : 1)));
+  slide = to > at ? 'r' : to < at ? 'l' : '';
   pick = a === 'mnow' || to === n ? null : { date: d, i: to };
   ctx.render();
 }

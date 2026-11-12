@@ -13,6 +13,8 @@ export const ctx = {
   close: () => {},
   today: () => '',
   go: (_: Tab) => {},
+  /** True on the first render after a tab or day change: the screen plays its entrance once, never on a redraw. */
+  fresh: true,
 };
 
 export const esc = (v: unknown) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -32,14 +34,45 @@ export const hm = (min: number) => `${Math.floor(min / 60)} h ${String(min % 60)
 export const dayLong = (d: string) => new Date(`${d}T12:00:00`).toLocaleDateString('ro-RO', { weekday: 'long', day: 'numeric', month: 'long' });
 
 const bars = new Map<string, number>();
+const counts = new Map<string, number>();
+
+/** A number that runs from its last value to the new one (data-count, data-to; data-fmt="1" keeps one decimal). */
+function countUp(el: HTMLElement, calm: boolean) {
+  const key = el.dataset['count']!, to = Number(el.dataset['to']), dec = el.dataset['fmt'] === '1';
+  const from = ctx.fresh ? 0 : counts.get(key) ?? to;
+  counts.set(key, to);
+  const show = (v: number) => { el.textContent = dec ? n1(v) : n0(v); };
+  if (calm || from === to) { show(to); return; }
+  const t0 = performance.now(), dur = 700;
+  const step = (now: number) => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - (1 - k) ** 3;
+    show(from + (to - from) * e);
+    if (k < 1 && el.isConnected) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 
 /** A bar moves from its last value, so logging food shows what changed. Nothing else animates on a render. */
 export function afterRender(root: HTMLElement) {
   const calm = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  root.querySelectorAll<HTMLElement>('[data-count]').forEach((el) => countUp(el, calm));
+  // rings: a circle with pathLength 100, drawn from its last value (data-ring, data-to 0–1)
+  root.querySelectorAll<SVGCircleElement>('[data-ring]').forEach((el) => {
+    const key = `ring:${el.dataset['ring']!}`, to = Number(el.dataset['to']);
+    const from = ctx.fresh ? 0 : bars.get(key) ?? to;
+    bars.set(key, to);
+    const off = (v: number) => `${(100 - v * 100).toFixed(2)}`;
+    if (calm || from === to) { el.style.strokeDashoffset = off(to); return; }
+    el.style.transition = 'none';
+    el.style.strokeDashoffset = off(from);
+    void el.getBoundingClientRect();
+    el.style.transition = '';
+    el.style.strokeDashoffset = off(to);
+  });
   root.querySelectorAll<HTMLElement>('[data-bar]').forEach((el) => {
     const key = el.dataset['bar']!, to = Number(el.dataset['to']);
     const scale = el.dataset['axis'] === 'y' ? 'scaleY' : 'scaleX';
-    const from = bars.get(key);
+    const from = ctx.fresh ? 0 : bars.get(key);
     bars.set(key, to);
     if (calm || from == null || from === to) { el.style.transform = `${scale}(${to})`; return; }
     el.style.transition = 'none';

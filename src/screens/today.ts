@@ -182,9 +182,9 @@ function quick(d: string, addTo: number) {
   const water = waterOn(d), wt = waterTarget(lastKg, s.waterMlKg);
   const weighed = s.weights[d] != null;
   return `<div class="quick">
-    <button class="qk" data-f="drink" data-v="250"><span class="qk-ic">${icon('water')}</span><b><span data-count="az-water" data-fmt="1" data-to="${(water / 1000).toFixed(1)}">${n1(water / 1000)}</span><small>/${n1(wt / 1000)} L</small></b><small>+250 ml</small><i class="fbar"><u data-bar="az-w" data-to="${Math.min(1, water / wt).toFixed(3)}"></u></i></button>
-    <button class="qk ${weighed ? 'done' : ''}" data-az="weigh"><span class="qk-ic">${icon(weighed ? 'check' : 'scale')}</span><b>${n1(weighed ? s.weights[d]! : lastKg)}<small> kg</small></b><small>${weighed ? 'Cântărit azi' : 'Cântărește-te'}</small></button>
-    <button class="qk" data-add="${addTo}"><span class="qk-ic">${icon('plus')}</span><b>Adaugă</b><small>mâncare</small></button>
+    <button class="qk" data-f="drink" data-v="250"><span class="qk-ic" data-k="water">${icon('water')}</span><b><span data-count="az-water" data-fmt="1" data-to="${(water / 1000).toFixed(1)}">${n1(water / 1000)}</span><small>/${n1(wt / 1000)} L</small></b><small>+250 ml</small><i class="fbar"><u data-bar="az-w" data-to="${Math.min(1, water / wt).toFixed(3)}"></u></i></button>
+    <button class="qk ${weighed ? 'done' : ''}" data-az="weigh"><span class="qk-ic" data-k="scale">${icon(weighed ? 'check' : 'scale')}</span><b>${n1(weighed ? s.weights[d]! : lastKg)}<small> kg</small></b><small>${weighed ? 'Cântărit azi' : 'Cântărește-te'}</small></button>
+    <button class="qk" data-add="${addTo}"><span class="qk-ic" data-k="plus">${icon('plus')}</span><b>Adaugă</b><small>mâncare</small></button>
   </div>`;
 }
 
@@ -225,7 +225,8 @@ export function todayHtml() {
   ${dayList(d, slots, next)}
   ${weekRow(d)}
   ${yesterday && d >= today && !journal.flat().length ? '<button class="ghost wide" data-az="copy">Copiază mesele de ieri</button>' : ''}
-  </div>`;
+  </div>
+  <button class="fab" data-add="${addTo}" aria-label="Adaugă mâncare">${icon('plus')}</button>`;
 }
 
 export function todayAction(el: HTMLElement): boolean {

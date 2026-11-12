@@ -92,7 +92,7 @@ export function planHtml() {
     <p>Versiunea ${esc(__BUILD__)}</p></section>`;
 }
 
-export const mindHtml = () => `${back('Fuel', 'data-tab="fuel"')}<h1 class="title">Mentalitate</h1><p class="hint">Cele 12 principii din <i>Fat Loss Forever</i>, de Layne Norton.</p>
+export const mindHtml = () => `${back('Mai mult', 'data-tab="fuel"')}<h1 class="title">Mentalitate</h1><p class="hint">Cele 12 principii din <i>Fat Loss Forever</i>, de Layne Norton.</p>
   ${PRINCIPLES.map((x, i) => `<section class="card pr"><span>${i + 1}</span><div><h2>${esc(x.title)}</h2><p>${esc(x.body)}</p><small>${esc(x.ch)}</small></div></section>`).join('')}`;
 
 const RO_DAYS = ['luni', 'marți', 'miercuri', 'joi', 'vineri', 'sâmbătă', 'duminică'];

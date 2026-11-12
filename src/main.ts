@@ -3,7 +3,8 @@ import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
-import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml } from './screens/fuel.ts';
+import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './screens/fuel.ts';
+import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
 import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
@@ -35,7 +36,7 @@ function toast(msg: string, undo?: () => void, label = 'Anulează') {
 
 function commit() {
   freshFuel();
-  if (!save(s)) toast('Browserul nu a putut salva. Fă un backup din Plan.');
+  if (!save(s)) toast('Browserul nu a putut salva. Fă un backup din Mai mult → Planul meu.');
 }
 
 let opener: HTMLElement | null = null;
@@ -61,20 +62,21 @@ ctx.go = (t) => { tab = t; render(); };
 
 const ICONS = {
   azi: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>',
-  fuel: '<path d="M12 3c.6 3.2 5.5 5.9 5.5 11a5.5 5.5 0 0 1-11 0c0-2.2 1-3.8 2.3-5 .3 1.3 1 2.2 1.900 2.600C10.400 9 10.800 6 12 3Z"/>',
+  mese: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 21V3c-2.2 1.4-3 4-3 7 0 1.6.9 2.8 3 3"/>',
   corp: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 9.500a5.500 5.500 0 0 1 8 0l-2.500 2h-3Z"/>',
-  plan: '<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
+  fuel: '<path d="M12 3c.6 3.2 5.5 5.9 5.5 11a5.5 5.5 0 0 1-11 0c0-2.2 1-3.8 2.3-5 .3 1.3 1 2.2 1.900 2.600C10.400 9 10.800 6 12 3Z"/>',
 };
 type Main = keyof typeof ICONS;
-const TAB_NAME: Record<Main, string> = { azi: 'Azi', fuel: 'Fuel', corp: 'Corp', plan: 'Plan' };
-const home = (t: Tab): Main => (t === 'post' || t === 'minte' ? 'fuel' : t);
+// 2026-11-12, fewer places: Azi, the meal plan, the body, and everything else under "Mai mult" (Fuel's tools and the plan)
+const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', corp: 'Corp', fuel: 'Mai mult' };
+const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' ? 'fuel' : t);
 
 function render() {
   if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
   syncFuel();
   kitchen();
-  const views: Record<Tab, () => string> = { azi: todayHtml, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: planHtml, minte: mindHtml };
+  const views: Record<Tab, () => string> = { azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml };
   app.innerHTML = `<main>${views[tab]()}</main>
     <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;

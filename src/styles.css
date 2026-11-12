@@ -677,3 +677,115 @@ input[type=range]:focus { box-shadow: none; }
 @keyframes az-from-l { from { opacity: 0; transform: translateX(-28px); } }
 @keyframes az-stamp { 0% { transform: scale(.96); } 60% { transform: scale(1.015); } 100% { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .azi *, .azi *::before { animation: none !important; } }
+
+/* ==========================================================================================================
+   "Carduri luminoase" (2026-11-12, the user's choice after "nu-mi place formatul per total"): the same app, softer.
+   A warmer dark, rounded cards instead of cut plates, coloured icon chips, Saira at its normal width in sentence
+   case for titles instead of condensed capitals, pill buttons, a floating rounded tab bar, a + to log from anywhere.
+   This layer only overrides; the rules above stay for what it does not touch.
+   ========================================================================================================== */
+:root {
+  --bg: #0e1016; --s1: #161922; --s2: #1c2029; --s3: #252a35; --line: rgba(255, 255, 255, .08); --n5: #343a48;
+  --t1: #f4f6fb; --t2: #aeb6c6; --t3: #8b94a6;
+  --r: 20px; --r-s: 14px;
+  --font: 'Saira', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+body::before { background: radial-gradient(100% 45% at 50% -10%, rgba(var(--glow), .16), transparent 70%), radial-gradient(80% 40% at 100% 110%, rgba(52, 211, 153, .06), transparent 70%), var(--bg); }
+
+/* every plate becomes a rounded card: no cut corners, no coloured left tabs */
+.card, .list, .nums, .mealc, .ts, .issue, .flow, .nextc, .dash, .ft, .qk, .fday, .banner, .fmain, .sh, .scan, .updated, .added, .preview, #toast {
+  clip-path: none !important; border-radius: var(--r);
+}
+.card, .list, .nums, .mealc, .ts, .issue, .flow, .nextc, .dash, .ft, .qk { border: 1px solid var(--line) !important; background: linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0) 40%), var(--s1) !important; box-shadow: 0 10px 30px -18px rgba(0, 0, 0, .8) !important; }
+.nextc::before, .card.lime::before { display: none; }
+.nextc.ate { border-color: rgba(220, 179, 94, .35) !important; background: linear-gradient(160deg, rgba(220, 179, 94, .12), var(--s1) 60%) !important; }
+.list { overflow: hidden; }
+.qk, .ft { border-radius: var(--r-s); }
+.qk .fbar { border-radius: 3px; }
+.fbar, .bl-t { border-radius: 4px; }
+.fbar u, .bl-t div { border-radius: 4px; }
+.bl-t i { display: none; }
+
+/* type: titles in sentence case at normal width; small labels stay as quiet caps */
+h1, .klass, .ft-h, .fhead h1, .ring-in b, .fm-l b, .ft-v, .qk b, .next-m .t, .big b, .left b, .sh h2, .banner h1 {
+  font-stretch: 100% !important; text-transform: none !important; letter-spacing: -.01em !important;
+}
+.klass { font-weight: 800; font-size: clamp(36px, 10.5vw, 50px); line-height: 1.02; }
+.hero-w::before, .fblade { display: none; }
+.hero-w { margin-top: 6px; font-size: 14.5px; }
+.ft-h { font-weight: 800; font-size: clamp(38px, 11vw, 52px); line-height: 1.05; }
+.ft-h span, .fhead h1, .ring-in b, .stats3 b { background: none !important; -webkit-text-fill-color: currentColor; color: var(--t1) !important; }
+.fhead h1 { font-weight: 800; font-size: 32px; }
+.fsub { margin: 4px 0 14px; color: var(--t2); font-size: 15px; }
+.ring-in b { font-weight: 800; font-size: 34px; }
+.ring-in span { letter-spacing: .04em; text-transform: none; font-weight: 600; font-size: 12px; font-stretch: 100%; }
+.fm-l b { font-weight: 750; font-size: 22px; }
+.ft-v { font-weight: 800; font-size: 26px; }
+.qk b { font-weight: 800; font-size: 19px; }
+.next-m .t { font-weight: 800; font-size: 34px; }
+.r .b b, .next-m div b, .nextc h2, .card h2, h2 { font-stretch: 100%; text-transform: none; letter-spacing: 0; font-weight: 700; }
+.r .b b { font-size: 16px; }
+.next-m div b { font-size: 19px; }
+.nextc h2 { font-size: 13px; letter-spacing: .02em; }
+.mc-h > span, .ft-t, .fk, h3, .field, .dhead h1, .tabs button { letter-spacing: .06em; }
+.mc-h b { font-stretch: 100%; font-weight: 750; font-size: 17px; }
+.sh h2 { font-weight: 800; font-size: 28px; }
+
+/* icons in coloured chips, one colour per thing */
+.fh-ic, .ft-ic, .qk-ic { --ic: var(--sky); clip-path: none !important; border-radius: 12px; color: var(--ic) !important; background: color-mix(in srgb, var(--ic) 16%, transparent) !important; box-shadow: none !important; }
+[data-k='water'] { --ic: #38bdf8; }
+[data-k='scale'] { --ic: #fbbf24; }
+[data-k='plus'] { --ic: #34d399; }
+[data-k='carbs'] { --ic: #60a5fa; }
+[data-k='supp'] { --ic: #f472b6; }
+[data-k='recovery'] { --ic: #a78bfa; }
+[data-k='advanced'] { --ic: #fb923c; }
+[data-k='analytics'] { --ic: #2dd4bf; }
+[data-k='meals'] { --ic: #4ade80; }
+[data-k='engine'] { --ic: #94a3b8; }
+[data-k='food'] { --ic: #facc15; }
+.qk.done .qk-ic { color: var(--bg) !important; background: var(--gold) !important; }
+.fmain { background: linear-gradient(120deg, #1d4ed8, var(--act) 55%, #38bdf8) !important; border-radius: var(--r); }
+.fmain .ft-ic { border-radius: 12px; }
+
+/* buttons: pills */
+.primary, .ghost, .chip, .chips button, .seg, .seg button, input, select, .qadd { border-radius: 14px; clip-path: none !important; }
+.primary { background: linear-gradient(120deg, #1d4ed8, var(--act) 60%, var(--act-hot)); letter-spacing: .02em; text-transform: none; font-stretch: 100%; font-weight: 700; font-size: 16px; }
+.ghost { letter-spacing: .02em; text-transform: none; font-stretch: 100%; font-weight: 650; font-size: 15.5px; box-shadow: inset 0 0 0 1px var(--n5); }
+.seg { border-radius: 16px; padding: 4px; }
+.seg button { text-transform: none; font-stretch: 100%; font-weight: 650; letter-spacing: 0; font-size: 14.5px; border-radius: 12px; }
+.seg .on { box-shadow: 0 4px 12px -6px rgba(0, 0, 0, .6); }
+input, select { border-color: var(--n5); }
+.sh { border-top: 0; border-radius: 26px 26px 0 0; background: var(--s1); }
+.sh::before { border-radius: 4px; }
+
+/* the tab bar: a floating rounded bar, the current tab on a soft pill */
+.tabs-plate, .tabs-plate::before { clip-path: none !important; border-radius: 24px; }
+.tabs-plate { background: rgba(255, 255, 255, .08); }
+.tabs-plate::before { background: rgba(22, 25, 34, .9); -webkit-backdrop-filter: blur(18px) saturate(1.4); backdrop-filter: blur(18px) saturate(1.4); }
+.tabs-plate::after, .tabs-blade { display: none; }
+.tabs button { text-transform: none; font: 650 12px/1 var(--font); letter-spacing: 0; }
+.tabs .on::before { content: ''; position: absolute; inset: 9px 12%; z-index: -1; border-radius: 16px; background: rgba(var(--glow), .16); }
+.tabs .on svg { transform: none; }
+
+/* the + that logs food from anywhere on Azi */
+.fab { position: fixed; z-index: 25; right: max(18px, calc(50% - 262px)); bottom: calc(92px + max(10px, var(--safe))); display: grid; place-items: center; width: 60px; height: 60px; border-radius: 20px; color: #fff; background: linear-gradient(135deg, #22c55e, #10b981); box-shadow: 0 14px 28px -10px rgba(16, 185, 129, .7); transition: transform var(--press) var(--e-out); }
+.fab svg { width: 28px; height: 28px; }
+.fab:active { transform: scale(.92); }
+.azi { padding-bottom: 72px; }
+
+/* one-tap add on recent foods */
+.rrow { display: flex; align-items: center; border-top: 1px solid var(--line); }
+.rrow > .row { flex: 1; min-width: 0; border-top: 0; }
+.qadd { flex: none; min-height: 44px; margin-right: 10px; padding: 0 12px; color: #34d399; background: rgba(52, 211, 153, .12); font: 700 14px/1 var(--font); white-space: nowrap; }
+.qadd:active { background: rgba(52, 211, 153, .24); }
+
+/* the day's ring and the quick plates, softer */
+.dash { border-left-width: 1px !important; }
+.ring .rv { stroke: url(#none); stroke: #3b82f6; filter: drop-shadow(0 0 6px rgba(59, 130, 246, .5)); }
+.dhead .wolf { opacity: .9; }
+.backbtn { letter-spacing: .04em; text-transform: none; font-size: 14px; font-stretch: 100%; font-weight: 600; }
+.mealc summary b, .mealc .mb b { font-stretch: 100%; text-transform: none; letter-spacing: 0; font-weight: 700; font-size: 16.5px; }
+.mealc .mt { font-stretch: 100%; font-weight: 750; }
+body:has(.fab) #toast { right: 92px; }
+.fhead .fh-ic[data-k=scale], .fhead .fh-ic[data-k=engine] { --ic: #fbbf24; }

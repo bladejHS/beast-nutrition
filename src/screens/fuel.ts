@@ -18,6 +18,9 @@ import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSl
 
 type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery';
 let sub: Sub = 'home';
+/** The meal plan shown as its own tab (2026-11-12): no way back to Fuel from it. */
+let asTab = false;
+export function mealsTab() { sub = 'meals'; asTab = true; try { return fuelHtml(); } finally { asTab = false; } }
 let mealDay = '';
 let mealWeek = 0;
 let microWeek = false;
@@ -55,18 +58,14 @@ function home() {
   const w = windowFor(s.fast, weekday(today));
   const target = dayFuel(today);
   const demand = fuelWeek(mondayOf(today)).days.find((d) => d.date === today)?.demand ?? 'moderate';
-  const plan = s.fuel.plan[today] ?? [];
-  const next = plan.find((m) => !m.done);
-  const eaten = plan.filter((m) => m.done).length;
   const water = waterOn(today), waterT = waterTarget(latestKg(), s.waterMlKg);
   const taken = (s.suppLog[today] ?? []).length;
   const fast = w ? status(w, nowMinutes()) : null;
   const bar = (f: number) => `<i class="fbar"><u style="transform:scaleX(${Math.max(0, Math.min(1, f)).toFixed(3)})"></u></i>`;
   const tile = (k: string, attr: string, title: string, value: string, sub: string, f?: number) =>
-    `<button class="ft" ${attr}><span class="ft-ic">${icon(k)}</span><span class="ft-t">${title}</span><b class="ft-v">${value}</b><small>${sub}</small>${f == null ? '' : bar(f)}</button>`;
-  return `<header class="fhero"><p class="fk">Fuel · ${esc(dayLong(today))}</p><h1 class="ft-h"><span>Fuel</span></h1><i class="fblade"></i>
-    <div class="fday">${demandTag(demand)}<span><b>${n0(target.kcal)}</b> kcal</span><span><b>${n0(target.p)}</b> P</span><span><b>${n0(target.c)}</b> C</span><span><b>${n0(target.f)}</b> G</span></div></header>
-  <button class="fmain" ${go('meals')}><span class="ft-ic">${icon('meals')}</span><span class="fm-l"><small>Plan de mese</small><b>${next ? esc(next.name) : plan.length ? 'Toate mesele notate' : 'Generează ziua'}</b><em>${next ? `${esc(next.time)}${next.tag ? ` · ${esc(next.tag)}` : ''} · ${eaten} din ${plan.length} mâncate` : plan.length ? `${plan.length} mese azi` : 'Mese pe ținta de azi, cu lista de cumpărături'}</em></span><i class="chev" aria-hidden="true"></i></button>
+    `<button class="ft" ${attr}><span class="ft-ic" data-k="${k}">${icon(k)}</span><span class="ft-t">${title}</span><b class="ft-v">${value}</b><small>${sub}</small>${f == null ? '' : bar(f)}</button>`;
+  void demandTag; void dayLong;
+  return `<header class="fhero"><h1 class="ft-h"><span>Mai mult</span></h1><p class="fsub">Uneltele din spatele zilei și planul tău.</p></header>
   <div class="ftiles">
     ${tile('water', go('water'), 'Hidratare', `${n1(water / 1000)}<small> / ${n1(waterT / 1000)} L</small>`, water >= waterT ? 'Ținta e atinsă' : `Mai ai ${n1(Math.max(0, waterT - water) / 1000)} L`, water / waterT)}
     ${tile('carbs', go('carbs'), 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[demand] : 'Oprit', s.fuel.cycling ? `${n0(target.c)} g carbohidrați azi` : 'Carbohidrații după antrenament')}
@@ -76,6 +75,8 @@ function home() {
     ${tile('analytics', go('report'), 'Raport', 'Săptămâna', 'în cifre, din ce ai notat')}
   </div>
   <div class="list">
+    ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
+    ${listRow('data-mine="list"', 'Alimentele mele', s.custom.length ? `${s.custom.length} salvate` : 'Adaugi tu valorile de pe etichetă')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
   </div>
@@ -143,8 +144,9 @@ export function shopText(days: string[], list: ShopItem[], done: string[]): stri
 
 function meals() {
   const s = ctx.get();
-  if (pantry.failed) return `${back()}<section class="card"><h2>Baza de alimente nu s-a încărcat</h2><p>Planul de mese are nevoie de ea. Verifică internetul și încearcă din nou.</p><button class="primary wide" data-f="retry">Încearcă din nou</button></section>`;
-  if (needFoods()) return `${back()}<div class="skel"></div><div class="skel"></div><div class="skel"></div>`;
+  const bk = asTab ? '' : back();
+  if (pantry.failed) return `${bk}<section class="card"><h2>Baza de alimente nu s-a încărcat</h2><p>Planul de mese are nevoie de ea. Verifică internetul și încearcă din nou.</p><button class="primary wide" data-f="retry">Încearcă din nou</button></section>`;
+  if (needFoods()) return `${bk}<div class="skel"></div><div class="skel"></div><div class="skel"></div>`;
   const monday = addDays(mondayOf(ctx.today()), mealWeek * 7);
   const dates = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
   if (!dates.includes(mealDay)) mealDay = dates.includes(ctx.today()) ? ctx.today() : dates[0]!;
@@ -158,7 +160,7 @@ function meals() {
   const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
   const { days } = fuelWeek(monday);
   const dem = (d: string) => days.find((x) => x.date === d)!.demand;
-  return `${back()}${head('meals', 'Plan de mese', 'Mese calculate pe ținta zilei, cu valorile reale ale alimentelor.')}
+  return `${bk}${head('meals', 'Mese', 'Pe ținta zilei, cu înlocuiri și lista de cumpărături.')}
   <div class="wknav"><button class="ib" data-f="mwk" data-v="0" aria-label="Săptămâna curentă" ${mealWeek === 0 ? 'disabled' : ''}>‹</button><b>${mealWeek ? 'Săptămâna viitoare' : 'Săptămâna asta'}</b><button class="ib" data-f="mwk" data-v="1" aria-label="Săptămâna viitoare" ${mealWeek === 1 ? 'disabled' : ''}>›</button></div>
   <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}

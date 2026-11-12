@@ -126,7 +126,7 @@ let view: 'dash' | 'pick' = 'dash';
 export function fastHtml() {
   const s = ctx.get();
   const onProg = s.fast.active?.type === 'prog' && view === 'dash';
-  return `${back('Fuel', 'data-tab="fuel"')}${head('advanced', 'Post', 'Un singur program activ. Istoricul rămâne salvat când schimbi.')}${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
+  return `${back('Mai mult', 'data-tab="fuel"')}${head('advanced', 'Post', 'Un singur program activ. Istoricul rămâne salvat când schimbi.')}${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
 }
 
 function switchTo(next: Parameters<typeof activate>[1]) {

@@ -4,10 +4,11 @@ import { CARB_LABEL, sessionStatus, STATUS_LABEL, type DayPlan, type Demand, typ
 
 export const cardSrc = (k: string) => `${import.meta.env.BASE_URL}cards/${k}.webp`;
 
-export const back = (label = 'Fuel', attr = 'data-f="sub" data-v="home"') => `<button class="backbtn" ${attr}>‹ ${label}</button>`;
+export const back = (label = 'Mai mult', attr = 'data-f="sub" data-v="home"') => `<button class="backbtn" ${attr}>‹ ${label}</button>`;
 
 /** A band across the middle of a card's picture, under the screen's title: it leaves out the icon above and the English printed below. */
-export const banner = (k: string, title: string, sub = '') => `<header class="banner"><img src="${cardSrc(k)}" alt="" width="580" height="480" style="object-position:50% ${k === 'nutrition' ? 24 : 42}%;view-transition-name:card-${k}"><div><h1>${esc(title)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div></header>`;
+/** The other tabs' heads (Corp, Plan): since 2026-11-12 the same icon head as Fuel, no photo. */
+export const banner = (k: string, title: string, sub = '') => head(k === 'body' ? 'scale' : k === 'settings' ? 'engine' : k, title, sub);
 
 /** Line icons for Fuel (24 × 24, currentColor): one per destination, so the tiles read without pictures. */
 export const ICON: Record<string, string> = {
@@ -29,7 +30,7 @@ export const ICON: Record<string, string> = {
 export const icon = (k: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] ?? ''}</svg>`;
 
 /** The head of a Fuel screen (2026-11-12: the photo banners left Fuel): the icon on a plate, the title, one line. */
-export const head = (k: string, title: string, sub = '') => `<header class="fhead"><span class="fh-ic">${icon(k)}</span><div><h1>${esc(title)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div></header>`;
+export const head = (k: string, title: string, sub = '') => `<header class="fhead"><span class="fh-ic" data-k="${k}">${icon(k)}</span><div><h1>${esc(title)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div></header>`;
 
 /** One destination in a list: what it is, and its state today. */
 export const listRow = (attr: string, title: string, sub = '') => `<button class="row" ${attr}><span><b>${esc(title)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span><i class="chev" aria-hidden="true"></i></button>`;

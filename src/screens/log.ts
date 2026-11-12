@@ -19,6 +19,19 @@ function foodRow(f: Food) {
   return `<button class="row" data-food="${esc(f.id)}"><span><b>${esc(f.name)}</b><small>${esc(f.cat)}</small></span><em>${nb(n0(f.kcal), 'kcal')}<small>${nb(n0(f.p), 'g')} proteine</small></em></button>`;
 }
 
+/** The grams last eaten of a food, from the journal: a recent food can then go in with one tap. */
+function lastGrams(f: Food): number | null {
+  const days = ctx.get().days;
+  for (const d of Object.keys(days).sort().reverse()) for (const meal of days[d] ?? []) for (const e of [...meal].reverse()) if (e.name === f.name && e.g > 0) return e.g;
+  return null;
+}
+
+/** A recent food with a one-tap add at the grams last eaten, next to the row that opens the amount. */
+function recentRow(f: Food) {
+  const g = lastGrams(f);
+  return g ? `<div class="rrow">${foodRow(f)}<button class="qadd" data-qadd="${esc(f.id)}" data-g="${g}" aria-label="Adaugă ${n0(g)} g ${esc(f.name)}">+ ${n0(g)} g</button></div>` : foodRow(f);
+}
+
 /** What is left of the day, in the only two numbers that decide what to pick next. */
 function leftLine() {
   const t = dayFuel(logDate);
@@ -33,7 +46,7 @@ function showRecent() {
   shown.clear();
   const s = ctx.get();
   const list = [...s.custom, ...s.recent.filter((r) => !s.custom.some((c) => c.id === r.id))].slice(0, 15);
-  res.innerHTML = list.length ? `<h3>Recente</h3>${list.map(foodRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România. Poți căuta în română.</p>';
+  res.innerHTML = list.length ? `<h3>Recente · o atingere pe + adaugă porția de data trecută</h3>${list.map(recentRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România. Poți căuta în română.</p>';
 }
 
 /** The Romanian shelf and USDA answer from the app's own files; Open Food Facts online is slower, can fail and only adds to the list. */
@@ -163,6 +176,22 @@ export function logAction(el: HTMLElement): boolean {
     return true;
   }
   if (d['food']) { const f = shown.get(d['food']); if (f) openQuantity(f); return true; }
+  if (d['qadd']) {
+    const f = shown.get(d['qadd']);
+    const g = Number(d['g']);
+    if (!f || !(g > 0)) return true;
+    const s = ctx.get();
+    const before = s.days[logDate];
+    const days = dayMeals(s, logDate).map((m) => [...m]);
+    const entry = entryFrom(f, g);
+    days[meal]!.push(entry);
+    s.days[logDate] = days;
+    s.recent = [f, ...s.recent.filter((r) => r.id !== f.id)].slice(0, 30);
+    added.push(entry);
+    ctx.commit(); ctx.render(); searchSheet();
+    ctx.toast(`${f.name}, ${n0(g)} g, adăugat.`, () => { if (before) s.days[logDate] = before; else delete s.days[logDate]; added = added.filter((e) => e.id !== entry.id); ctx.commit(); ctx.render(); searchSheet(); });
+    return true;
+  }
   if (d['manual'] != null) { openManual(); return true; }
   if (d['manualCode'] != null) { openManual(notFoundCode); return true; }
   if (d['scan'] != null) { openBarcode(); return true; }

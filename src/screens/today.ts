@@ -14,6 +14,7 @@ import { openAdd } from './log.ts';
 import { icon, lvl } from './parts.ts';
 import { dayFuel, fuelWeek, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 import { openWeigh } from './body.ts';
+import { glp1Card } from './glp1.ts';
 
 let date = '';
 let seen = '';
@@ -217,6 +218,7 @@ export function todayHtml() {
   <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
   ${d === today ? '' : '<button class="backbtn" data-az="today">‹ Înapoi la azi</button>'}
   ${hero(d, t)}
+  ${d === today ? glp1Card(d) : ''}
   ${note ? `<p class="updated">${esc(note)}</p>` : ''}
   ${numbers(t, sum)}
   ${quick(d, addTo)}

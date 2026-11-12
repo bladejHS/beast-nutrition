@@ -4,7 +4,7 @@ import { CARB_LABEL, sessionStatus, STATUS_LABEL, type DayPlan, type Demand, typ
 
 export const cardSrc = (k: string) => `${import.meta.env.BASE_URL}cards/${k}.webp`;
 
-export const back = (label = 'Mai mult', attr = 'data-f="sub" data-v="home"') => `<button class="backbtn" ${attr}>‹ ${label}</button>`;
+export const back = (label = 'Mai mult', attr = 'data-tab="fuel"') => `<button class="backbtn" ${attr}>‹ ${label}</button>`;
 
 /** A band across the middle of a card's picture, under the screen's title: it leaves out the icon above and the English printed below. */
 /** The other tabs' heads (Corp, Plan): since 2026-11-12 the same icon head as Fuel, no photo. */

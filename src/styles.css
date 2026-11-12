@@ -789,3 +789,21 @@ input, select { border-color: var(--n5); }
 .mealc .mt { font-stretch: 100%; font-weight: 750; }
 body:has(.fab) #toast { right: 92px; }
 .fhead .fh-ic[data-k=scale], .fhead .fh-ic[data-k=engine] { --ic: #fbbf24; }
+
+/* Semaglutide (2026-11-13): the dose ladder and the card on Azi */
+.ladder { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 12px 0; padding: 0; list-style: none; }
+.ladder li { display: grid; gap: 4px; padding: 10px 4px; border-radius: 12px; text-align: center; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
+.ladder b { font: 750 14px/1 var(--font); white-space: nowrap; }
+.ladder small { font-size: 11px; line-height: 1.2; color: var(--t3); }
+.ladder .past { opacity: .55; }
+.ladder .now { background: rgba(244, 114, 182, .16); box-shadow: inset 0 0 0 1.5px #f472b6; }
+.ladder .now b { color: #f9a8d4; }
+.card.glp { border-color: rgba(244, 114, 182, .35) !important; background: linear-gradient(160deg, rgba(244, 114, 182, .10), var(--s1) 60%) !important; }
+.card.glp .label { margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: #f9a8d4; }
+.card.glp .primary { margin-top: 12px; }
+.card .line .link { margin-left: 10px; min-width: 32px; }
+.chips.seven, .chips.five { display: grid; gap: 6px; }
+.chips.seven { grid-template-columns: repeat(7, 1fr); }
+.chips.five { grid-template-columns: repeat(5, 1fr); }
+.chips.seven button, .chips.five button { min-width: 0; padding: 0; }
+.chips button[aria-pressed='true'] { color: #fff; background: rgba(244, 114, 182, .22); box-shadow: inset 0 0 0 1.5px #f472b6; }

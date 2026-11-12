@@ -4,6 +4,7 @@ import { load, save, type State } from './logic/store.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './screens/fuel.ts';
+import { glp1Action, glp1Html } from './screens/glp1.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
@@ -69,14 +70,14 @@ const ICONS = {
 type Main = keyof typeof ICONS;
 // 2026-11-12, fewer places: Azi, the meal plan, the body, and everything else under "Mai mult" (Fuel's tools and the plan)
 const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', corp: 'Corp', fuel: 'Mai mult' };
-const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' ? 'fuel' : t);
+const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' || t === 'glp1' ? 'fuel' : t);
 
 function render() {
   if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
   syncFuel();
   kitchen();
-  const views: Record<Tab, () => string> = { azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml };
+  const views: Record<Tab, () => string> = { azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
   app.innerHTML = `<main>${views[tab]()}</main>
     <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
@@ -98,7 +99,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 

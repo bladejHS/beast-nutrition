@@ -76,6 +76,7 @@ function home() {
   </div>
   <div class="list">
     ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
+    ${listRow('data-tab="glp1"', 'Semaglutidă', s.glp1.on ? `${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Wegovy cu medicul: doze, zile, ritm')}
     ${listRow('data-mine="list"', 'Alimentele mele', s.custom.length ? `${s.custom.length} salvate` : 'Adaugi tu valorile de pe etichetă')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}

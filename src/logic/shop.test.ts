@@ -69,3 +69,15 @@ test('label values per portion become values per 100 g, and calories come from 4
   assert.equal(fromLabel({ p: 60, c: 50, f: 10 }, 100), null);
   assert.equal(fromLabel({ p: 10, c: 10, f: 1 }, 0), null);
 });
+
+test('the KFC menu loads from its own document: single products, unique ids, calories that match the macros', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { parseMenu } = await import('./foods.ts');
+  const kfc = parseMenu(JSON.parse(readFileSync('public/menus/kfc.json', 'utf8')), 'KFC', 'kfc:');
+  assert.ok(kfc.length >= 50, String(kfc.length));
+  assert.equal(new Set(kfc.map((f) => f.id)).size, kfc.length);
+  const zinger = kfc.find((f) => f.name === 'Zinger Burger · KFC')!;
+  assert.deepEqual([zinger.kcal, zinger.p, zinger.portions[0]?.[1]], [269, 15.68, 150]);
+  assert.ok(!kfc.some((f) => /coca-cola|sprite|box/i.test(f.name)));
+  for (const f of kfc) assert.ok(Math.abs(4 * f.p + 4 * f.c + 9 * f.f + 2 * f.fiber - f.kcal) < f.kcal * 0.35 + 25, f.name);
+});

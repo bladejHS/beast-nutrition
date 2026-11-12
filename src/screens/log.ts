@@ -91,7 +91,7 @@ export function openAdd(date: string, i: number) {
 }
 
 function perHundred(f: Food) {
-  const fiber = f.source === 'spd' || f.noFiber ? 'fibre nedeclarate' : f.fiber > 0 ? `fibre ${nb(n1(f.fiber), 'g')}` : '';
+  const fiber = f.noFiber ? 'fibre nedeclarate' : f.fiber > 0 ? `fibre ${nb(n1(f.fiber), 'g')}` : '';
   const parts = [fiber, f.sugar > 0 ? `zahăr ${nb(n1(f.sugar), 'g')}` : '', f.sodium > 0 ? `sare ${nb(n1((f.sodium * 2.5) / 1000), 'g')}` : ''].filter(Boolean);
   return `Pe 100 g: ${nb(n0(f.kcal), 'kcal')}${parts.length ? `, ${parts.join(', ')}` : ''}.`;
 }

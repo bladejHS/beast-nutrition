@@ -64,12 +64,22 @@ export function parseDb(raw: Raw): Food[] {
   return list;
 }
 
-export interface MenuRow { n: string; k: number; p: number; c: number; f: number; s: number; z: number; sare: number; g: number | null; u: string; b: number | null; a: string }
+export interface MenuRow { n: string; k: number; p: number; c: number; f: number; s: number; z: number; sare: number; g: number | null; u: string; b: number | null; a: string;
+  /** Fiber, when the restaurant declares it (KFC does, Splendid Chicken does not). */
+  fb?: number }
 
-/** The Splendid Chicken menu: values per 100 g or ml, as declared by the restaurant. It declares no fiber. */
-export function parseMenu(rows: MenuRow[]): Food[] {
+/** Restaurant menus shipped with the app (public/menus, from each chain's own nutrition document; see scripts/kfc.py). */
+export const MENUS: Array<{ file: string; chain: string; prefix: string }> = [
+  { file: 'splendid.json', chain: 'Splendid Chicken', prefix: 's' },
+  { file: 'menus/kfc.json', chain: 'KFC', prefix: 'kfc:' },
+];
+
+/** A restaurant menu: values per 100 g or ml, as declared by the restaurant. Splendid Chicken's ids stay `s<row>` (older
+ *  logs and plans point at them); the other chains' ids come from the product name, so a new edition keeps them. */
+export function parseMenu(rows: MenuRow[], chain = 'Splendid Chicken', prefix = 's'): Food[] {
   return rows.map((r, i) => ({
-    id: `s${i}`, name: r.n, cat: 'Splendid Chicken', kcal: r.k, p: r.p, c: r.c, f: r.f, fiber: 0, sugar: r.z, sat: r.s,
+    id: prefix === 's' ? `s${i}` : `${prefix}${fold(r.n).replace(/[^a-z0-9]+/g, '-')}`, name: prefix === 's' ? r.n : `${r.n} · ${chain}`, cat: chain, kcal: r.k, p: r.p, c: r.c, f: r.f,
+    fiber: r.fb ?? 0, sugar: r.z, sat: r.s, ...(r.fb == null ? { noFiber: true } : {}),
     sodium: Math.round((r.sare / 2.5) * 1000), source: 'spd', allergens: r.a,
     portions: r.g ? [[r.b && r.b > 1 ? `${r.b} buc. (${r.g} ${r.u})` : `1 porție (${r.g} ${r.u})`, r.g], ...(r.b && r.b > 1 ? [[`1 buc. (${Math.round(r.g / r.b)} ${r.u})`, Math.round(r.g / r.b)] as [string, number]] : [])] : [],
   }));
@@ -80,8 +90,11 @@ export async function loadFoods(): Promise<Food[]> {
   const res = await fetch(`${import.meta.env.BASE_URL}foods.json`);
   if (!res.ok) throw new Error('Baza de alimente nu s-a încărcat.');
   db = parseDb(await res.json() as Raw);
-  const menu = await fetch(`${import.meta.env.BASE_URL}splendid.json`);
-  if (menu.ok) db = [...parseMenu(await menu.json() as MenuRow[]), ...db];
+  const menus = await Promise.all(MENUS.map(async (m) => {
+    const r = await fetch(`${import.meta.env.BASE_URL}${m.file}`).catch(() => null);
+    return r?.ok ? parseMenu(await r.json() as MenuRow[], m.chain, m.prefix) : [];
+  }));
+  db = [...menus.flat(), ...db];
   return db;
 }
 

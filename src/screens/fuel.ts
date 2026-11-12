@@ -5,7 +5,7 @@ import { isBreakWeek, weekday } from '../logic/calc.ts';
 import { status, windowFor } from '../logic/fasting.ts';
 import { insights, type Feedback, type FeedbackKey, type Rated } from '../logic/insights.ts';
 import { alternatives, macros, mealOptions, regenerate, snackOptions, substitute, type Meal } from '../logic/mealplan.ts';
-import { AISLES, shopLine, shopList, BUY } from '../logic/shop.ts';
+import { AISLES, shopLine, shopList, BUY, type ShopItem } from '../logic/shop.ts';
 import { buildReport, type DayFacts } from '../logic/report.ts';
 import { addDays, finishedWeeks, mondayOf } from '../logic/review.ts';
 import { dayMeals, entryFrom, MEALS, relog, totals } from '../logic/store.ts';
@@ -112,6 +112,23 @@ function mealCard(m: Meal, i: number) {
 
 const tableRow = (label: string, x: { kcal: number; p: number; c: number; f: number }) => `<tr><th scope="row">${label}</th><td>${n0(x.kcal)}</td><td>${n0(x.p)}</td><td>${n0(x.c)}</td><td>${n0(x.f)}</td></tr>`;
 
+/** The shopping list of the week on screen, from today on (src/logic/shop.ts). */
+function shopNow() {
+  const s = ctx.get();
+  kitchen();
+  const monday = addDays(mondayOf(ctx.today()), mealWeek * 7);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i)).filter((d) => d >= ctx.today());
+  return { days, list: shopList(days.map((d) => s.fuel.plan[d] ?? []), pantry.map, s.fuel.packs) };
+}
+
+/** The list as plain text, for a message or a note: only what is not ticked yet, by aisle. */
+export function shopText(days: string[], list: ShopItem[], done: string[]): string {
+  const left = list.filter((x) => !done.includes(x.key));
+  const span = days.length === 7 ? 'toată săptămâna' : days.length === 1 ? dayShort(days[0]!) : `${dayShort(days[0]!)}–${dayShort(days.at(-1)!)}`;
+  const parts = AISLES.filter((a) => left.some((x) => x.aisle === a)).map((a) => `${a.toUpperCase()}\n${left.filter((x) => x.aisle === a).map((x) => { const l = shopLine(x); return `☐ ${x.name}: ${l.buy} · ${l.note}`; }).join('\n')}`);
+  return `Lista de cumpărături, ${span}\nCantități crude, la pachetele obișnuite din Lidl, Kaufland și Profi.\n\n${parts.join('\n\n')}`;
+}
+
 function meals() {
   const s = ctx.get();
   if (pantry.failed) return `${back()}<section class="card"><h2>Baza de alimente nu s-a încărcat</h2><p>Planul de mese are nevoie de ea. Verifică internetul și încearcă din nou.</p><button class="primary wide" data-f="retry">Încearcă din nou</button></section>`;
@@ -123,9 +140,7 @@ function meals() {
   const t = dayFuel(mealDay);
   const sum = macros(list.flatMap((m) => m.items), pantry.map);
   const ate = totals(dayMeals(s, mealDay));
-  kitchen();
-  const shopDays = dates.filter((d) => d >= ctx.today());
-  const shop = shopList(shopDays.map((d) => s.fuel.plan[d] ?? []), pantry.map, s.fuel.packs);
+  const { days: shopDays, list: shop } = shopNow();
   const p = s.fuel.prefs;
   const past = isPast(mealDay);
   const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
@@ -149,7 +164,8 @@ function meals() {
   ${shop.length ? `<details class="card" ${shopOpen ? 'open' : ''} id="shopc"><summary><b>Listă de cumpărături</b> <span class="hint">${shop.length} produse, ${shopDays.length === 7 ? 'toată săptămâna' : shopDays.length === 1 ? 'doar azi' : `din ${esc(dayShort(shopDays[0]!))} până duminică`}</span></summary>
     <p class="hint">Cantitățile sunt crude, cum le cumperi, din mesele încă nemâncate, rotunjite la pachetele obișnuite din Lidl, Kaufland și Profi. Dacă pe raft gramajul e altul, apasă pe produs și îl corectezi: rămâne salvat.</p>
     ${AISLES.filter((a) => shop.some((x) => x.aisle === a)).map((a) => `<h3 class="aisle">${a}</h3>${shop.filter((x) => x.aisle === a).map((x) => { const l = shopLine(x); const done = s.fuel.shopDone.includes(x.key); return `<div class="shop ${done ? 'done' : ''}"><input type="checkbox" data-shop="${esc(x.key)}" ${done ? 'checked' : ''} aria-label="Cumpărat: ${esc(x.name)}"><button class="shop-b" data-f="pack" data-v="${esc(x.key)}"><span><b>${esc(x.name)}</b><small>${esc(l.note)}</small></span><em><b>${esc(l.qty)}</b><small>${esc(l.what)}</small></em></button></div>`; }).join('')}`).join('')}
-    ${s.fuel.shopDone.length ? '<button class="ghost wide" data-f="shopclear">Debifează tot</button>' : ''}</details>` : ''}`;
+    <div class="btns"><button class="primary" data-f="shopshare">Trimite lista</button>${s.fuel.shopDone.length ? '<button class="ghost" data-f="shopclear">Debifează tot</button>' : ''}</div>
+    <p class="hint">Pleacă ce n-ai bifat încă: pe WhatsApp, în Notițe sau oriunde alegi.</p></details>` : ''}`;
 }
 
 function water() {
@@ -392,6 +408,18 @@ function openOptions(mi: number) {
   ctx.open(`<h2>${esc(m.tag || 'Alte variante')}</h2><p class="hint">Aceleași macronutrienți, alte alimente.</p>${pending.map((o, k) => { const t = macros(o.items, pantry.map); return `<button class="row" data-f="optgo" data-m="${mi}" data-v="${k}"><span><b>${esc(o.name)}</b><small>${o.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ')}</small></span><em>${nb(n0(t.kcal), 'kcal')}<small>${nb(n0(t.c), 'g')} carbo</small></em></button>`; }).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
 }
 
+/** Through the phone's share sheet when it has one, else to the clipboard. */
+async function shareShop() {
+  const { days, list } = shopNow();
+  const text = shopText(days, list, ctx.get().fuel.shopDone);
+  if (!list.some((x) => !ctx.get().fuel.shopDone.includes(x.key))) { ctx.toast('Ai bifat tot.'); return; }
+  try {
+    if (navigator.share) { await navigator.share({ title: 'Lista de cumpărături', text }); return; }
+  } catch (e) { if ((e as Error).name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(text); ctx.toast('Lista e copiată. O lipești unde vrei.'); }
+  catch { ctx.toast('Telefonul n-a lăsat copierea.'); }
+}
+
 /** The pack on the shelf for one item of the shopping list: the user's correction stays saved (Fuel.packs). */
 function openPack(key: string) {
   const s = ctx.get();
@@ -479,6 +507,7 @@ export function fuelAction(el: HTMLElement): boolean {
   }
   if (a === 'mic') microWeek = v === '1';
   if (a === 'pack') { openPack(v); return true; }
+  if (a === 'shopshare') { void shareShop(); return true; }
   if (a === 'shopclear') { s.fuel.shopDone = []; shopOpen = true; }
   if (a === 'packreset') { delete s.fuel.packs[v]; shopOpen = true; ctx.close(); }
   ctx.commit(); ctx.render();

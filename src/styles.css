@@ -372,6 +372,17 @@ input[type=range]:focus { box-shadow: none; }
 .shop span { flex: 1; min-width: 0; }
 .shop b { font-weight: 650; }
 .shop.done span { color: var(--t2); text-decoration: line-through; }
+/* the shopping list as bought (src/logic/shop.ts): the aisle, then each item with the packs on the right; the name opens the pack size */
+.aisle { margin: 18px 0 2px; font: 700 semi-condensed 11.5px/1.3 var(--font); letter-spacing: .18em; text-transform: uppercase; color: var(--t2); }
+.shop input { flex: none; width: 22px; height: 22px; accent-color: var(--act-hot); }
+.shop-b { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; padding: 6px 0; text-align: left; }
+.shop-b span { flex: 1; min-width: 0; }
+.shop-b b { display: block; font-weight: 650; }
+.shop-b small { display: block; margin-top: 2px; color: var(--t2); font-size: 13px; line-height: 1.3; }
+.shop-b em { flex: none; max-width: 44%; font-style: normal; text-align: right; }
+.shop-b em b { display: block; font: 900 extra-condensed 24px/1 var(--font); color: var(--t1); white-space: nowrap; }
+.shop-b em small { margin-top: 3px; font-size: 12.5px; }
+.shop.done .shop-b b, .shop.done .shop-b em { color: var(--t2); text-decoration: line-through; }
 .ev { color: var(--sky); font: 700 semi-condensed 12px/1.3 var(--font); letter-spacing: .12em; text-transform: uppercase; }
 .sup { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-block: 8px; }
 .sup .check { margin: 0; min-width: 0; }

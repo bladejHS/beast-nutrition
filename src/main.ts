@@ -5,8 +5,9 @@ import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml } from './screens/fuel.ts';
 import { logAction, logInput } from './screens/log.ts';
+import { mineAction } from './screens/mine.ts';
 import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
-import { freshFuel, syncFuel } from './screens/state.ts';
+import { freshFuel, kitchen, syncFuel } from './screens/state.ts';
 import { followToday, todayAction, todayBind, todayHtml } from './screens/today.ts';
 
 const app = document.querySelector<HTMLElement>('#app')!;
@@ -72,6 +73,7 @@ function render() {
   if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
   syncFuel();
+  kitchen();
   const views: Record<Tab, () => string> = { azi: todayHtml, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: planHtml, minte: mindHtml };
   app.innerHTML = `<main>${views[tab]()}</main>
     <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
@@ -93,7 +95,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; render(); scrollTo(0, 0);
     return;
   }
-  if (fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el)) return;
+  if (fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 

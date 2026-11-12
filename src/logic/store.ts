@@ -31,6 +31,8 @@ export interface Fuel {
   prefs: Prefs;
   plan: Record<string, Meal[]>;
   shopDone: string[];
+  /** Pack sizes the user corrected on the shopping list, by the item's name (src/logic/shop.ts). */
+  packs: Record<string, number>;
   /** 'manual': only the classes the user sets. */
   mode: 'auto' | 'manual';
   /** Off: keeps using `syncedWeek`, the last plan read from Inner Beast. */
@@ -82,7 +84,7 @@ const KEY = 'beast-nutrition:v2';
 export const MEALS = ['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Masa 5'];
 export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, weights: {}, checkins: {}, custom: [], recent: [],
   fast: freshFasting(),
-  fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [],
+  fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [], packs: {},
     mode: 'auto', sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, prefuel: true, cancelled: {}, feedback: {} },
   drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '' });
 

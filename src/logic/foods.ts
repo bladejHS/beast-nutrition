@@ -19,7 +19,14 @@ export interface Food {
   allergens?: string;
   /** The barcode, on a product the user saved by hand: the next scan finds it. */
   code?: string;
+  /** On the user's own foods: what the meal plan may swap it in for, whether it belongs in sweet meals, and the pack it
+   *  is sold in (grams), for the shopping list. */
+  role?: FoodRole;
+  sweet?: boolean;
+  pack?: number;
 }
+
+export type FoodRole = 'protein' | 'carb' | 'fat' | 'veg';
 
 type Row = [number, string, number, number, number, number, number, number, number, number, number, [string, number][], (number | null)[]];
 interface Raw { cats: string[]; ro: [number, string][]; foods: Row[] }

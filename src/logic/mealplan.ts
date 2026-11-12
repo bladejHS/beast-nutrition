@@ -30,13 +30,27 @@ const TEMPLATES: Template[] = [
   { name: 'Ton cu garnitură și legume', sweet: false, cook: 15, steps: 'Fierbe garnitura, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa fiartă', 'Orez alb fiert'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
   { name: 'Brânză de vaci cu pâine și legume', sweet: false, cook: 5, steps: 'Pune brânza pe farfurie, servește cu pâine și legume proaspete.', protein: ['Brânză de vaci'], carb: ['Pâine integrală'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Roșii', 'Castraveți'] },
   { name: 'Pui cu leguminoase', sweet: false, cook: 25, heavy: true, steps: 'Fierbe leguminoasele, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, gătit'], carb: ['Linte fiartă', 'Năut fiert'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
+  // 2026-11-11, the user asked for more ways to replace a meal: Romanian classics and quick ones, the same rules
+  { name: 'Pulpe de pui cu mămăligă și salată', sweet: false, cook: 30, heavy: true, steps: 'Fierbe mămăliga din mălai, coace pulpele dezosate, servește cu salată. Mălaiul e cântărit crud, puiul gătit.', protein: ['Pulpă de pui, gătită, fără piele'], carb: ['Mălai crud'], fat: [], veg: ['Varză', 'Roșii', 'Castraveți'] },
+  { name: 'Vită cu cartofi și legume', sweet: false, cook: 30, heavy: true, steps: 'Rumenește mușchiul de vită, coace cartofii, gătește legumele, adaugă uleiul la final. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Mușchi de vită, gătit'], carb: ['Cartofi la cuptor', 'Cartofi fierți'], fat: ['Ulei de măsline'], veg: ['Fasole verde', 'Ardei gras roșu', 'Ciuperci'] },
+  { name: 'Porc cu orez și varză', sweet: false, cook: 25, steps: 'Gătește mușchiul de porc la tigaie, fierbe orezul, călește varza cu ardeiul. Cantitățile sunt pentru alimentele gata gătite.', protein: ['Mușchi de porc, gătit'], carb: ['Orez brun fiert', 'Orez alb fiert'], fat: ['Ulei de măsline'], veg: ['Varză', 'Ardei gras roșu', 'Dovlecei'] },
+  { name: 'Wrap cu pui și legume', sweet: false, cook: 15, steps: 'Gătește puiul, taie legumele, pune totul în lipie cu avocado sau un fir de ulei și rulează.', protein: ['Piept de pui, gătit', 'Piept de curcan, gătit'], carb: ['Lipie tortilla'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Salată verde', 'Roșii', 'Ardei gras roșu'] },
+  { name: 'Cod cu cartofi și legume', sweet: false, cook: 20, steps: 'Coace codul cu lămâie, fierbe cartofii și legumele, adaugă uleiul la final.', protein: ['Cod gătit'], carb: ['Cartofi fierți', 'Cartofi dulci la cuptor'], fat: ['Ulei de măsline'], veg: ['Broccoli fiert', 'Morcovi', 'Spanac crud'] },
+  { name: 'Creveți cu paste și legume', sweet: false, cook: 20, steps: 'Fierbe pastele, călește creveții cu legumele în ulei, amestecă și presară parmezan.', protein: ['Creveți gătiți'], carb: ['Paste fierte'], fat: ['Ulei de măsline', 'Parmezan'], veg: ['Dovlecei', 'Roșii', 'Spanac crud'] },
+  { name: 'Tofu cu orez și legume', sweet: false, cook: 20, steps: 'Rumenește tofu-ul la tigaie, fierbe orezul, gătește legumele cu puțin sos de soia.', protein: ['Tofu'], carb: ['Orez alb fiert', 'Quinoa fiartă'], fat: [], veg: ['Broccoli fiert', 'Ardei gras roșu', 'Ciuperci'] },
+  { name: 'Ouă cu cartofi și salată', sweet: false, cook: 20, steps: 'Fierbe ouăle și cartofii, servește cu salată. Albușurile în plus le fierbi separat sau le faci omletă.', protein: ['Albuș de ou'], carb: ['Cartofi fierți'], fat: ['Ou fiert', 'Ou întreg, crud'], veg: ['Salată verde', 'Roșii', 'Castraveți'] },
+  { name: 'Bol mexican cu pui', sweet: false, cook: 20, heavy: true, steps: 'Încălzește fasolea neagră și porumbul, adaugă puiul gătit, roșiile, ardeiul și avocado.', protein: ['Piept de pui, gătit'], carb: ['Fasole neagră fiartă', 'Porumb dulce'], fat: ['Avocado'], veg: ['Roșii', 'Ardei gras roșu', 'Ceapă'] },
+  { name: 'Pâine cu unt de arahide, banană și whey', sweet: true, cook: 3, steps: 'Unge pâinea cu unt de arahide, pune banana feliată; whey-ul îl bei cu apă sau lapte.', protein: ['Whey (proteină din zer)'], carb: ['Pâine integrală'], fat: ['Unt de arahide'], veg: ['Banană'] },
+  { name: 'Shake de whey cu fructe', sweet: true, cook: 3, steps: 'Mixează whey-ul cu apă, fructele și nucile sau semințele.', protein: ['Whey (proteină din zer)'], carb: ['Banană', 'Curmale'], fat: ['Unt de arahide', 'Migdale'], veg: ['Căpșuni', 'Afine', 'Zmeură'] },
 ];
 
 export const PAIRS: Record<Role, string[]> = {
-  protein: ['Piept de pui, gătit', 'Piept de curcan, gătit', 'Somon gătit', 'Cod gătit', 'Ton la conservă în apă', 'Carne tocată de vită 90%, gătită', 'Mușchi de porc, gătit', 'Tofu', 'Albuș de ou', 'Brânză de vaci', 'Iaurt grecesc degresat', 'Whey (proteină din zer)', 'Creveți gătiți'],
-  carb: ['Orez alb fiert', 'Orez brun fiert', 'Paste fierte', 'Cartofi fierți', 'Cartofi dulci la cuptor', 'Quinoa fiartă', 'Cuscus fiert', 'Pâine integrală', 'Ovăz fulgi, crud', 'Linte fiartă', 'Banană'],
-  fat: ['Ulei de măsline', 'Avocado', 'Nuci', 'Migdale', 'Arahide', 'Semințe de chia'],
-  veg: ['Broccoli fiert', 'Fasole verde', 'Roșii', 'Castraveți', 'Salată verde', 'Morcovi', 'Dovlecei', 'Ciuperci', 'Spanac crud', 'Conopidă'],
+  protein: ['Piept de pui, gătit', 'Piept de curcan, gătit', 'Pulpă de pui, gătită, fără piele', 'Somon gătit', 'Cod gătit', 'Macrou gătit', 'Ton la conservă în apă', 'Carne tocată de vită 90%, gătită', 'Mușchi de vită, gătit', 'Mușchi de porc, gătit', 'Creveți gătiți', 'Tofu', 'Albuș de ou', 'Brânză de vaci', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Whey (proteină din zer)'],
+  carb: ['Orez alb fiert', 'Orez brun fiert', 'Paste fierte', 'Cartofi fierți', 'Cartofi la cuptor', 'Cartofi dulci la cuptor', 'Quinoa fiartă', 'Cuscus fiert', 'Mălai crud', 'Pâine integrală', 'Pâine de secară', 'Lipie tortilla', 'Linte fiartă', 'Năut fiert', 'Fasole boabe fiartă', 'Fasole neagră fiartă', 'Mazăre verde fiartă', 'Porumb dulce',
+    'Ovăz fulgi, crud', 'Banană', 'Miere', 'Măr', 'Pară', 'Curmale', 'Stafide', 'Struguri'],
+  fat: ['Ulei de măsline', 'Avocado', 'Parmezan', 'Telemea tip feta', 'Semințe de dovleac', 'Semințe de floarea-soarelui', 'Semințe de in', 'Nuci', 'Migdale', 'Caju', 'Alune de pădure', 'Arahide', 'Unt de arahide', 'Semințe de chia'],
+  veg: ['Broccoli fiert', 'Fasole verde', 'Roșii', 'Castraveți', 'Salată verde', 'Morcovi', 'Dovlecei', 'Ciuperci', 'Spanac crud', 'Conopidă', 'Ardei gras roșu', 'Varză', 'Vinete', 'Ceapă',
+    'Afine', 'Căpșuni', 'Zmeură', 'Banană', 'Măr', 'Pară', 'Piersică', 'Kiwi', 'Portocală', 'Ananas'],
   extra: [],
 };
 
@@ -129,7 +143,9 @@ function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], 
   const words = banned(prefs);
   const n = carbShares.length;
   const fatShares = opts.fatShares ?? carbShares.map(() => 1 / n);
-  const usable = TEMPLATES.filter((t) => t.cook <= prefs.maxCook);
+  // only meals this kitchen can make: a template whose foods are missing would only shift the rotation
+  const can = (names: string[]) => names.some((n) => { const f = byName.get(n); return !!f && allowed(f, words); });
+  const usable = TEMPLATES.filter((t) => t.cook <= prefs.maxCook && can(t.protein) && can(t.carb));
   const list = usable.length ? usable : TEMPLATES;
   const sweet = list.filter((t) => t.sweet), savory = list.filter((t) => !t.sweet);
   const meals: Meal[] = [];
@@ -186,7 +202,7 @@ export function mealOptions(goal: { p: number; c: number; f: number }, foods: Fo
     .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag))
     .filter((m): m is Meal => !!m)
     .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 }; })
-    .sort((a, b) => a.miss - b.miss).slice(0, 3).map((x) => x.m);
+    .sort((a, b) => a.miss - b.miss).slice(0, 6).map((x) => x.m);
 }
 
 /** Small and easy to digest. Grams come from the carbs asked for and the food's real values. */
@@ -215,7 +231,8 @@ export function substitute(meal: Meal, index: number, next: Food, db: Map<string
 }
 
 /** Foods that belong in a sweet bowl, and foods that belong next to meat and vegetables. */
-const SWEET = new Set(['Ovăz fulgi, crud', 'Banană', 'Miere', 'Whey (proteină din zer)', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Afine', 'Căpșuni', 'Zmeură', 'Nuci', 'Migdale', 'Semințe de chia']);
+const SWEET = new Set(['Ovăz fulgi, crud', 'Banană', 'Miere', 'Whey (proteină din zer)', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Afine', 'Căpșuni', 'Zmeură', 'Nuci', 'Migdale', 'Semințe de chia',
+  'Măr', 'Pară', 'Piersică', 'Kiwi', 'Portocală', 'Ananas', 'Curmale', 'Stafide', 'Struguri', 'Caju', 'Alune de pădure', 'Unt de arahide']);
 const OATS = 'Ovăz fulgi, crud';
 const WHEY = 'Whey (proteină din zer)';
 
@@ -225,13 +242,18 @@ const WHEY = 'Whey (proteină din zer)';
  */
 export function alternatives(role: Role, current: string, foods: Food[], prefs: Prefs, inMeal: string[] = []): Food[] {
   const words = banned(prefs);
-  const sweetMeal = inMeal.some((n) => SWEET.has(n)) && inMeal.every((n) => SWEET.has(n));
+  // the user's own foods say themselves whether they are sweet (src/screens/mine.ts)
+  const mine = foods.filter((f) => f.source === 'mine');
+  const sweetOf = (n: string) => { const m = mine.find((f) => f.name === n); return m ? !!m.sweet : SWEET.has(n); };
+  const sweetMeal = inMeal.some(sweetOf) && inMeal.every(sweetOf);
   const fits = (n: string) => {
     if (n === OATS && !inMeal.includes(WHEY)) return false;
     if (inMeal.includes(OATS) && role === 'protein') return n === WHEY;
-    return !inMeal.length || SWEET.has(n) === sweetMeal;
+    return !inMeal.length || sweetOf(n) === sweetMeal;
   };
-  return PAIRS[role].filter(fits).map((n) => foods.find((f) => f.name === n)).filter((f): f is Food => !!f && f.id !== current && allowed(f, words));
+  const own = mine.filter((f) => f.role === role && f.id !== current && fits(f.name) && allowed(f, words));
+  const listed = PAIRS[role].filter(fits).map((n) => foods.find((f) => f.name === n && f.source !== 'mine')).filter((f): f is Food => !!f && f.id !== current && allowed(f, words));
+  return [...own, ...listed];
 }
 
 export function shoppingList(days: Meal[][], db: Map<string, Food>) {

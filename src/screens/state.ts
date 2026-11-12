@@ -124,4 +124,12 @@ export async function loadPantry() {
   if (pantry.foods.length) return;
   pantry.foods = await loadFoods();
   pantry.map = new Map(pantry.foods.map((f) => [f.id, f]));
+  for (const f of ctx.get().custom) pantry.map.set(f.id, f);
+}
+
+/** The pantry with the user's own foods in it: they can be planned, swapped and bought like the rest. */
+export function kitchen(): Food[] {
+  const mine = ctx.get().custom;
+  for (const f of mine) pantry.map.set(f.id, f);
+  return [...mine, ...pantry.foods];
 }

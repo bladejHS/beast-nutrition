@@ -4,6 +4,7 @@ import { byBarcode, loadFoods, search, searchBranded, searchOffRo, searchUsdaBra
 import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
+import { openFoodEditor } from './mine.ts';
 
 let meal = 0;
 let logDate = '';
@@ -132,18 +133,9 @@ function openQuantity(f: Food) {
   });
 }
 
+/** A food typed in from its label: saved in Alimentele mele (src/screens/mine.ts), then its amount for this meal. */
 function openManual(code = '') {
-  ctx.open(`<h2>Aliment propriu</h2><p class="hint">Valorile de pe etichetă, la 100 g. Rămâne salvat la Recente.${code ? ` Codul ${code} rămâne legat de el: data viitoare îl găsești la scanare.` : ''}</p>
-    <form id="mf"><label class="field">Nume<input name="name" required autocomplete="off"></label>
-    <div class="grid2">${[['kcal', 'Calorii'], ['p', 'Proteine, g'], ['c', 'Carbohidrați, g'], ['f', 'Grăsimi, g'], ['fiber', 'Fibre, g (opțional)']].map(([k, l]) => `<label class="field">${l}<input name="${k}" type="text" inputmode="decimal" ${k === 'fiber' ? '' : 'required'} autocomplete="off"></label>`).join('')}</div>
-    <button class="primary wide">Salvează</button></form>`, 'Aliment propriu');
-  document.querySelector<HTMLFormElement>('#mf')!.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    const d = new FormData(ev.target as HTMLFormElement);
-    const num = (k: string) => parseNum(d.get(k)) || 0;
-    const f: Food = { id: `m${crypto.randomUUID()}`, name: String(d.get('name')), cat: 'Alimentele mele', kcal: num('kcal'), p: num('p'), c: num('c'), f: num('f'), fiber: num('fiber'), sugar: 0, sat: 0, sodium: 0, portions: [], source: 'mine', ...(code ? { code } : {}) };
-    ctx.get().custom.unshift(f); ctx.commit(); openQuantity(f);
-  });
+  openFoodEditor({ code, then: openQuantity });
 }
 
 /** Scan, then the amount; a product no database knows can be saved once, by hand, under its code. */

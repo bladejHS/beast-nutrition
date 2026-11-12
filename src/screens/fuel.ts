@@ -4,7 +4,8 @@ import { DEFAULT_FACTORS } from '../logic/carbs.ts';
 import { isBreakWeek, weekday } from '../logic/calc.ts';
 import { status, windowFor } from '../logic/fasting.ts';
 import { insights, type Feedback, type FeedbackKey, type Rated } from '../logic/insights.ts';
-import { alternatives, macros, mealOptions, regenerate, shoppingList, snackOptions, substitute, type Meal } from '../logic/mealplan.ts';
+import { alternatives, macros, mealOptions, regenerate, snackOptions, substitute, type Meal } from '../logic/mealplan.ts';
+import { AISLES, shopLine, shopList, BUY } from '../logic/shop.ts';
 import { buildReport, type DayFacts } from '../logic/report.ts';
 import { addDays, finishedWeeks, mondayOf } from '../logic/review.ts';
 import { dayMeals, entryFrom, MEALS, relog, totals } from '../logic/store.ts';
@@ -13,7 +14,7 @@ import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../log
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
 import { back, banner, cardSrc, demandTag, listRow } from './parts.ts';
-import { dayFuel, dayRating, fuelWeek, fx, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
+import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 
 type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery';
 let sub: Sub = 'home';
@@ -23,6 +24,7 @@ let microWeek = false;
 let dk = 'Apă';
 let pending: Meal[] = [];
 const openMeals = new Set<string>();
+let shopOpen = false;
 
 /** The catalogue again, when its tab is tapped from inside a section. */
 export function fuelHome() { sub = 'home'; }
@@ -93,7 +95,7 @@ function genDay(date: string, seed: number): Meal[] {
   const s = ctx.get();
   const sl = mealSlots(date);
   const recent = [-2, -1, 1].flatMap((k) => s.fuel.plan[addDays(date, k)] ?? []).map((m) => m.name);
-  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, pantry.foods, s.fuel.prefs, seed, sl.fatShares, recent);
+  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, kitchen(), s.fuel.prefs, seed, sl.fatShares, recent);
 }
 
 const isPast = (d: string) => d < ctx.today();
@@ -121,7 +123,9 @@ function meals() {
   const t = dayFuel(mealDay);
   const sum = macros(list.flatMap((m) => m.items), pantry.map);
   const ate = totals(dayMeals(s, mealDay));
-  const shop = shoppingList(dates.map((d) => s.fuel.plan[d] ?? []), pantry.map);
+  kitchen();
+  const shopDays = dates.filter((d) => d >= ctx.today());
+  const shop = shopList(shopDays.map((d) => s.fuel.plan[d] ?? []), pantry.map, s.fuel.packs);
   const p = s.fuel.prefs;
   const past = isPast(mealDay);
   const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
@@ -141,7 +145,11 @@ function meals() {
     <label class="field">Alergii<input name="allergies" value="${esc(p.allergies)}" placeholder="lapte, arahide"></label>
     <label class="field">Timp de gătit maxim pe masă, în minute<input name="maxCook" type="text" inputmode="numeric" value="${p.maxCook}"></label>
     <button class="primary wide">Salvează</button></form></details>
-  ${shop.length ? `<details class="card"><summary><b>Listă de cumpărături</b> <span class="hint">${shop.length} produse</span></summary>${shop.map((x) => `<label class="shop ${s.fuel.shopDone.includes(x.id) ? 'done' : ''}"><input type="checkbox" data-shop="${esc(x.id)}" ${s.fuel.shopDone.includes(x.id) ? 'checked' : ''}><span>${esc(x.name)}</span><b>${nb(n0(x.g), 'g')}</b></label>`).join('')}</details>` : ''}`;
+  <section class="card"><div class="ch"><h2>Alimentele mele</h2></div><p class="hint">${s.custom.length ? `${s.custom.length} ${s.custom.length === 1 ? 'aliment salvat' : 'alimente salvate'}, cu valorile tale.` : 'Adaugi tu alimentul și valorile de pe etichetă; rămâne salvat.'}</p><button class="ghost wide" data-mine="list">Alimentele mele</button></section>
+  ${shop.length ? `<details class="card" ${shopOpen ? 'open' : ''} id="shopc"><summary><b>Listă de cumpărături</b> <span class="hint">${shop.length} produse, ${shopDays.length === 7 ? 'toată săptămâna' : shopDays.length === 1 ? 'doar azi' : `din ${esc(dayShort(shopDays[0]!))} până duminică`}</span></summary>
+    <p class="hint">Cantitățile sunt crude, cum le cumperi, din mesele încă nemâncate, rotunjite la pachetele obișnuite din Lidl, Kaufland și Profi. Dacă pe raft gramajul e altul, apasă pe produs și îl corectezi: rămâne salvat.</p>
+    ${AISLES.filter((a) => shop.some((x) => x.aisle === a)).map((a) => `<h3 class="aisle">${a}</h3>${shop.filter((x) => x.aisle === a).map((x) => { const l = shopLine(x); const done = s.fuel.shopDone.includes(x.key); return `<div class="shop ${done ? 'done' : ''}"><input type="checkbox" data-shop="${esc(x.key)}" ${done ? 'checked' : ''} aria-label="Cumpărat: ${esc(x.name)}"><button class="shop-b" data-f="pack" data-v="${esc(x.key)}"><span><b>${esc(x.name)}</b><small>${esc(l.note)}</small></span><em><b>${esc(l.qty)}</b><small>${esc(l.what)}</small></em></button></div>`; }).join('')}`).join('')}
+    ${s.fuel.shopDone.length ? '<button class="ghost wide" data-f="shopclear">Debifează tot</button>' : ''}</details>` : ''}`;
 }
 
 function water() {
@@ -269,8 +277,8 @@ function openSwap(mi: number, ii: number) {
   const meal = list[mi]!;
   const it = meal.items[ii]!;
   const rest = meal.items.filter((_, k) => k !== ii).map((x) => pantry.map.get(x.foodId)?.name ?? '');
-  const alt = alternatives(it.role, it.foodId, pantry.foods, s.fuel.prefs, rest);
-  ctx.open(`<h2>Schimbă ${esc(pantry.map.get(it.foodId)?.name ?? '')}</h2><p class="hint">Masa se recalculează ca să păstreze macronutrienții.</p>${alt.map((f) => `<button class="row" data-f="swgo" data-m="${mi}" data-i="${ii}" data-v="${f.id}"><span><b>${esc(f.name)}</b></span><em>${nb(n0(f.kcal), 'kcal')}<small>la 100 g</small></em></button>`).join('') || '<p class="hint">Nicio variantă care să respecte regulile mesei și preferințele tale.</p>'}`);
+  const alt = alternatives(it.role, it.foodId, kitchen(), s.fuel.prefs, rest);
+  ctx.open(`<h2>Schimbă ${esc(pantry.map.get(it.foodId)?.name ?? '')}</h2><p class="hint">Masa se recalculează ca să păstreze macronutrienții.</p>${alt.map((f) => { const after = substitute(meal, ii, f, pantry.map).items.find((x) => x.foodId === f.id); return `<button class="row" data-f="swgo" data-m="${mi}" data-i="${ii}" data-v="${f.id}"><span><b>${esc(f.name)}</b><small>${f.source === 'mine' ? 'Alimentele mele · ' : ''}${nb(n0(f.p), 'g')} P, ${nb(n0(f.c), 'g')} C, ${nb(n0(f.f), 'g')} G la 100 g</small></span><em>${after ? nb(n0(after.g), 'g') : ''}<small>în masă</small></em></button>`; }).join('') || '<p class="hint">Nicio variantă care să respecte regulile mesei și preferințele tale.</p>'}`);
 }
 
 const entriesOf = (m: Meal) => m.items.flatMap((it) => { const f = pantry.map.get(it.foodId); return f ? [entryFrom(f, it.g)] : []; });
@@ -338,7 +346,7 @@ async function openTiming(date: string, kind: 'pre' | 'post' | 'snack') {
   const tag = kind === 'post' ? 'După antrenament' : kind === 'snack' ? 'Gustare înainte de antrenament' : 'Înainte de antrenament';
   const [h = 0, m = 0] = t.start.split(':').map(Number);
   const time = kind === 'snack' ? (t.pre?.snackTime ?? toTime(h * 60 + m - 45)) : slot.mealTime;
-  pending = kind === 'snack' ? snackOptions(t.pre?.snackC || Math.min(30, Math.round(slot.c * 0.5)), pantry.foods, s.fuel.prefs, time, tag) : mealOptions({ p: slot.p, c: slot.c, f: slot.f }, pantry.foods, s.fuel.prefs, time, tag, Date.now() % 97);
+  pending = kind === 'snack' ? snackOptions(t.pre?.snackC || Math.min(30, Math.round(slot.c * 0.5)), kitchen(), s.fuel.prefs, time, tag) : mealOptions({ p: slot.p, c: slot.c, f: slot.f }, kitchen(), s.fuel.prefs, time, tag, Date.now() % 97);
   ctx.open(`<h2>${esc(tag)}</h2><p class="hint">Din baza de alimente, cu valorile ei reale. Mesele rămase se ajustează ca ziua să iasă pe țintă.</p>${pending.map((o, k) => { const g = macros(o.items, pantry.map); return `<button class="row" data-f="tplace" data-d="${date}" data-v="${k}"><span><b>${esc(o.name)}</b><small>${o.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ')}</small></span><em>${nb(n0(g.kcal), 'kcal')}<small>${nb(n0(g.c), 'g')} carbo</small></em></button>`; }).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
 }
 
@@ -380,8 +388,26 @@ function openOptions(mi: number) {
   const s = ctx.get();
   const m = s.fuel.plan[mealDay]![mi]!;
   const g = macros(m.items, pantry.map);
-  pending = mealOptions(g, pantry.foods, s.fuel.prefs, m.time, m.tag, Date.now() % 97, m.name);
+  pending = mealOptions(g, kitchen(), s.fuel.prefs, m.time, m.tag, Date.now() % 97, m.name);
   ctx.open(`<h2>${esc(m.tag || 'Alte variante')}</h2><p class="hint">Aceleași macronutrienți, alte alimente.</p>${pending.map((o, k) => { const t = macros(o.items, pantry.map); return `<button class="row" data-f="optgo" data-m="${mi}" data-v="${k}"><span><b>${esc(o.name)}</b><small>${o.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ')}</small></span><em>${nb(n0(t.kcal), 'kcal')}<small>${nb(n0(t.c), 'g')} carbo</small></em></button>`; }).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
+}
+
+/** The pack on the shelf for one item of the shopping list: the user's correction stays saved (Fuel.packs). */
+function openPack(key: string) {
+  const s = ctx.get();
+  const std = Object.values(BUY).find((b) => b.name === key) ?? null;
+  const mine = s.custom.find((f) => f.name === key);
+  const unit = std?.unit ?? 'g';
+  const cur = s.fuel.packs[key] ?? std?.pack ?? mine?.pack ?? 0;
+  ctx.open(`<h2>${esc(key)}</h2><p class="hint">${std ? `Standard: ${esc(std.label)}.` : 'Fără pachet standard.'} Scrie cât are pachetul pe care îl cumperi${unit === 'buc' ? ', în bucăți' : unit === 'ml' ? ', în ml' : ', în grame'}; 0 = la kilogram.</p>
+    <form id="pkf"><label class="field">Pachetul<input name="pack" type="text" inputmode="numeric" value="${cur}" autocomplete="off"></label><button class="primary wide">Salvează</button></form>
+    ${s.fuel.packs[key] != null ? '<button class="ghost wide" data-f="packreset" data-v="' + esc(key) + '">Revino la standard</button>' : ''}`, esc(key));
+  document.querySelector<HTMLFormElement>('#pkf')!.addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    const n = Math.round(parseNum(new FormData(ev.target as HTMLFormElement).get('pack')));
+    if (!(n >= 0)) { ctx.toast('Scrie un număr.'); return; }
+    s.fuel.packs[key] = n; shopOpen = true; ctx.commit(); ctx.close(); ctx.render(); ctx.toast('Pachet salvat.');
+  });
 }
 
 export function drink(ml: number) {
@@ -452,6 +478,9 @@ export function fuelAction(el: HTMLElement): boolean {
     ctx.toast('Supliment șters.', () => { s.supps = list; ctx.commit(); ctx.render(); });
   }
   if (a === 'mic') microWeek = v === '1';
+  if (a === 'pack') { openPack(v); return true; }
+  if (a === 'shopclear') { s.fuel.shopDone = []; shopOpen = true; }
+  if (a === 'packreset') { delete s.fuel.packs[v]; shopOpen = true; ctx.close(); }
   ctx.commit(); ctx.render();
   return true;
 }
@@ -495,6 +524,7 @@ export function fuelBind() {
   on('#rem', (i) => { s.remindMin = parseNum(i.value) || 0; save(); if (s.remindMin && 'Notification' in window) void Notification.requestPermission(); });
   document.querySelectorAll<HTMLInputElement>('[data-factor]').forEach((i) => i.addEventListener('change', () => { s.fuel.factors[i.dataset['factor'] as Demand] = Math.min(2, Math.max(0.3, parseNum(i.value) || 1)); save(); }));
   document.querySelectorAll<HTMLInputElement>('[data-shop]').forEach((i) => i.addEventListener('change', () => { const id = i.dataset['shop']!; s.fuel.shopDone = i.checked ? [...s.fuel.shopDone, id] : s.fuel.shopDone.filter((x) => x !== id); i.closest('.shop')?.classList.toggle('done', i.checked); ctx.commit(); }));
+  document.querySelector<HTMLDetailsElement>('#shopc')?.addEventListener('toggle', (ev) => { shopOpen = (ev.target as HTMLDetailsElement).open; });
   document.querySelectorAll<HTMLInputElement>('[data-take]').forEach((i) => i.addEventListener('change', () => { const t = ctx.today(); const list = s.suppLog[t] ?? []; s.suppLog[t] = i.checked ? [...list, i.dataset['take']!] : list.filter((x) => x !== i.dataset['take']); ctx.commit(); }));
   const form = (id: string, fn: (d: FormData) => void) => document.querySelector<HTMLFormElement>(id)?.addEventListener('submit', (ev) => { ev.preventDefault(); fn(new FormData(ev.target as HTMLFormElement)); save(); });
   form('#pf', (d) => { s.fuel.prefs = { ...s.fuel.prefs, meals: Number(d.get('meals')) as 3 | 4, exclude: String(d.get('exclude')), allergies: String(d.get('allergies')), maxCook: parseNum(d.get('maxCook')) || 30 }; });

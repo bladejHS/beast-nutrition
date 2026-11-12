@@ -3,7 +3,7 @@ import { ctx, esc, n0 } from '../app.ts';
 import { CARB_LABEL, DEMAND_LABEL, type DayPlan, type Demand } from '../logic/training.ts';
 import { configView, insightsView, timingView } from './carbmore.ts';
 import { dayDetail, weekView } from './carbweek.ts';
-import { back, banner } from './parts.ts';
+import { back, head } from './parts.ts';
 
 export type View = 'week' | 'timing' | 'insights' | 'config';
 const TABS: [View, string][] = [['week', 'Săptămâna'], ['timing', 'Timing'], ['insights', 'Tipare'], ['config', 'Reguli']];
@@ -25,7 +25,7 @@ export function carbsHtml() {
   if (cv.detail) return dayDetail(cv.detail);
   const s = ctx.get();
   const views: Record<View, () => string> = { week: weekView, timing: timingView, insights: insightsView, config: configView };
-  const top = cv.view === 'config' ? banner('engine', 'Reguli', 'Cum devine antrenamentul țintă de carbohidrați.') : banner('carbs', 'Carb Cycling', 'Carbohidrații urmează antrenamentele, totalul săptămânii rămâne.');
+  const top = cv.view === 'config' ? head('engine', 'Reguli', 'Cum devine antrenamentul țintă de carbohidrați.') : head('carbs', 'Carb Cycling', 'Carbohidrații urmează antrenamentele, totalul săptămânii rămâne.');
   return `${back()}${top}<nav class="cnav" aria-label="Carb Cycling">${TABS.map(([k, l]) => `<button data-f="cv" data-v="${k}" class="${cv.view === k ? 'on' : ''}" ${cv.view === k ? 'aria-current="page"' : ''}>${l}</button>`).join('')}</nav>
   ${s.fuel.cycling ? '' : `<section class="card"><label class="switch"><input type="checkbox" id="cyc"><i></i><span>Folosește distribuția în ținta zilnică</span></label><p class="hint">Oprit: ținta zilnică rămâne cea din plan, cifrele de aici arată cum ar fi.</p></section>`}
   ${views[cv.view]()}`;

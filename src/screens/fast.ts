@@ -1,5 +1,5 @@
 import { ctx, esc, hm, nowMinutes } from '../app.ts';
-import { back, banner } from './parts.ts';
+import { back, head } from './parts.ts';
 import { weekday } from '../logic/calc.ts';
 import {
   activate, adherence, advice, assessmentDue, currentRatio, dayInPhase, daysLeft, decide, FIXED, fastHours, pause, PHASES, phaseLength,
@@ -126,7 +126,7 @@ let view: 'dash' | 'pick' = 'dash';
 export function fastHtml() {
   const s = ctx.get();
   const onProg = s.fast.active?.type === 'prog' && view === 'dash';
-  return `${back('Fuel', 'data-tab="fuel"')}${banner('advanced', 'Post', 'Un singur program activ. Istoricul rămâne salvat când schimbi.')}${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
+  return `${back('Fuel', 'data-tab="fuel"')}${head('advanced', 'Post', 'Un singur program activ. Istoricul rămâne salvat când schimbi.')}${onProg ? `${progDash()}<button class="ghost wide" data-fast="pick">Alte protocoale</button>` : chooser()}${science()}`;
 }
 
 function switchTo(next: Parameters<typeof activate>[1]) {

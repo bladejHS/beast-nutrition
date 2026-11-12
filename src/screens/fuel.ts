@@ -13,7 +13,7 @@ import { toTime, type Tolerance } from '../logic/timing.ts';
 import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../logic/training.ts';
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
-import { back, banner, cardSrc, demandTag, listRow } from './parts.ts';
+import { back, demandTag, head, icon, listRow } from './parts.ts';
 import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 
 type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery';
@@ -44,6 +44,8 @@ function sleepAvg(): number | null {
 export const waterOn = (d: string) => (ctx.get().drinks[d] ?? []).reduce((a, x) => a + x.ml, 0);
 const litres = (ml: number) => nb(n1(ml / 1000), 'L');
 
+/** The Fuel tab (redrawn 2026-11-12, the user did not like the photo tiles): today's fuel in numbers first, then the
+ *  meal plan as the main tile, then the tools as plates with a line icon, a live number and, where it has one, a bar. */
 function home() {
   const s = ctx.get();
   const today = ctx.today();
@@ -51,23 +53,33 @@ function home() {
   const sleep = sleepAvg();
   const go = (v: Sub) => `data-f="sub" data-v="${v}"`;
   const w = windowFor(s.fast, weekday(today));
-  const meals = (s.fuel.plan[today] ?? []).length;
-  const tiles: [string, string, string, string][] = [
-    ['carbs', 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[fuelWeek(mondayOf(today)).days.find((d) => d.date === today)?.demand ?? 'moderate'] : 'Oprit', go('carbs')],
-    ['meals', 'Plan de mese', meals ? `${meals} mese azi` : 'Generează ziua', go('meals')],
-    ['water', 'Hidratare', `${litres(waterOn(today))} din ${litres(waterTarget(latestKg(), s.waterMlKg))}`, go('water')],
-    ['supp', 'Suplimente', s.supps.length ? `${(s.suppLog[today] ?? []).length} din ${s.supps.length} luate` : 'Ce merită luat', go('supp')],
-    ['recovery', 'Recuperare', sleep == null ? 'Somn și încărcare' : `${nb(n1(sleep), 'h')} somn`, go('recovery')],
-    ['analytics', 'Raport', 'Săptămâna în cifre', go('report')],
-  ];
-  return `${banner('nutrition', 'Fuel', 'Instrumentele din spatele zilei tale.')}
-  ${t.linked ? '' : '<p class="hint">Inner Beast nu a fost deschis în acest browser, așa că folosesc săptămâna standard Inner Beast.</p>'}
-  <div class="fcards">${tiles.map(([k, label, state, attr], i) => `<button class="fc" ${attr}><img src="${cardSrc(k)}" alt="" width="580" height="480" ${i > 3 ? 'loading="lazy"' : ''} style="view-transition-name:card-${k}"><span class="fc-t"><b>${label}</b><small>${state}</small></span></button>`).join('')}</div>
+  const target = dayFuel(today);
+  const demand = fuelWeek(mondayOf(today)).days.find((d) => d.date === today)?.demand ?? 'moderate';
+  const plan = s.fuel.plan[today] ?? [];
+  const next = plan.find((m) => !m.done);
+  const eaten = plan.filter((m) => m.done).length;
+  const water = waterOn(today), waterT = waterTarget(latestKg(), s.waterMlKg);
+  const taken = (s.suppLog[today] ?? []).length;
+  const fast = w ? status(w, nowMinutes()) : null;
+  const bar = (f: number) => `<i class="fbar"><u style="transform:scaleX(${Math.max(0, Math.min(1, f)).toFixed(3)})"></u></i>`;
+  const tile = (k: string, attr: string, title: string, value: string, sub: string, f?: number) =>
+    `<button class="ft" ${attr}><span class="ft-ic">${icon(k)}</span><span class="ft-t">${title}</span><b class="ft-v">${value}</b><small>${sub}</small>${f == null ? '' : bar(f)}</button>`;
+  return `<header class="fhero"><p class="fk">Fuel · ${esc(dayLong(today))}</p><h1 class="ft-h"><span>Fuel</span></h1><i class="fblade"></i>
+    <div class="fday">${demandTag(demand)}<span><b>${n0(target.kcal)}</b> kcal</span><span><b>${n0(target.p)}</b> P</span><span><b>${n0(target.c)}</b> C</span><span><b>${n0(target.f)}</b> G</span></div></header>
+  <button class="fmain" ${go('meals')}><span class="ft-ic">${icon('meals')}</span><span class="fm-l"><small>Plan de mese</small><b>${next ? esc(next.name) : plan.length ? 'Toate mesele notate' : 'Generează ziua'}</b><em>${next ? `${esc(next.time)}${next.tag ? ` · ${esc(next.tag)}` : ''} · ${eaten} din ${plan.length} mâncate` : plan.length ? `${plan.length} mese azi` : 'Mese pe ținta de azi, cu lista de cumpărături'}</em></span><i class="chev" aria-hidden="true"></i></button>
+  <div class="ftiles">
+    ${tile('water', go('water'), 'Hidratare', `${n1(water / 1000)}<small> / ${n1(waterT / 1000)} L</small>`, water >= waterT ? 'Ținta e atinsă' : `Mai ai ${n1(Math.max(0, waterT - water) / 1000)} L`, water / waterT)}
+    ${tile('carbs', go('carbs'), 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[demand] : 'Oprit', s.fuel.cycling ? `${n0(target.c)} g carbohidrați azi` : 'Carbohidrații după antrenament')}
+    ${tile('supp', go('supp'), 'Suplimente', s.supps.length ? `${taken}<small> / ${s.supps.length}</small>` : '—', s.supps.length ? (taken >= s.supps.length ? 'Toate luate azi' : 'luate azi') : 'Ce merită luat', s.supps.length ? taken / s.supps.length : undefined)}
+    ${tile('recovery', go('recovery'), 'Recuperare', sleep == null ? '—' : `${n1(sleep)}<small> h</small>`, sleep == null ? 'Somnul din Inner Beast' : 'somn, media pe 7 nopți', sleep == null ? undefined : sleep / 8)}
+    ${tile('advanced', 'data-tab="post"', 'Post', w ? esc(w.ratio) : 'Oprit', w ? `${fast?.eating ? 'Fereastra e deschisă' : 'În post'} · ${esc(w.start)}–${esc(w.end)}` : '12:12, 14:10 sau 16:8')}
+    ${tile('analytics', go('report'), 'Raport', 'Săptămâna', 'în cifre, din ce ai notat')}
+  </div>
   <div class="list">
-    ${listRow('data-tab="post"', 'Post', w ? `${w.ratio}, fereastră ${w.start}–${w.end}` : 'Oprit')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
-  </div>`;
+  </div>
+  ${t.linked ? '' : '<p class="hint">Inner Beast nu a fost deschis în acest browser, așa că folosesc săptămâna lui standard.</p>'}`;
 }
 
 function recovery() {
@@ -78,7 +90,7 @@ function recovery() {
   const avg = sleepAvg();
   const { days } = fuelWeek(mondayOf(today), t);
   const load = dates.reduce((a, d) => a + dayRating(d, t).rating.load, 0);
-  return `${back()}${banner('recovery', 'Recuperare', 'Somnul și încărcarea, din ce ai notat în Inner Beast.')}
+  return `${back()}${head('recovery', 'Recuperare', 'Somnul și încărcarea, din ce ai notat în Inner Beast.')}
   <section class="card"><h2>Somn, ultimele 7 nopți</h2>
     ${avg == null ? '<p class="hint">Niciun somn notat. Îl notezi pe ecranul Azi din Inner Beast.</p>' : `<p class="big"><b>${n1(avg)}</b> ore în medie</p>
     <div class="sl">${dates.map((d) => { const h = t.sleep[d]; return `<div><b>${h == null ? '–' : n1(h)}</b><i><u data-bar="sl-${d}" data-axis="y" data-to="${Math.min(1, (h ?? 0) / 10)}"></u></i><span>${esc(dayShort(d))}</span></div>`; }).join('')}</div>`}
@@ -146,7 +158,7 @@ function meals() {
   const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
   const { days } = fuelWeek(monday);
   const dem = (d: string) => days.find((x) => x.date === d)!.demand;
-  return `${back()}${banner('meals', 'Plan de mese', 'Mese calculate pe ținta zilei, din valorile USDA.')}
+  return `${back()}${head('meals', 'Plan de mese', 'Mese calculate pe ținta zilei, cu valorile reale ale alimentelor.')}
   <div class="wknav"><button class="ib" data-f="mwk" data-v="0" aria-label="Săptămâna curentă" ${mealWeek === 0 ? 'disabled' : ''}>‹</button><b>${mealWeek ? 'Săptămâna viitoare' : 'Săptămâna asta'}</b><button class="ib" data-f="mwk" data-v="1" aria-label="Săptămâna viitoare" ${mealWeek === 1 ? 'disabled' : ''}>›</button></div>
   <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}
@@ -176,7 +188,7 @@ function water() {
   const mins = sessionsOn(today).reduce((a, x) => a + x.min, 0);
   const fl = trainingFluid(mins, s.sweat);
   const w = windowFor(s.fast, weekday(today));
-  return `${back()}${banner('water', 'Hidratare')}
+  return `${back()}${head('water', 'Hidratare', 'Apa zilei, după greutatea ta și antrenament.')}
   <section class="card"><p class="big"><b>${n1(drank / 1000)}</b> din ${litres(target)}</p>
     <div class="track"><div data-bar="wtr" data-to="${Math.min(1, drank / target)}"></div></div>
     <div class="chips four">${[200, 250, 330, 500].map((m) => `<button data-f="drink" data-v="${m}">+${m} ml</button>`).join('')}</div>
@@ -201,7 +213,7 @@ function supp() {
   const today = ctx.today();
   const taken = s.suppLog[today] ?? [];
   const issues = analyseStack(s.supps);
-  return `${back()}${banner('supp', 'Suplimente', 'Informații educaționale, nu sfaturi medicale.')}
+  return `${back()}${head('supp', 'Suplimente', 'Informații educaționale, nu sfaturi medicale.')}
   ${issues.map((i) => `<p class="${i.level === 'warn' ? 'warn' : 'hint'} issue">${esc(i.text)}</p>`).join('')}
   ${s.supps.map((x) => `<section class="card sup"><label class="check"><input type="checkbox" data-take="${x.id}" ${taken.includes(x.id) ? 'checked' : ''}><span><b>${esc(x.product)}</b> ${esc(x.brand)}<small class="hint">${[x.ingredient, x.serving, x.time, x.freq].filter(Boolean).map(esc).join(', ')}</small></span></label><button class="xs" data-f="delsup" data-v="${x.id}" aria-label="Șterge ${esc(x.product)}">×</button></section>`).join('')}
   <details class="card"><summary><b>Adaugă un supliment</b></summary><form id="suf">
@@ -229,7 +241,7 @@ function micro() {
     return `<details class="mic"><summary><span>${m.name}</span>${m.limit ? `<span class="hint">limită, nu țintă</span>` : `<span class="track"><div data-bar="m-${m.key}" data-to="${Math.min(1, pct)}"></div></span>`}<em>${Math.round(pct * 100)}%</em></summary>
       <p class="hint">${val.toLocaleString('ro-RO', { maximumFractionDigits: val < 10 ? 1 : 0 })} ${m.unit} din referința de ${ref} ${m.unit}${m.limit ? ', iar peste ea nu e o țintă' : ''}. Date pentru ${Math.round(cov * 100)}% din calorii, deci valoarea reală poate fi mai mare. Surse: ${esc(m.sources)}.</p></details>`;
   };
-  return `${back()}${banner('food', 'Micronutrienți', 'Estimări din alimentele notate. Nu arată o carență.')}
+  return `${back()}${head('food', 'Micronutrienți', 'Estimări din alimentele notate. Nu arată o carență.')}
   <div class="seg"><button data-f="mic" data-v="0" class="${microWeek ? '' : 'on'}">Azi</button><button data-f="mic" data-v="1" class="${microWeek ? 'on' : ''}">Media pe 7 zile</button></div>
   ${entries.length ? `<section class="card"><h2>Vitamine</h2>${MICROS.filter((m) => m.group === 'v').map(row).join('')}</section><section class="card"><h2>Minerale</h2>${MICROS.filter((m) => m.group === 'm').map(row).join('')}</section>` : '<p class="hint pad">Notează alimente ca să apară datele. Valorile lipsă nu sunt tratate ca zero.</p>'}
   <p class="hint">Iodul nu există în baza USDA, deci nu poate fi calculat. Produsele de marcă și alimentele manuale nu au micronutrienți.</p>`;
@@ -277,7 +289,7 @@ function report() {
     ${r.weight != null ? `<div class="line"><span>Greutate medie</span><b>${nb(n1(r.weight), 'kg')}${r.weightChange != null ? ` (${r.weightChange > 0 ? '+' : ''}${r.weightChange.toLocaleString('ro-RO', { maximumFractionDigits: 2 })})` : ''}</b></div>` : ''}
     ${r.waist != null ? `<div class="line"><span>Talie</span><b>${nb(n1(r.waist), 'cm')}</b></div>` : ''}
     ${r.recs.map((x) => `<p class="coach">${esc(x)}</p>`).join('')}</details>`;
-  return `${back()}${banner('analytics', 'Raport', 'Doar date salvate de tine. Legăturile dintre cifre nu dovedesc o cauză.')}
+  return `${back()}${head('analytics', 'Raport', 'Doar date salvate de tine. Legăturile dintre cifre nu dovedesc o cauză.')}
   ${card(current, 'Săptămâna curentă, până acum', true)}${list.map((r) => card(r, `Săptămâna din ${new Date(`${r.week}T12:00:00`).toLocaleDateString('ro-RO', { day: 'numeric', month: 'long' })}`, false)).join('')}`;
 }
 

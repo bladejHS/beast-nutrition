@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { due, freshGlp1, nextSite, titration, weeksAtDose, type Glp1 } from './glp1.ts';
+import { due, freshGlp1, nextSite, titration, units, vialLeft, weeksAtDose, type Glp1 } from './glp1.ts';
 
 // 2026-11-11 is a Wednesday (day 2)
 const g = (over: Partial<Glp1> = {}): Glp1 => ({ ...freshGlp1(), on: true, start: '2026-11-11', ...over });
@@ -50,4 +50,16 @@ test('the dose steps up only after 4 weeks, without strong nausea, when the loss
   assert.equal(titration(g({ mg: 2.4, shots: four(2.4) }), weekly(134, 0.2)).kind, 'top');
   // a dose change resets the count
   assert.equal(weeksAtDose(g({ mg: 0.5, shots: four(0.25) })), 0);
+});
+
+test('units on a U-100 syringe for a 10 mg vial', () => {
+  // 2 ml → 5 mg/ml: 0.25 mg = 0.05 ml = 5 units
+  assert.equal(units(0.25, { mg: 10, ml: 2 }), 5);
+  assert.equal(units(2.4, { mg: 10, ml: 2 }), 48);
+  assert.equal(units(0.25, { mg: 10, ml: 3 }), 7.5);
+  assert.equal(units(1.7, { mg: 10, ml: 3 }), 51);
+  assert.equal(units(0.25, { mg: 10, ml: 1 }), 2.5);
+  assert.equal(units(1, { mg: 0, ml: 2 }), 0);
+  const v = g({ vial: { mg: 10, ml: 2, mixed: '2026-11-11' }, shots: [{ date: '2026-11-04', mg: 0.25, site: 0 }, { date: '2026-11-11', mg: 0.5, site: 1 }, { date: '2026-11-18', mg: 0.5, site: 2 }] });
+  assert.equal(vialLeft(v), 9);
 });

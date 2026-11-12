@@ -807,3 +807,13 @@ body:has(.fab) #toast { right: 92px; }
 .chips.five { grid-template-columns: repeat(5, 1fr); }
 .chips.seven button, .chips.five button { min-width: 0; padding: 0; }
 .chips button[aria-pressed='true'] { color: #fff; background: rgba(244, 114, 182, .22); box-shadow: inset 0 0 0 1.5px #f472b6; }
+
+.vial-in { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vial-in .field small { display: block; margin-top: 4px; text-transform: none; letter-spacing: 0; }
+table.units { width: 100%; margin: 12px 0 4px; border-collapse: collapse; font-size: 15px; }
+table.units th { padding: 6px 4px; text-align: left; font-size: 12px; color: var(--t3); }
+table.units td { padding: 9px 4px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.units td:nth-child(2) { font-weight: 800; color: var(--t1); }
+table.units tr.now td { color: #f9a8d4; }
+ol.steps { margin: 8px 0 10px; padding-left: 20px; color: var(--t2); font-size: 14.5px; line-height: 1.5; }
+ol.steps li + li { margin-top: 6px; }

@@ -28,6 +28,17 @@ export interface Glp1 {
   day: number;
   start: string;
   shots: Shot[];
+  /** A vial of powder mixed with bacteriostatic water, instead of a pen. */
+  vial?: Vial | null;
+}
+
+export interface Vial {
+  /** Semaglutide in the vial, mg. */
+  mg: number;
+  /** Bacteriostatic water added, ml. */
+  ml: number;
+  /** Date it was mixed. */
+  mixed: string;
 }
 
 export const freshGlp1 = (): Glp1 => ({ on: false, mg: LADDER[0], day: 2, start: '', shots: [] });
@@ -108,3 +119,23 @@ export function titration(g: Glp1, weights: Record<string, number>): Step {
   const i = LADDER.findIndex((x) => x === g.mg);
   return i >= 0 && i < LADDER.length - 1 ? { kind: 'up', rate: loss, to: LADDER[i + 1]! } : { kind: 'top', rate: loss };
 }
+
+/** Units on a U-100 insulin syringe (100 units = 1 ml) for a dose, rounded to the half unit the small syringes show. */
+export function units(doseMg: number, v: Pick<Vial, 'mg' | 'ml'>): number {
+  if (!(v.mg > 0 && v.ml > 0)) return 0;
+  return Math.round(((doseMg * v.ml) / v.mg) * 100 * 2) / 2;
+}
+
+/** The ml drawn for a dose. */
+export const doseMl = (doseMg: number, v: Pick<Vial, 'mg' | 'ml'>) => (v.mg > 0 ? (doseMg * v.ml) / v.mg : 0);
+
+/** Semaglutide left in the vial: what was mixed, minus every dose since. */
+export function vialLeft(g: Glp1): number | null {
+  const v = g.vial;
+  if (!v) return null;
+  const used = g.shots.filter((x) => x.date >= v.mixed).reduce((t, x) => t + x.mg, 0);
+  return Math.max(0, v.mg - used);
+}
+
+/** Days since the vial was mixed. */
+export const vialAge = (v: Vial, today: string) => gap(v.mixed, today);

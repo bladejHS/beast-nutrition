@@ -3,9 +3,9 @@
     <filter id="u15h" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
     <filter id="u15g" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="5"/></filter>
   </defs>
-  <path d="M120 66L140 62L174 26L190 86L210 108L197 118L214 146L186 156L160 190L146 212L132 226L120 230L108 226L94 212L80 190L54 156L26 146L43 118L30 108L50 86L66 26L100 62Z" fill="#0b6fd6" opacity="0.9" filter="url(#u15h)"/>
+  <path d="M120 66L140 62L174 26L190 86L210 108L197 118L214 146L186 156L160 190L146 212L132 226L120 230L108 226L94 212L80 190L54 156L26 146L43 118L30 108L50 86L66 26L100 62Z" fill="#a3101f" opacity="0.9" filter="url(#u15h)"/>
   <path d="M120 66L140 62L174 26L190 86L210 108L197 118L214 146L186 156L160 190L146 212L132 226L120 230L108 226L94 212L80 190L54 156L26 146L43 118L30 108L50 86L66 26L100 62Z" fill="#232835"/><path d="M151 61L172 38L182 75Z" fill="#11141b"/><path d="M58 75L68 38L89 61Z" fill="#11141b"/>
   <path d="M120 66L140 62L174 26L190 86L210 108L197 118L214 146L186 156L160 190L146 212L132 226L120 230L108 226L94 212L80 190L54 156L26 146L43 118L30 108L50 86L66 26L100 62Z" fill="none" stroke="url(#u15r)" stroke-opacity="1" stroke-width="9" stroke-linejoin="round"/>
-  <g filter="url(#u15g)"><path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#2f8cff"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#2f8cff"/></g>
-  <path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#2f8cff"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#2f8cff"/>
-  <path d="M137.2 117.46L160.13 105.45L154.67 113.09Z" fill="#cfe6ff" opacity=".85"/><path d="M85.33 113.09L79.87 105.45L102.8 117.46Z" fill="#cfe6ff" opacity=".85"/></g></g></svg>
+  <g filter="url(#u15g)"><path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#e0192d"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#e0192d"/></g>
+  <path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#e0192d"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#e0192d"/>
+  <path d="M137.2 117.46L160.13 105.45L154.67 113.09Z" fill="#ffd0d5" opacity=".85"/><path d="M85.33 113.09L79.87 105.45L102.8 117.46Z" fill="#ffd0d5" opacity=".85"/></g></g></svg>

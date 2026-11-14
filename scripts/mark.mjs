@@ -5,7 +5,7 @@
 // lighter the head, the thicker the rim and the bigger the eyes, so the wolf still reads at 16 px.
 
 /** The light of this app: the eyes, their core, the halo behind the head and the field's glow. */
-const P = { eye: '#2f8cff', core: '#cfe6ff', halo: '#0b6fd6', glow: '#0b6fd6', deep: '#0a2f5c' };
+const P = { eye: '#e0192d', core: '#ffd0d5', halo: '#a3101f', glow: '#a3101f', deep: '#3d060c' };
 
 const C = 120;
 const mir = ([x, y]) => [2 * C - x, y];

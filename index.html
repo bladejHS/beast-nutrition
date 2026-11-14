@@ -43,28 +43,28 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 @keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
 .sp-smoke,.sp-flash,.sp-vig{position:absolute;inset:0;pointer-events:none}
 .sp-smoke{opacity:0}
-.sp-smoke b{position:absolute;width:120vmax;height:120vmax;border-radius:50%;background:radial-gradient(closest-side,rgba(76,10,18,.62),rgba(31,7,10,.3) 55%,transparent 72%);will-change:transform}
+.sp-smoke b{position:absolute;width:120vmax;height:120vmax;border-radius:50%;background:radial-gradient(closest-side,rgba(16,38,76,.62),rgba(7,17,31,.3) 55%,transparent 72%);will-change:transform}
 .sp-smoke b:nth-child(1){left:-70vmax;top:-30vmax}.sp-smoke b:nth-child(2){right:-74vmax;top:-12vmax}.sp-smoke b:nth-child(3){left:-30vmax;bottom:-84vmax}
 .sp-go .sp-smoke{animation:sp-in .5s ease-out both}
 .sp-go .sp-smoke b:nth-child(1){animation:sp-drift1 2.6s linear both}.sp-go .sp-smoke b:nth-child(2){animation:sp-drift2 2.6s linear both}.sp-go .sp-smoke b:nth-child(3){animation:sp-drift3 2.6s linear both}
 .sp-vig{background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(0,0,0,.72) 100%)}
 #sp-cv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.sp-flash{background:radial-gradient(circle at 50% 42%,#fff 0,#fff 5%,rgba(255,220,224,.85) 14%,rgba(214,31,51,.4) 32%,rgba(5,7,11,0) 56%);opacity:0}
+.sp-flash{background:radial-gradient(circle at 50% 42%,#fff 0,#fff 5%,rgba(205,232,255,.85) 14%,rgba(47,140,255,.4) 32%,rgba(5,7,11,0) 56%);opacity:0}
 .sp-cam{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:clamp(24px,4.6vh,38px);--w:min(54vw,33vh,300px)}
 .sp-stage{position:relative;width:var(--w);aspect-ratio:680/801}
-.sp-halo{position:absolute;left:50%;top:50%;width:170%;aspect-ratio:1;margin:-85% 0 0 -85%;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(closest-side,rgba(163,16,31,.32),rgba(163,16,31,.08) 55%,transparent 74%)}
+.sp-halo{position:absolute;left:50%;top:50%;width:170%;aspect-ratio:1;margin:-85% 0 0 -85%;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(closest-side,rgba(22,119,255,.32),rgba(22,119,255,.08) 55%,transparent 74%)}
 .sp-emb{position:absolute;inset:0;opacity:0;transform:scale(1.1)}
-.sp-emb img{display:block;width:100%;height:100%;filter:drop-shadow(0 0 1px rgba(255,92,108,.85)) drop-shadow(0 0 16px rgba(163,16,31,.55))}
+.sp-emb img{display:block;width:100%;height:100%;filter:drop-shadow(0 0 1px rgba(72,207,255,.85)) drop-shadow(0 0 16px rgba(22,119,255,.55))}
 .sp-id{position:relative;display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px)}
 .sp-name{margin:0;font:900 extra-condensed clamp(46px,14vw,84px)/.9 'Saira','Arial Narrow',sans-serif;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
 .sp-name i{display:inline-block;font-style:normal;opacity:0;color:#f2f6fc;text-shadow:0 0 0 transparent}
-.sp-name .b{color:#ff5c6c}
+.sp-name .b{color:#48cfff}
 .sp-name .sp-gap{width:.28em}
-.sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#a3101f 22%,#ff5c6c 50%,#a3101f 78%,transparent);transform:scaleX(0);opacity:0}
+.sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#1677ff 22%,#48cfff 50%,#1677ff 78%,transparent);transform:scaleX(0);opacity:0}
 .sp-tag{margin:0;font:700 semi-condensed clamp(11px,3vw,13.5px)/1.2 'Saira',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#b9c3d0;white-space:nowrap;opacity:0}
 .sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));padding:10px 12px;border:0;background:none;color:#b9c3d0;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
 .sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
-.sp-skip:focus-visible{outline:2px solid #ff5c6c;opacity:1}
+.sp-skip:focus-visible{outline:2px solid #48cfff;opacity:1}
 /* the impact, keyed off .sp-hit (the engine adds it when the sparks lock) */
 .sp-hit .sp-flash{animation:sp-flash .5s cubic-bezier(.16,1,.3,1) both}
 .sp-hit .sp-emb{animation:sp-burn .55s cubic-bezier(.2,.8,.2,1) .05s forwards}
@@ -78,17 +78,17 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 #splash.sp-fade{animation:none;opacity:0;transition:opacity .24s linear;pointer-events:none}
 /* the entry: a blue slash, and the splash wiped away behind it */
 #splash.sp-exit{animation:sp-wipe .46s cubic-bezier(.7,0,.2,1) forwards;pointer-events:none}
-#sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(163,16,31,.5) 34%,#a3101f 47%,#ffd0d5 50%,#a3101f 53%,rgba(163,16,31,.34) 68%,transparent)}
+#sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(22,119,255,.5) 34%,#1677ff 47%,#bfe6ff 50%,#1677ff 53%,rgba(22,119,255,.34) 68%,transparent)}
 #sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
 .sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Saira',system-ui,sans-serif;color:#f2f6fc}
-.sp-fail a{color:#ff5c6c;font-weight:700}
+.sp-fail a{color:#48cfff;font-weight:700}
 @keyframes sp-in{to{opacity:1}}
 @keyframes sp-drift1{to{transform:translate(9vmax,-3vmax)}}
 @keyframes sp-drift2{to{transform:translate(-8vmax,4vmax)}}
 @keyframes sp-drift3{to{transform:translate(5vmax,-6vmax)}}
 @keyframes sp-flash{0%{opacity:0}8%{opacity:1}100%{opacity:0}}
 @keyframes sp-burn{0%{opacity:0;transform:scale(1.1)}100%{opacity:1;transform:scale(1)}}
-@keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #ff5c6c,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #ff5c6c,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
+@keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #48cfff,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #48cfff,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
 @keyframes sp-rule{to{opacity:1;transform:none}}
 @keyframes sp-flicker{0%{opacity:.8}12%{opacity:.1}24%{opacity:.9}36%{opacity:.25}52%,100%{opacity:1}}
 @keyframes sp-wipe{from{clip-path:polygon(calc(-50% + 7vh) 0,220% 0,220% 100%,calc(-50% - 7vh) 100%)}to{clip-path:polygon(calc(130% + 7vh) 0,220% 0,220% 100%,calc(130% - 7vh) 100%)}}
@@ -96,9 +96,9 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 /* the fuel ring: three arcs, one per macronutrient, drawn after the impact */
 .sp-ring{position:absolute;left:50%;top:50%;width:134%;aspect-ratio:1;transform:translate(-50%,-50%);overflow:visible;pointer-events:none}
 .sp-ring circle{fill:none;stroke-width:2.4}
-.sp-ring .t{stroke:#2d1014;opacity:0}
+.sp-ring .t{stroke:#101c2d;opacity:0}
 .sp-ring .m{stroke-linecap:butt;stroke-dasharray:0 100;transform-origin:50% 50%;transform:rotate(var(--rot))}
-.sp-ring .p{stroke:#f2f6fc}.sp-ring .c{stroke:#a3101f}.sp-ring .f{stroke:#ff5c6c}
+.sp-ring .p{stroke:#f2f6fc}.sp-ring .c{stroke:#1677ff}.sp-ring .f{stroke:#48cfff}
 .sp-hit .sp-ring .t{animation:sp-in .3s ease-out .1s forwards}
 .sp-hit .sp-ring .p{animation:sp-arc .34s cubic-bezier(.3,0,.2,1) .2s forwards}
 .sp-hit .sp-ring .c{animation:sp-arc .42s cubic-bezier(.3,0,.2,1) .45s forwards}
@@ -185,7 +185,7 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
     sp.classList.add('sp-go');
     forge = window.BeastForge.create({
       canvas: document.getElementById('sp-cv'), mark: 'splash/umbra.webp', stage: sp.querySelector('.sp-stage'),
-      color: [163, 16, 31], hot: [255, 92, 108], count: 2400,
+      color: [22, 119, 255], hot: [72, 207, 255], count: 2400,
       onImpact: function () { sp.classList.add('sp-hit'); try { navigator.vibrate && navigator.vibrate(40); } catch (e) { /* not here */ } }
     });
     forge.start();

@@ -16,11 +16,11 @@
   /* studio white, measured on the lightest card (s3): t1 15:1, t2 7.6:1, t3 5.7:1 */
   --t1: #f3f5fa; --t2: #a9b2c2; --t3: #8f99ab;
   /* action, ice blue: white text on --act 4.9:1; --sky is for words on black (10:1); --glow is --act-hot as RGB */
-  --act: #a3101f; --act-0: #7a0c18; --act-hot: #d61f33; --blue: #f0485a; --sky: #ff8f9b; --glow: 214, 31, 51;
+  --act: #0b6fd6; --act-0: #0a4a9e; --act-hot: #2f8cff; --blue: #2f8cff; --sky: #6cc0ff; --glow: 47, 140, 255;
   /* demand, brightest = most fuel, each step also shown by the four-bar glyph */
-  --high: #ffe1e4; --moderate: #ff9aa5; --low: #e0465a; --rest: #7d6a70;
+  --high: #ddf2ff; --moderate: #78d0ff; --low: #3899f3; --rest: #5d7390;
   /* macros, the same three colours as the opening ring */
-  --mp: #f3f5fa; --mc: #f0485a; --mf: #ffb37a;
+  --mp: #f3f5fa; --mc: #2f8cff; --mf: #48cfff;
   /* done, as in Inner Beast: championship gold */
   --gold: #dcb35e; --gold-2: #f5d690;
   --warn: #ffc65c; --bad: #ff9d8c;
@@ -736,7 +736,7 @@ h1, .klass, .ft-h, .fhead h1, .ring-in b, .fm-l b, .ft-v, .qk b, .next-m .t, .bi
 [data-k='water'] { --ic: #38bdf8; }
 [data-k='scale'] { --ic: #fbbf24; }
 [data-k='plus'] { --ic: #34d399; }
-[data-k='carbs'] { --ic: #f0485a; }
+[data-k='carbs'] { --ic: #60a5fa; }
 [data-k='supp'] { --ic: #f472b6; }
 [data-k='recovery'] { --ic: #a78bfa; }
 [data-k='advanced'] { --ic: #fb923c; }
@@ -745,12 +745,12 @@ h1, .klass, .ft-h, .fhead h1, .ring-in b, .fm-l b, .ft-v, .qk b, .next-m .t, .bi
 [data-k='engine'] { --ic: #94a3b8; }
 [data-k='food'] { --ic: #facc15; }
 .qk.done .qk-ic { color: var(--bg) !important; background: var(--gold) !important; }
-.fmain { background: linear-gradient(120deg, #5c0711, var(--act) 55%, #d61f33) !important; border-radius: var(--r); }
+.fmain { background: linear-gradient(120deg, #1d4ed8, var(--act) 55%, #38bdf8) !important; border-radius: var(--r); }
 .fmain .ft-ic { border-radius: 12px; }
 
 /* buttons: pills */
 .primary, .ghost, .chip, .chips button, .seg, .seg button, input, select, .qadd { border-radius: 14px; clip-path: none !important; }
-.primary { background: linear-gradient(120deg, #5c0711, var(--act) 60%, var(--act-hot)); letter-spacing: .02em; text-transform: none; font-stretch: 100%; font-weight: 700; font-size: 16px; }
+.primary { background: linear-gradient(120deg, #1d4ed8, var(--act) 60%, var(--act-hot)); letter-spacing: .02em; text-transform: none; font-stretch: 100%; font-weight: 700; font-size: 16px; }
 .ghost { letter-spacing: .02em; text-transform: none; font-stretch: 100%; font-weight: 650; font-size: 15.5px; box-shadow: inset 0 0 0 1px var(--n5); }
 .seg { border-radius: 16px; padding: 4px; }
 .seg button { text-transform: none; font-stretch: 100%; font-weight: 650; letter-spacing: 0; font-size: 14.5px; border-radius: 12px; }
@@ -782,7 +782,7 @@ input, select { border-color: var(--n5); }
 
 /* the day's ring and the quick plates, softer */
 .dash { border-left-width: 1px !important; }
-.ring .rv { stroke: url(#none); stroke: #d61f33; filter: drop-shadow(0 0 6px rgba(214, 31, 51, .5)); }
+.ring .rv { stroke: url(#none); stroke: #3b82f6; filter: drop-shadow(0 0 6px rgba(59, 130, 246, .5)); }
 .dhead .wolf { opacity: .9; }
 .backbtn { letter-spacing: .04em; text-transform: none; font-size: 14px; font-stretch: 100%; font-weight: 600; }
 .mealc summary b, .mealc .mb b { font-stretch: 100%; text-transform: none; letter-spacing: 0; font-weight: 700; font-size: 16.5px; }

@@ -279,6 +279,8 @@ test('an easy day before a HIGH day gets a moderate share, and the week stays th
   assert.equal(off[2]!.prefuel, false);
   assert.ok(on[2]!.c > off[2]!.c);
   assert.ok(on[2]!.c > off[6]!.c, 'Wednesday gets more than an ordinary low day');
+  // and still less than a MODERATE day: the three easy levels stay apart (the user's report, 2026-11-14)
+  assert.ok(on[2]!.c < on[1]!.c, 'a pre-fuelled LOW day stays under a MODERATE day');
   for (const w of [on, off]) { const r = reconcile(plan, w); assert.equal(r.carbsFuel, r.carbsPlan); assert.equal(r.kcalFuel, r.kcalPlan); }
 });
 

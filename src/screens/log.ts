@@ -1,6 +1,6 @@
 /* Logging food: search, amount, and back to the search for the next food, so a meal is one sheet, not four. */
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
-import { byBarcode, loadFoods, search, searchBranded, searchOffRo, searchUsdaBrands, type Food } from '../logic/foods.ts';
+import { byBarcode, loadFoods, search, searchBranded, searchExact, searchOffRo, searchUsdaBrands, type Food } from '../logic/foods.ts';
 import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
@@ -54,17 +54,18 @@ function showRecent() {
 async function runBrandSearch(q: string, res: Element, run: number) {
   res.innerHTML = '<p class="hint pad">Caut în produsele de marcă…</p>';
   const [ro, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
+  const close = [...(ro?.near ?? []), ...(usda?.near ?? [])].slice(0, 25);
   if (run !== searchRun) return;
   const found = (ro?.total ?? 0) + (usda?.total ?? 0), shown = (ro?.foods.length ?? 0) + (usda?.foods.length ?? 0);
   const more = found > shown ? `<p class="hint pad">${found.toLocaleString('ro-RO')} produse găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
   const list = (title: string, foods: Food[] | undefined) => (foods?.length ? `<h3>${title}</h3>${foods.map(foodRow).join('')}` : '');
-  const local = `${more}${list('România', ro?.foods)}${list('USDA', usda?.foods)}`;
+  const local = `${more}${list('România', ro?.foods)}${list('USDA', usda?.foods)}${list('Asemănătoare', close)}`;
   res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
   const off = await searchBranded(q).catch(() => null);
   if (run !== searchRun) return;
   const seen = new Set(ro?.foods.map((f) => f.id));
   const extra = list('Open Food Facts, online', off?.filter((f) => !seen.has(f.id)));
-  res.innerHTML = (shown ? local : '') + extra || `<p class="hint pad">${ro || usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă nu s-au încărcat. Încearcă din nou, folosește Alimente sau introdu valorile manual.'}</p>`;
+  res.innerHTML = (shown || close.length ? local : '') + extra || `<p class="hint pad">${ro || usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă nu s-au încărcat. Încearcă din nou, folosește Alimente sau introdu valorile manual.'}</p>`;
 }
 
 async function runSearch(q: string) {
@@ -79,7 +80,17 @@ async function runSearch(q: string) {
     } else {
       const all = [...ctx.get().custom, ...await loadFoods()];
       if (run !== searchRun) return;
-      res.innerHTML = search(all, q).map(foodRow).join('') || '<p class="hint pad">Nimic găsit. Încearcă și în engleză sau la Produse de marcă.</p>';
+      // exact words first; a typo is forgiven only after the brands had their say, so "quark" is not Quarter Pounder
+      const plain = searchExact(all, q).map(foodRow).join('');
+      res.innerHTML = plain || '<p class="hint pad">Caut și în produsele de marcă…</p>';
+      if (q.trim().length < 3) { if (!plain) res.innerHTML = search(all, q).map(foodRow).join('') || '<p class="hint pad">Nimic găsit.</p>'; return; }
+      // the Romanian shelf answers too, from the app's own files: "quark" finds the high protein dairy by brand
+      const ro = await searchOffRo(q, undefined, 12).catch(() => null);
+      if (run !== searchRun) return;
+      const brands = [...(ro?.foods ?? []), ...(ro?.near ?? [])].slice(0, 12);
+      const brandHtml = brands.length ? `<h3>Produse de marcă din România</h3>${brands.map(foodRow).join('')}<button class="ghost wide" data-mode="brand">Toate produsele de marcă</button>` : '';
+      const typo = plain || brands.length ? '' : search(all, q).map(foodRow).join('');
+      res.innerHTML = plain + brandHtml + (typo ? `<h3>Poate te referi la</h3>${typo}` : '') || '<p class="hint pad">Nimic găsit. Încearcă și în engleză sau la Produse de marcă.</p>';
     }
   } catch {
     res.innerHTML = '<p class="hint pad">Baza de alimente nu s-a încărcat. Încearcă din nou sau introdu valorile manual.</p>';

@@ -53,6 +53,45 @@ export const TERMS: Record<string, string> = {
 
 export const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 
+/**
+ * What else a word can mean on a shelf (2026-11-14, the user: "scriu Quark și să-mi sugereze iaurtul high protein
+ * de la Pilos"). Each entry is tried in place of the word when the word itself finds little; the results are shown
+ * as "Asemănătoare", after the exact ones. Folded spellings, one phrase per alternative.
+ */
+export const NEAR: Record<string, string[]> = {
+  quark: ['skyr', 'protein iaurt', 'high protein pudding', 'high protein milk', 'high protein drink', 'cottage', 'branza proaspata', 'branza de vaci'],
+  skyr: ['quark', 'protein iaurt', 'high protein pudding', 'iaurt grecesc'],
+  cottage: ['branza de vaci', 'quark', 'branza proaspata'],
+  iaurt: ['yogurt', 'joghurt', 'skyr'],
+  yogurt: ['iaurt', 'skyr'],
+  proteic: ['high protein', 'protein'], proteica: ['high protein', 'protein'], proteina: ['high protein', 'protein'], proteine: ['high protein', 'protein'],
+  protein: ['proteic', 'proteica'],
+  whey: ['protein', 'proteina'],
+  pui: ['chicken'], chicken: ['pui'], curcan: ['turkey'], ton: ['tuna'], tuna: ['ton'],
+  ovaz: ['oats', 'fulgi ovaz'], oats: ['ovaz'], ou: ['egg', 'oua'], oua: ['egg', 'ou'],
+  lapte: ['milk', 'drink'], cascaval: ['cheese', 'gouda'], sunca: ['ham', 'piept'],
+};
+
+/** Edit distance, for typos ("qwark", "pilso"); small words only, so a plain table is enough. */
+export function lev(a: string, b: string): number {
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length]!;
+}
+
+/** True when `word` is a typo of the start of `key`: one letter off from 4 letters, two from 8. */
+export function near(word: string, key: string): boolean {
+  const room = word.length >= 8 ? 2 : word.length >= 4 ? 1 : 0;
+  if (!room) return false;
+  for (const len of [word.length - 1, word.length, word.length + 1]) if (len > 0 && lev(word, key.slice(0, len)) <= room) return true;
+  return false;
+}
+
 let db: Food[] | null = null;
 
 export function parseDb(raw: Raw): Food[] {
@@ -100,8 +139,16 @@ export async function loadFoods(): Promise<Food[]> {
 
 export const isRomanian = (f: Food) => f.name !== f.en;
 
-/** Romanian names first, then matches in the USDA text; every word must match. */
+/** Romanian names first, then matches in the USDA text; every word must match. A typo is forgiven only when nothing
+ *  matches as typed: otherwise "quark" fills the list with Quarter Pounders and Quaker oats. */
 export function search(list: Food[], query: string, limit = 40): Food[] {
+  const exact = rank(list, query, limit, false);
+  return exact.length ? exact : rank(list, query, limit, true);
+}
+/** Only what matches as typed. */
+export const searchExact = (list: Food[], query: string, limit = 40): Food[] => rank(list, query, limit, false);
+
+function rank(list: Food[], query: string, limit: number, fuzzy: boolean): Food[] {
   const words = fold(query).split(/\s+/).filter(Boolean);
   if (!words.length) return [];
   const scored: [number, Food][] = [];
@@ -112,6 +159,8 @@ export function search(list: Food[], query: string, limit = 40): Food[] {
       const alt = TERMS[w];
       if (ro.includes(w)) score += ro.startsWith(w) ? 6 : 4;
       else if (en.includes(w) || (alt && en.includes(alt))) score += alt && en.startsWith(alt) ? 2 : 1;
+      // a typo still finds the food, when the exact words found nothing
+      else if (fuzzy && `${ro} ${en}`.split(/[^a-z0-9]+/).some((t) => t.length >= 3 && near(w, t))) score += 0.5;
       else { score = -1; break; }
     }
     if (score < 0) continue;
@@ -165,12 +214,17 @@ export function brandRowToFood(r: BrandRow): Food {
   };
 }
 
-/** Every product with a word starting with `word`, or with its English meaning. */
-async function matches(word: string, load: Loader): Promise<Set<number>> {
+/** Every product with a word starting with `word`, or with its English meaning; with `fuzzy`, also a word one typo away. */
+async function matches(word: string, load: Loader, fuzzy = false): Promise<Set<number>> {
   const out = new Set<number>();
   for (const w of new Set([word, TERMS[word] ?? word])) {
-    const shard = await load(`w/${w.slice(0, 2)}.json`) as Record<string, string> | null;
-    for (const [key, ids] of Object.entries(shard ?? {})) if (key.startsWith(w)) decodeIds(ids).forEach((i) => out.add(i));
+    // the word files are split by the first two letters; a typo in the second one ("qwark") looks in the files of
+    // the same first letter with a vowel or one of the word's own letters second: a handful of small local files
+    const heads = fuzzy && w.length >= 4 ? [...new Set([w.slice(0, 2), ...[...`aeiouy${w}`].map((c) => w[0] + c)])] : [w.slice(0, 2)];
+    for (const h of heads) {
+      const shard = await load(`w/${h}.json`) as Record<string, string> | null;
+      for (const [key, ids] of Object.entries(shard ?? {})) if (key.startsWith(w) || (fuzzy && near(w, key))) decodeIds(ids).forEach((i) => out.add(i));
+    }
   }
   return out;
 }
@@ -179,10 +233,30 @@ export const searchUsdaBrands = (query: string, load: Loader = fromSite, limit =
 /** The products sold in Romania, from the app's own files. */
 export const searchOffRo = (query: string, load: Loader = fromOffRo, limit = 40) => searchPack(query, load, limit);
 
-async function searchPack(query: string, load: Loader, limit: number): Promise<{ foods: Food[]; total: number }> {
+/**
+ * Exact first. When that finds little, the near meanings of each word (NEAR) and, for a phrase that found nothing,
+ * the phrase without one of its words; those come back apart, in `near`, so the screen can label them.
+ */
+async function searchPack(query: string, load: Loader, limit: number): Promise<{ foods: Food[]; total: number; near: Food[] }> {
   const words = tokens(query);
-  if (!words.length) return { foods: [], total: 0 };
-  const sets = (await Promise.all(words.map((w) => matches(w, load)))).sort((a, b) => a.size - b.size);
+  if (!words.length) return { foods: [], total: 0, near: [] };
+  const exact = await andSearch(words, load, limit);
+  if (exact.total >= 8) return { ...exact, near: [] };
+  const alts: string[][] = [];
+  words.forEach((w, i) => (NEAR[w] ?? []).forEach((p) => alts.push([...words.slice(0, i), ...tokens(p), ...words.slice(i + 1)])));
+  if (!exact.total && !alts.length && words.length > 1) words.forEach((_, i) => alts.push(words.filter((__, j) => j !== i)));
+  const seen = new Set(exact.foods.map((f) => f.id));
+  const close: Food[] = [];
+  for (const alt of alts.slice(0, 8)) {
+    if (close.length >= limit) break;
+    for (const f of (await andSearch(alt, load, limit)).foods) if (!seen.has(f.id)) { seen.add(f.id); close.push(f); }
+  }
+  return { ...exact, near: close.slice(0, limit) };
+}
+
+async function andSearch(words: string[], load: Loader, limit: number): Promise<{ foods: Food[]; total: number }> {
+  // a word that matches nothing as typed gets one typo of slack
+  const sets = (await Promise.all(words.map(async (w) => { const s = await matches(w, load); return s.size ? s : matches(w, load, true); }))).sort((a, b) => a.size - b.size);
   const hits = [...sets[0]!].filter((i) => sets.every((s) => s.has(i)));
   const perChunk = new Map<number, number[]>();
   for (const i of hits) {

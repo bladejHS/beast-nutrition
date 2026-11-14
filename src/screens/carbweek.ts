@@ -1,6 +1,6 @@
 /* The Weekly Fuel Calendar and the detail of one day. */
 import { ctx, dayShort, esc, n0, nb } from '../app.ts';
-import { reconcile, type FuelDay } from '../logic/carbs.ts';
+import { prefuelFactor, reconcile, type FuelDay } from '../logic/carbs.ts';
 import { FEEDBACK } from '../logic/insights.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
 import { dayMeals, totals } from '../logic/store.ts';
@@ -149,7 +149,7 @@ export function dayDetail(date: string) {
   ${analysis(p)}
   <details class="card"><summary><b>Cum s-a calculat</b></summary>
     <div class="line"><span>Carbohidrați din plan</span><b>${nb(d.planC, 'g')}</b></div>
-    <div class="line"><span>Factor ${SHORT[d.demand]}${d.prefuel ? ', ridicat: mâine e HIGH' : ''}</span><b>${comma(d.prefuel ? Math.max(s.fuel.factors[d.demand], s.fuel.factors.moderate) : s.fuel.factors[d.demand])}</b></div>
+    <div class="line"><span>Factor ${SHORT[d.demand]}${d.prefuel ? ', ridicat: mâine e HIGH' : ''}</span><b>${comma(d.prefuel ? prefuelFactor(s.fuel.factors, d.demand) : s.fuel.factors[d.demand])}</b></div>
     <div class="line"><span>După echilibrarea săptămânii</span><b>${nb(d.c, 'g')} (${d.shift > 0 ? '+' : ''}${d.shift})</b></div>
     <div class="line"><span>Calorii</span><b>${d.p}×4 + ${d.c}×4 + ${d.f}×9 = ${n0(d.kcal)}</b></div>
     <p class="hint">${s.fuel.cycling ? 'Se mută doar carbohidrații între zile. Proteina, grăsimile și caloriile săptămânii rămân cele din plan.' : 'Carb Cycling e oprit: ținta aplicată e cea din plan, cifrele de aici arată distribuția dacă îl pornești.'}</p></details>

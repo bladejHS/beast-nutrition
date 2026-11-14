@@ -57,7 +57,7 @@ function hero(d: string, t: DayTarget) {
   const cls = demand ?? 'rest';
   return `<button class="hero ${cls}" data-f="dayopen" data-v="${d}">
     <span class="hero-k"><span class="klass">${demand ? CARB_LABEL[demand] : esc(t.label)}</span>${demand ? lvl(demand) : ''}</span>
-    <span class="hero-w">${tm.hasSession ? `${esc(names.join(', '))}. ${tm.minutes} min, de la ${tm.start}.` : 'Fără antrenament.'}${prefuel ? ' Mâine e zi HIGH, așa că azi ai o porție moderată de carbohidrați.' : ''}</span>
+    <span class="hero-w">${tm.hasSession ? `${esc(names.join(', '))}. ${tm.minutes} min, de la ${tm.start}.` : 'Fără antrenament.'}${prefuel ? ' Mâine e zi HIGH, așa că azi ai ceva mai mulți carbohidrați decât într-o zi ușoară obișnuită.' : ''}</span>
   </button>${fastChip(d)}`;
 }
 

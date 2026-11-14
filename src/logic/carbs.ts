@@ -8,6 +8,15 @@ import type { Demand } from './training.ts';
 export type Factors = Record<Demand, number>;
 export const DEFAULT_FACTORS: Factors = { high: 1.25, moderate: 1, low: 0.85, rest: 0.75 };
 
+/**
+ * The factor of an easy day (LOW or RECOVERY) before a HIGH day: halfway to MODERATE, not all the way.
+ * Until 2026-11-14 it took the full MODERATE factor; with Inner Beast's week every LOW day sits before a HIGH day
+ * (Wednesday before Thursday, Sunday before Monday), so MODERATE, LOW and RECOVERY all came out the same and the
+ * cycling showed only two levels (the user noticed). Halfway still fills the tank before the hard day.
+ */
+export const prefuelFactor = (factors: Factors, d: Demand): number =>
+  factors[d] < factors.moderate ? (factors[d] + factors.moderate) / 2 : factors[d];
+
 /** `planC`: the carbs the plan gave that day, when it was decided. `prefuel`: an easy day lifted because a hard one follows. */
 export interface FuelDay extends DayTarget { date: string; demand: Demand; shift: number; planC: number; fixed: boolean; prefuel: boolean }
 
@@ -75,9 +84,9 @@ export function weekFuel(plan: Plan, monday: string, demand: (date: string) => D
   const band = dayBand(factors);
   const lo = (i: number) => Math.max(MIN_CARBS, Math.ceil((kcalFloor(sex) - base[i]!.p * 4 - base[i]!.f * 9) / 4), Math.min(base[i]!.c, base[i]!.c * band.lo));
   const hi = (i: number) => Math.max(lo(i), base[i]!.c, base[i]!.c * band.hi);
-  // The day before a hard session is not the place for the fewest carbs: an easy day then counts as moderate.
+  // The day before a hard session is not the place for the fewest carbs: an easy day then moves halfway to moderate.
   const lifted = (d: string) => (demand(d) === 'low' || demand(d) === 'rest') && prefuel(d);
-  const factor = (d: string) => (lifted(d) ? Math.max(factors[demand(d)], factors.moderate) : factors[demand(d)]);
+  const factor = (d: string) => (lifted(d) ? prefuelFactor(factors, demand(d)) : factors[demand(d)]);
   const carbs = share(pool, open, (i) => base[i]!.c * factor(dates[i]!), lo, hi);
   open.forEach((i) => carbs.set(i, Math.round(carbs.get(i)!)));
   // Rounding only: whole grams up to the total, on days that still have room.

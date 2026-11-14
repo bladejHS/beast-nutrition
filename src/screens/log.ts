@@ -5,6 +5,7 @@ import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.t
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
 import { openFoodEditor } from './mine.ts';
+import { openAi } from './ai.ts';
 
 let meal = 0;
 let logDate = '';
@@ -92,6 +93,7 @@ function searchSheet() {
     <div class="seg"><button data-mode="db" class="${mode === 'db' ? 'on' : ''}">Alimente</button><button data-mode="brand" class="${mode === 'brand' ? 'on' : ''}">Produse de marcă</button></div>
     <label class="sr" for="q">Caută un aliment</label><input id="q" type="search" placeholder="piept de pui, ovăz, Chicken Tenders" autocomplete="off" enterkeyhint="search">
     <div class="btns"><button class="ghost scanbtn" data-scan><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M10.5 8v8M13.5 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Scanează codul</button><button class="ghost" data-manual>Introdu manual</button></div>
+    <button class="ghost wide aibtn" data-ai><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3v10H4zM12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM18.5 2.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>Poză sau descriere, cu AI</button>
     <div id="res"></div>
     ${added.length ? '<button class="primary wide stick" data-close>Gata</button>' : ''}`, MEALS[meal]);
   showRecent();
@@ -190,6 +192,25 @@ export function logAction(el: HTMLElement): boolean {
     added.push(entry);
     ctx.commit(); ctx.render(); searchSheet();
     ctx.toast(`${f.name}, ${n0(g)} g, adăugat.`, () => { if (before) s.days[logDate] = before; else delete s.days[logDate]; added = added.filter((e) => e.id !== entry.id); ctx.commit(); ctx.render(); searchSheet(); });
+    return true;
+  }
+  if (d['ai'] != null) {
+    // a photo or a description: the foods come back for a check, then go in together, with one undo for all
+    openAi({
+      meal: MEALS[meal]!,
+      back: searchSheet,
+      add: (entries) => {
+        const s = ctx.get();
+        const before = s.days[logDate];
+        const days = dayMeals(s, logDate).map((m) => [...m]);
+        days[meal]!.push(...entries);
+        s.days[logDate] = days;
+        added.push(...entries);
+        ctx.commit(); ctx.render(); searchSheet();
+        const ids = new Set(entries.map((e) => e.id));
+        ctx.toast(`${entries.length} ${entries.length === 1 ? 'aliment adăugat' : 'alimente adăugate'}.`, () => { if (before) s.days[logDate] = before; else delete s.days[logDate]; added = added.filter((e) => !ids.has(e.id)); ctx.commit(); ctx.render(); searchSheet(); });
+      },
+    });
     return true;
   }
   if (d['manual'] != null) { openManual(); return true; }

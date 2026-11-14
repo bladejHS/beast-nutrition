@@ -16,6 +16,7 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "barcode-detector": "^3.2.3"
   }
 }

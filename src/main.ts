@@ -3,6 +3,7 @@ import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
 import { chapterCheck, isPerfect, trophyInit } from './screens/show.ts';
 import { photosAction, photosInput } from './screens/photos.ts';
+import { forceUpdate } from './screens/update.ts';
 import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
@@ -169,6 +170,7 @@ document.addEventListener('click', (ev) => {
   if (el.closest('#toast')) return;
   if (el.dataset['close'] != null) { close(); return; }
   if (el.dataset['dockTilt'] != null) { void tiltToggle(); return; }
+  if (el.dataset['forceUpdate'] != null) { void forceUpdate(['branded-data']); return; }
   if (el.dataset['tab']) {
     // A tab always leads to its first screen, also from deep inside it.
     if (el.dataset['tab'] === 'fuel') { fuelHome(); if (el.dataset['sub']) fuelSub(el.dataset['sub']); }

@@ -42,8 +42,18 @@ self.addEventListener('fetch', (e) => {
   if (r.method !== 'GET') return;
   const url = new URL(r.url);
   if (url.origin !== location.origin) return;
+  // 2026-11-16: the page from the network first, so a new deploy shows on the next opening; the cache only when
+  // offline or slower than 3 s. And from THIS version's cache: caches.match() searched the older version first and
+  // kept serving the old app (the user saw no update after closing it three times).
   if (r.mode === 'navigate') {
-    e.respondWith(caches.match('./').then((m) => m || fetch(r)));
+    e.respondWith((async () => {
+      const cache = await caches.open(V);
+      try {
+        const res = await Promise.race([fetch(r, { cache: 'no-cache' }), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 3000))]);
+        if (res && res.ok) { cache.put('./', res.clone()); return res; }
+      } catch (err) { /* offline or slow: the cached page */ }
+      return (await cache.match('./')) || (await caches.match('./')) || fetch(r);
+    })());
     return;
   }
   if (url.pathname.includes('/branded/')) {
@@ -53,7 +63,7 @@ self.addEventListener('fetch', (e) => {
     }))));
     return;
   }
-  e.respondWith(caches.match(r, { ignoreSearch: true }).then((m) => m || fetch(r)));
+  e.respondWith(caches.open(V).then((c) => c.match(r, { ignoreSearch: true })).then((m) => m || caches.match(r, { ignoreSearch: true })).then((m) => m || fetch(r)));
 });
 `;
 writeFileSync(join(DIST, 'sw.js'), sw);

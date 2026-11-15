@@ -89,7 +89,8 @@ export function planHtml() {
     <p>Alimente: USDA FoodData Central (domeniu public). Produse de marcă: USDA și Open Food Facts (ODbL). Meniul Splendid Chicken: declarația nutrițională SC Danadi SRL.</p>
     <p>Doar calculul caloriilor și al proteinei vine din carte. Carb Cycling, timing-ul, hidratarea, suplimentele, micronutrienții și planul de mese sunt ale aplicației, după ACSM, ISSN, EFSA și NIH.</p>
     <p>Limita minimă de calorii (1.200 sau 1.500 kcal) e o protecție a aplicației. Nu înlocuiește un medic sau un dietetician.</p>
-    <p>Versiunea ${esc(__BUILD__)}</p></section>`;
+    <p>Versiunea ${esc(__BUILD__)}. Aplicația se actualizează singură când o deschizi cu internet; dacă vezi totuși ceva vechi, apasă mai jos. Datele tale rămân.</p>
+    <button class="ghost wide" data-force-update>Actualizează acum</button></section>`;
 }
 
 export const mindHtml = () => `${back('Mai mult', 'data-tab="fuel"')}<h1 class="title">Mentalitate</h1><p class="hint">Cele 12 principii din <i>Fat Loss Forever</i>, de Layne Norton.</p>

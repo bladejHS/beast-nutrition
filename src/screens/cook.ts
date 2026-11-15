@@ -2,7 +2,7 @@
    their preparation and macros, each once, and a button that adds the meal to Azi so it counts in the macros). */
 import { ctx, esc, n0, n1, nb } from '../app.ts';
 import { COOK_CAT, RECIPES, type CookCat, type Recipe } from '../data/cookbook.ts';
-import { portionOf, shareLabel } from '../logic/cook.ts';
+import { portionOf, shareLabel, suggest } from '../logic/cook.ts';
 import { dayMeals, MEALS, totals } from '../logic/store.ts';
 import { head, heroBand } from './parts.ts';
 import { dayFuel, mealSlots } from './state.ts';
@@ -35,10 +35,35 @@ function rowsHtml() {
     : '<p class="hint pad">Nicio rețetă găsită. Caută după nume sau după un ingredient: ton, ovăz, cottage.</p>';
 }
 
+/** "Ce gătesc acum?" (2026-11-16): the recipe that fits the next meal best, at its portion, plus two more. The meal's
+ *  share is what is left of the day over the meals not eaten yet. */
+function suggestCard(): string {
+  const s = ctx.get(), d = ctx.today();
+  const t = dayFuel(d), sum = totals(dayMeals(s, d));
+  const slots = Math.max(1, mealSlots(d).times.length || 4);
+  const eaten = dayMeals(s, d).slice(0, slots).filter((m) => m.length).length;
+  const left = Math.max(1, slots - eaten);
+  const kcal = (t.kcal - sum.kcal) / left, p = Math.max(0, t.p - sum.p) / left;
+  const day = Math.floor(Date.parse(`${d}T12:00:00Z`) / 864e5);
+  const picks = suggest(RECIPES, kcal, p, new Date().getHours(), day);
+  if (!picks.length) return `<section class="cook-now done"><p class="cn-k">Ce gătesc acum?</p><h2>Ziua e acoperită</h2><p class="hint">Ai mâncat caloriile de azi. Dacă ți-e foame, o salată sau legume nu strică nimic.</p></section>`;
+  const [a, ...more] = picks;
+  const pill = (x: typeof a) => `<button class="cn-alt" data-cook="${x!.r.id}" data-cshare0="${x!.share}"><b>${esc(x!.r.name)}</b><span>${esc(shareLabel(x!.r, x!.share))} · ${n0(x!.kcal)} kcal · ${n0(x!.p)} g P</span></button>`;
+  return `<section class="cook-now"><p class="cn-k"><i aria-hidden="true"></i>Ce gătesc acum?</p>
+    <button class="cn-main" data-cook="${a!.r.id}" data-cshare0="${a!.share}">
+      <span class="cn-cat">${COOK_CAT[a!.r.cat]}</span><b class="cn-t">${esc(a!.r.name)}</b>
+      <span class="cn-p">${esc(shareLabel(a!.r, a!.share))}</span>
+      <span class="cn-m"><span><b>${n0(a!.kcal)}</b>kcal</span><span><b>${n0(a!.p)}</b>g proteine</span><span><b>${n0(a!.r.c * a!.share)}</b>g carbo</span></span>
+      <span class="cn-go">Gătește și adaugă ›</span></button>
+    <p class="hint">Pentru masa următoare: ~${n0(kcal)} kcal și ${n0(p)} g proteine din ce mai ai azi.</p>
+    <div class="cn-alts">${more.map(pill).join('')}</div></section>`;
+}
+
 export function cookHtml(): string {
   const chip = (k: string, label: string, on: boolean, attr: string) => `<button ${attr}="${k}" class="${on ? 'on' : ''}">${label}</button>`;
   return `${head('book', 'Cookbook', `${RECIPES.length} rețete din Cookbook 1.0 și 2.0, fiecare o singură dată, cu preparare și macronutrienți.`)}
   ${heroBand('cook')}
+  ${suggestCard()}
   <label class="sr" for="cq">Caută o rețetă</label><input id="cq" type="search" placeholder="Caută: pui, ton, ovăz, clătite" value="${esc(query)}" autocomplete="off" enterkeyhint="search">
   <div class="seg cook-cat">${chip('all', 'Toate', cat === 'all', 'data-ccat')}${(Object.keys(COOK_CAT) as CookCat[]).map((k) => chip(k, SHORT_CAT[k], cat === k, 'data-ccat')).join('')}</div>
   <div class="chips cook-sort">${chip('az', 'A–Z', sort === 'az', 'data-csort')}${chip('prot', 'Cele mai proteice', sort === 'prot', 'data-csort')}${chip('kcal', 'Cele mai ușoare', sort === 'kcal', 'data-csort')}</div>
@@ -144,7 +169,7 @@ export function cookAction(el: HTMLElement): boolean {
   if (d['cook']) {
     open = RECIPES.find((r) => r.id === d['cook']) ?? null;
     if (!open) return true;
-    share = open.pieces > 1 ? 1 / open.pieces : 1;
+    share = d['cshare0'] ? Number(d['cshare0']) : open.pieces > 1 ? 1 / open.pieces : 1;
     slot = nowSlot();
     recipeSheet();
     return true;

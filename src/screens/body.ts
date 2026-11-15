@@ -1,4 +1,5 @@
 /* Corp: the scale, the weekly decision, the check-in and the measurements. */
+import { audioOn, transformCard, trendNow, trophyCheck, trophyInit, weighReveal } from './show.ts';
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
 import { kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
 import { addDays, finishedWeeks, mondayOf, review, type CheckIn } from '../logic/review.ts';
@@ -78,9 +79,15 @@ export function openWeigh() {
   document.querySelector('#kgsave')!.addEventListener('click', () => {
     const kg = parseNum(input.value);
     if (!(kg > 30 && kg < 350)) { ctx.toast('Scrie greutatea în kilograme, de exemplu 82,5.'); return; }
+    audioOn();
     const before = s.weights[today];
+    const beforeTrend = trendNow();
+    trophyInit();
     s.weights[today] = kg;
     ctx.close(); ctx.commit(); ctx.render();
+    // the number lands like a result, then any trophy the trend has passed (show.ts)
+    weighReveal(kg, beforeTrend);
+    trophyCheck(matchMedia('(prefers-reduced-motion: reduce)').matches ? 600 : 6900);
     ctx.toast('Greutate salvată.', () => { if (before == null) delete s.weights[today]; else s.weights[today] = before; ctx.commit(); ctx.render(); });
   });
 }
@@ -144,6 +151,7 @@ export function bodyHtml() {
   ${goalCard()}
   ${reviewCard()}
   ${weighCard(points)}
+  ${transformCard()}
   ${checkinCard()}
   ${weeksCard()}
   ${measuresCard(points)}

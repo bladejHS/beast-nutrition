@@ -17,6 +17,7 @@ import { openWeigh } from './body.ts';
 import { glp1Card } from './glp1.ts';
 import { chance, dateRo, segments } from '../logic/goal.ts';
 import { trendAlpha, weightTrend } from '../logic/trend.ts';
+import { isPerfect, perfectCheck, perfectStreak, trophyShelf } from './show.ts';
 
 let date = '';
 let seen = '';
@@ -118,12 +119,20 @@ function macro(key: string, label: string, val: number, target: number) {
 }
 
 /** The day's fuel: the calories left in a ring that fills as the day is eaten, the three macros beside it. */
-function numbers(t: DayTarget, sum: ReturnType<typeof totals>) {
+/** The calories eaten last time Azi was drawn: when they grow, the food drops into the ring. */
+let lastKcal = { d: '', kcal: -1 };
+
+function numbers(d: string, t: DayTarget, sum: ReturnType<typeof totals>) {
   const left = t.kcal - sum.kcal;
   const fill = Math.min(1, sum.kcal / (t.kcal || 1));
   const state = left < -50 ? 'over' : Math.abs(left) <= t.kcal * 0.05 && sum.kcal > 0 ? 'hit' : '';
-  return `<section class="dash ${state}">
-    <div class="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rt" cx="60" cy="60" r="52"/><circle class="rv" cx="60" cy="60" r="52" pathLength="100" data-ring="az-k" data-to="${fill.toFixed(3)}"/></svg>
+  const drop = lastKcal.d === d && sum.kcal > lastKcal.kcal + 1 && !ctx.fresh;
+  lastKcal = { d, kcal: sum.kcal };
+  const perfect = d === ctx.today() && isPerfect(sum, t);
+  const streak = perfect ? perfectStreak() : 0;
+  return `<section class="dash ${state}${drop ? ' drop' : ''}${perfect ? ' perfect' : ''}">
+    ${perfect ? `<p class="perf"><b>Macro perfect</b>${streak > 1 ? `<span><i class="perf-fl" aria-hidden="true"></i>${streak} zile la rând</span>` : ''}</p>` : ''}
+    <div class="ring"><div class="liq" style="--l:${fill.toFixed(3)}" aria-hidden="true"><i></i><i></i></div><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rt" cx="60" cy="60" r="52"/><circle class="rv" cx="60" cy="60" r="52" pathLength="100" data-ring="az-k" data-to="${fill.toFixed(3)}"/></svg>
       <div class="ring-in"><b data-count="az-left" data-to="${Math.round(Math.abs(left))}">${n0(Math.abs(left))}</b><span>kcal ${left < 0 ? 'peste' : 'rămase'}</span><em>din ${n0(t.kcal)}</em></div></div>
     <div class="macros">${macro('p', 'Proteine', sum.p, t.p)}${macro('c', 'Carbo', sum.c, t.c)}${macro('f', 'Grăsimi', sum.f, t.f)}
       <p class="fib">Fibre <b>${n0(sum.fiber)}</b> din ${nb(`${t.fiberMin}–${t.fiberMax}`, 'g')}</p></div>
@@ -263,15 +272,17 @@ export function todayHtml() {
   const note = notice.text;
   notice.text = '';
   const addTo = next?.i ?? slots.find((x) => !journal[x.i]!.length)?.i ?? 0;
+  perfectCheck(d, sum, t);
   // the entrance plays once per visit (ctx.fresh), never when an action redraws the screen
   return `<div class="azi${ctx.fresh ? ' enter' : ''}">
   <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
   ${d === today ? road() : heroBand(DAY_KIND[(new Date(`${d}T12:00:00`).getDay() + 6) % 7]!)}
+  ${d === today ? trophyShelf() : ''}
   ${d === today ? '' : '<button class="backbtn" data-az="today">‹ Înapoi la azi</button>'}
   ${hero(d, t)}
   ${d === today ? glp1Card(d) : ''}
   ${note ? `<p class="updated">${esc(note)}</p>` : ''}
-  ${numbers(t, sum)}
+  ${numbers(d, t, sum)}
   ${quick(d, addTo)}
   ${d === today ? nextCard(d, slots, shown, idx != null && idx >= 0 ? idx : null) : ''}
   <h3 class="az-sec">Ziua</h3>

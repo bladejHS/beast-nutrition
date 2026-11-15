@@ -1,6 +1,7 @@
 import './styles.css';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
+import { chapterCheck, trophyInit } from './screens/show.ts';
 import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
@@ -103,11 +104,15 @@ function render() {
   kitchen();
   if (tab === 'cicl' && !s.fuel.cycling) tab = 'azi';
   const views: Record<Tab, () => string> = { cicl: cycleTabHtml, cook: cookHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
+  // the light of the hour on the living pictures: cold in the morning, warm in the evening, darker at night
+  const hr = new Date().getHours();
+  document.documentElement.dataset.tod = hr >= 5 && hr < 10 ? 'morning' : hr >= 10 && hr < 17 ? 'day' : hr >= 17 && hr < 22 ? 'evening' : 'night';
   app.innerHTML = `<main>${views[tab]()}</main>`;
   dock.show(shown());
   dock.set(tabAt());
   afterRender(app);
   mountHero(app);
+  if (tab === 'azi') chapterCheck();
   if (tab === 'azi') todayBind();
   if (tab === 'corp') { bodyBind(); goalBind(); }
   fuelBind(); fastBind(); labsBind();
@@ -170,4 +175,5 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 }
 
 followToday();
+if (s.profile && s.plan) trophyInit();
 render();

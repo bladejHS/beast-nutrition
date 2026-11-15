@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RECIPES } from './cookbook.ts';
-import { portionOf } from '../logic/cook.ts';
+import { portionOf, suggest } from '../logic/cook.ts';
 
 test('every recipe is there once', () => {
   const ids = new Set(RECIPES.map((r) => r.id));
@@ -25,4 +25,12 @@ test('a share of a recipe is that share of its macros', () => {
   assert.equal(e.kcal, Math.round(r.kcal / 4));
   assert.equal(e.p, Math.round(r.p / 4 * 10) / 10);
   assert.equal(e.g, 0);
+});
+
+test('the suggestion fits the calories left and suits the hour', () => {
+  const picks = suggest(RECIPES, 600, 45, 8, 1);
+  assert.equal(picks.length, 3);
+  for (const x of picks) assert.ok(x.kcal <= 600 * 1.08, `${x.r.name} ${x.kcal}`);
+  assert.equal(picks[0]!.r.cat, 'dejun');
+  assert.deepEqual(suggest(RECIPES, 80, 10, 12, 1), []);
 });

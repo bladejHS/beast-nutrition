@@ -837,3 +837,24 @@ ol.steps li + li { margin-top: 6px; }
 .ai-g input { width: 76px; min-height: 44px; padding: 0 10px; text-align: right; border-radius: 10px; border: 1px solid var(--line); background: var(--s1); color: var(--t1); font: 700 16px var(--font); }
 /* the floating + sat on top of an open sheet (it has the higher z-index) and covered its buttons */
 body:has(#sheet.on) .fab { display: none; }
+
+/* 2026-11-14: goal card, blood tests, training stack */
+.goal .gbar { margin: 10px 0 4px; }
+.goal .fbar { height: 8px; }
+.gends { display: flex; justify-content: space-between; margin: 6px 0 0; font-size: 13px; color: var(--dim, #9aa6b8); }
+.gends b { color: var(--ink, #fff); }
+.goal details { margin-top: 10px; }
+.goal summary { cursor: pointer; padding: 6px 0; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lab > summary { list-style: none; cursor: pointer; }
+.lab > summary::-webkit-details-marker { display: none; }
+.line > span small, .lab small { display: block; }
+.lv { text-align: right; white-space: nowrap; }
+.lv small { display: block; font-size: 12px; }
+.lv.high b, .lv.low b, .lv.high small:last-child, .lv.low small:last-child { color: var(--warn); }
+.lv.ok small:last-child { color: var(--ok, #6fe3a1); }
+.stack .line { align-items: center; }
+.stack em.ok { color: var(--ok, #6fe3a1); font-style: normal; font-size: 13px; white-space: nowrap; }
+.stack .line > button, .stack .line > em { flex: none; }
+.stack .line > span { min-width: 0; }
+.stack .add { width: auto; min-height: 40px; padding: 8px 14px; font-size: 14px; }

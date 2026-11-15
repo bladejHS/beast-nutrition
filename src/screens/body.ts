@@ -6,6 +6,7 @@ import { chartRange, trendAlpha, trendChange, weightTrend, type TrendPoint } fro
 import { fatMass, type Measure } from '../logic/wellness.ts';
 import { banner, shortDate } from './parts.ts';
 import { latestKg } from './state.ts';
+import { goalCard } from './extra.ts';
 
 const FIELDS: [keyof Measure, string][] = [['hips', 'Șolduri, cm'], ['chest', 'Piept, cm'], ['arm', 'Braț, cm'], ['thigh', 'Coapsă, cm'], ['bf', 'Grăsime, %']];
 const FEEL: [keyof CheckIn, string][] = [['energy', 'Energie'], ['strength', 'Forță'], ['hunger', 'Foame (10 = deloc)'], ['mood', 'Dispoziție'], ['stress', 'Stres (10 = deloc)'], ['sleep', 'Somn']];
@@ -139,6 +140,7 @@ export function bodyHtml() {
   const s = ctx.get();
   const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
   return `${banner('body', 'Corp')}
+  ${goalCard()}
   ${reviewCard()}
   ${weighCard(points)}
   ${checkinCard()}

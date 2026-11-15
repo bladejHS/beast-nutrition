@@ -5,6 +5,7 @@ import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './screens/fuel.ts';
 import { glp1Action, glp1Html } from './screens/glp1.ts';
+import { goalAction, goalBind, labsAction, labsBind, stackAction } from './screens/extra.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
@@ -83,8 +84,8 @@ function render() {
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
   afterRender(app);
   if (tab === 'azi') todayBind();
-  if (tab === 'corp') bodyBind();
-  fuelBind(); fastBind();
+  if (tab === 'corp') { bodyBind(); goalBind(); }
+  fuelBind(); fastBind(); labsBind();
   ctx.fresh = false;
 }
 
@@ -99,7 +100,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 

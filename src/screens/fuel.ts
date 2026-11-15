@@ -14,9 +14,10 @@ import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../log
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
 import { back, demandTag, head, icon, listRow } from './parts.ts';
+import { labsHtml, stackCard } from './extra.ts';
 import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 
-type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery';
+type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery' | 'labs';
 let sub: Sub = 'home';
 /** The meal plan shown as its own tab (2026-11-12): no way back to Fuel from it. */
 let asTab = false;
@@ -32,7 +33,7 @@ let shopOpen = false;
 /** The catalogue again, when its tab is tapped from inside a section. */
 export function fuelHome() { sub = 'home'; }
 /** A section of Fuel opened from another tab (the performance plan in Plan links to water and supplements). */
-export function fuelSub(v: string) { if (['carbs', 'meals', 'water', 'supp', 'micro', 'report', 'recovery'].includes(v)) sub = v as Sub; }
+export function fuelSub(v: string) { if (['carbs', 'meals', 'water', 'supp', 'micro', 'report', 'recovery', 'labs'].includes(v)) sub = v as Sub; }
 const fuelOpen = (v: Sub) => { sub = v; };
 
 /** Opens one day of Carb Cycling from anywhere in the app. */
@@ -78,6 +79,7 @@ function home() {
     ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
     ${listRow('data-tab="glp1"', 'Semaglutidă', s.glp1.on ? `${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Wegovy cu medicul: doze, zile, ritm')}
     ${listRow('data-mine="list"', 'Alimentele mele', s.custom.length ? `${s.custom.length} salvate` : 'Adaugi tu valorile de pe etichetă')}
+    ${listRow('data-f="sub" data-v="labs"', 'Analize', s.labs.length ? `${new Set(s.labs.map((r) => r.marker)).size} analize · ultima ${s.labs.map((r) => r.date).sort().at(-1)}` : 'HbA1c, feritină, vitamina D, testosteron')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
   </div>
@@ -222,6 +224,7 @@ function supp() {
   <details class="card"><summary><b>Adaugă un supliment</b></summary><form id="suf">
     ${[['product', 'Produs'], ['brand', 'Marcă'], ['ingredient', 'Ingredient activ'], ['serving', 'Porție'], ['time', 'Când'], ['freq', 'Frecvență'], ['notes', 'Note']].map(([k, l]) => `<label class="field">${l}<input name="${k}" ${k === 'product' || k === 'ingredient' ? 'required' : ''}></label>`).join('')}
     <label class="field">Cantitate pe zi, mg<input name="mgPerDay" type="text" inputmode="decimal" value="0"></label><button class="primary wide">Salvează</button></form></details>
+  ${stackCard()}
   <h2 class="sect">Ce spun dovezile</h2><p class="hint">În ordinea dovezilor, nu o prescripție.</p>
   ${EVIDENCE.map((e) => `<details class="card"><summary><b>${esc(e.name)}</b> <span class="ev">${e.strength}</span></summary><p>${esc(e.purpose)}</p>${[[e.strength === 'Doar la deficit' || e.name === 'Omega-3' ? 'Doză și limită' : 'Doze studiate', e.dose], ['Moment', e.timing], ['Efecte adverse', e.effects], ['Contraindicații', e.contra], ['Interacțiuni', e.interactions]].map(([a, b]) => `<p><b>${a}:</b> ${esc(b)}</p>`).join('')}<p class="hint">Alege produse testate de terți, de exemplu Informed Sport sau NSF. Surse: ${esc(e.refs)}.</p></details>`).join('')}
   <section class="card"><h2>De evitat</h2>${AVOID.map(([a, b]) => `<p><b>${a}.</b> ${esc(b)}</p>`).join('')}</section>`;
@@ -297,7 +300,7 @@ function report() {
 }
 
 export function fuelHtml() {
-  const out = { home, carbs: carbsHtml, meals, water, supp, micro, report, recovery }[sub]();
+  const out = { home, carbs: carbsHtml, meals, water, supp, micro, report, recovery, labs: () => labsHtml(back(), head('analytics', 'Analize', 'Rezultatele tale, cu data. Interpretarea rămâne la medic.')) }[sub]();
   fx.recalc = false;
   return out;
 }

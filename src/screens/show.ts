@@ -127,6 +127,8 @@ export function ceremony(o: { kicker: string; title: string; word: string; mark:
     el.classList.add('out');
     clearTimeout(timer);
     window.setTimeout(() => el.remove(), 480);
+    // the dock turns gold for a while (main.ts)
+    dispatchEvent(new Event('bn:gold'));
   };
   el.addEventListener('click', (ev) => {
     const b = (ev.target as HTMLElement).closest<HTMLButtonElement>('[data-cel-poster]');
@@ -248,7 +250,7 @@ export function weighReveal(kg: number, beforeTrend: number | null) {
       </div></div>
     <p class="bn-cel-tap">Atinge ca să închizi</p>`;
   document.body.appendChild(el);
-  const close = () => { if (el.classList.contains('out')) return; el.classList.add('out'); window.setTimeout(() => el.remove(), 480); };
+  const close = () => { if (el.classList.contains('out')) return; el.classList.add('out'); window.setTimeout(() => el.remove(), 480); dispatchEvent(new Event('bn:weigh')); };
   el.addEventListener('click', close);
   window.setTimeout(close, 6500);
   if (calm()) { el.classList.add('shown'); return; }

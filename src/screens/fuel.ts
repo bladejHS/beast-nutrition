@@ -87,6 +87,7 @@ function home() {
     ${listRow('data-f="sub" data-v="labs"', 'Analize', s.labs.length ? `${new Set(s.labs.map((r) => r.marker)).size} analize · ultima pe ${dayLong(s.labs.map((r) => r.date).sort().at(-1)!).toLowerCase()}` : 'HbA1c, feritină, vitamina D, testosteron')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
+    ${listRow('data-dock-tilt', 'Bara de jos: lumină la înclinare', (() => { try { return localStorage.getItem('bn:tilt') === '1'; } catch { return false; } })() ? 'Pornită · atinge ca s-o oprești' : 'Oprită · lumina de pe bară urmează telefonul')}
   </div>
   ${t.linked ? '' : '<p class="hint more-note">Inner Beast nu a fost deschis pe acest telefon, așa că folosesc săptămâna lui standard de antrenament.</p>'}`;
 }

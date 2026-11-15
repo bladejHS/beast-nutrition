@@ -1,7 +1,7 @@
 import './styles.css';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
-import { chapterCheck, trophyInit } from './screens/show.ts';
+import { chapterCheck, isPerfect, trophyInit } from './screens/show.ts';
 import { photosAction, photosInput } from './screens/photos.ts';
 import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
@@ -15,7 +15,10 @@ import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
 import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
-import { freshFuel, kitchen, syncFuel } from './screens/state.ts';
+import { dayFuel, freshFuel, kitchen, mealSlots, syncFuel } from './screens/state.ts';
+import { dayMeals, totals } from './logic/store.ts';
+import { trendAlpha, weightTrend } from './logic/trend.ts';
+import { addDays } from './logic/review.ts';
 import { followToday, todayAction, todayBind, todayHtml } from './screens/today.ts';
 
 const app = document.querySelector<HTMLElement>('#app')!;
@@ -68,12 +71,13 @@ ctx.get = () => s; ctx.commit = commit; ctx.toast = toast; ctx.render = () => re
 ctx.go = (t) => { tab = t; render(); };
 
 const ICONS = {
-  azi: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>',
-  mese: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 21V3c-2.2 1.4-3 4-3 7 0 1.6.9 2.8 3 3"/>',
-  cicl: '<path d="M20.4 9.2A8.8 8.8 0 0 0 5.4 5.6M5.2 2.6v3.2h3.2M3.6 14.8a8.8 8.8 0 0 0 15 3.6M18.8 21.4v-3.2h-3.2"/><path d="M9.2 10a1.9 1.9 0 0 1 .2-3.8h5.2a1.9 1.9 0 0 1 .2 3.8v4.4a.7.7 0 0 1-.7.7H9.9a.7.7 0 0 1-.7-.7Z"/>',
-  cook: '<path d="M5 4.6A1.6 1.6 0 0 1 6.6 3H19v14H6.6A1.6 1.6 0 0 0 5 18.6z"/><path d="M5 18.6A1.6 1.6 0 0 0 6.6 20.2H19v-3.2"/><path d="M10 6.5v4.2M12 6.5v4.2M11 10.7v3.3M15.4 6.5c-1 .6-1.4 1.8-1.4 3.2 0 .8.5 1.3 1.4 1.4v2.9"/>',
-  corp: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 9.500a5.500 5.500 0 0 1 8 0l-2.500 2h-3Z"/>',
-  fuel: '<path d="M12 3c.6 3.2 5.5 5.9 5.5 11a5.5 5.5 0 0 1-11 0c0-2.2 1-3.8 2.3-5 .3 1.3 1 2.2 1.900 2.600C10.400 9 10.800 6 12 3Z"/>',
+  // 2026-11-16: each icon in parts, so it can act when its tab opens (styles.css, "the dock's acts")
+  azi: '<circle cx="12" cy="12" r="8.5"/><g class="hh"><path d="M12 12V8.4"/></g><g class="hm"><path d="M12 12V6.2"/></g><circle class="ctr" cx="12" cy="12" r=".6"/>',
+  mese: '<g class="fk"><path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5"/></g><g class="kn"><path d="M17 21V3c-2.2 1.4-3 4-3 7 0 1.6.9 2.8 3 3"/></g><circle class="clk" cx="12" cy="3.4" r="1.3"/>',
+  cicl: '<g class="arr"><path d="M20.4 9.2A8.8 8.8 0 0 0 5.4 5.6M5.2 2.6v3.2h3.2M3.6 14.8a8.8 8.8 0 0 0 15 3.6M18.8 21.4v-3.2h-3.2"/></g><path d="M9.2 10a1.9 1.9 0 0 1 .2-3.8h5.2a1.9 1.9 0 0 1 .2 3.8v4.4a.7.7 0 0 1-.7.7H9.9a.7.7 0 0 1-.7-.7Z"/>',
+  cook: '<path d="M5 4.6A1.6 1.6 0 0 1 6.6 3H19v14H6.6A1.6 1.6 0 0 0 5 18.6z"/><path d="M5 18.6A1.6 1.6 0 0 0 6.6 20.2H19v-3.2"/><g class="cvr"><path d="M10 6.5v4.2M12 6.5v4.2M11 10.7v3.3M15.4 6.5c-1 .6-1.4 1.8-1.4 3.2 0 .8.5 1.3 1.4 1.4v2.9"/></g><path class="pg" d="M6.6 3H19v14H6.6"/>',
+  corp: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M7.6 10.4a6 6 0 0 1 8.8 0"/><g class="nd"><path d="M12 13.2V8.6"/></g><circle cx="12" cy="13.4" r="1"/>',
+  fuel: '<g class="fl"><path d="M12 3c.6 3.2 5.5 5.9 5.5 11a5.5 5.5 0 0 1-11 0c0-2.2 1-3.8 2.3-5 .3 1.3 1 2.2 1.900 2.600C10.400 9 10.800 6 12 3Z"/></g>',
 };
 type Main = keyof typeof ICONS;
 // 2026-11-12, fewer places: Azi, the meal plan, the body, and everything else under "Mai mult" (Fuel's tools and the plan)
@@ -98,6 +102,44 @@ const dock = makeDock((Object.keys(ICONS) as Main[]).map((k) => ({ key: k, label
 const shown = (): Main[] => (Object.keys(ICONS) as Main[]).filter((k) => k !== 'cicl' || s.fuel.cycling);
 const tabAt = () => shown().indexOf(home(tab));
 
+/** The day in the dock (2026-11-16): calories round Azi, the weight's trend on Corp, a meal due on Mese. Food added
+ *  since the last render sends a wave into Azi. */
+let dockKcal = { d: '', k: -1 };
+function dockLive() {
+  if (!s.profile || !s.plan) return;
+  const today = localDate();
+  const t = dayFuel(today), sum = totals(dayMeals(s, today));
+  const pts = weightTrend(s.weights, trendAlpha(s.plan.phase));
+  const lastP = pts.at(-1), weekP = lastP ? [...pts].reverse().find((p) => p.date <= addDays(lastP.date, -7)) : undefined;
+  const diff = lastP && weekP ? lastP.trend - weekP.trend : null;
+  const now = new Date(), mins = now.getHours() * 60 + now.getMinutes();
+  const sl = mealSlots(today), eaten = dayMeals(s, today);
+  const soon = sl.times.some((tm, i) => { const [h, m] = tm.split(':').map(Number); const d = (h ?? 0) * 60 + (m ?? 0) - mins; return !eaten[i]?.length && d <= 30 && d >= -20; });
+  dock.live({ kcal: sum.kcal / (t.kcal || 1), perfect: isPerfect(sum, t), trend: diff == null ? null : diff < -0.1 ? -1 : diff > 0.1 ? 1 : 0, soon });
+  if (dockKcal.d === today && sum.kcal > dockKcal.k + 1) dock.pulse('add');
+  dockKcal = { d: today, k: sum.kcal };
+}
+addEventListener('bn:gold', () => dock.pulse('gold'));
+addEventListener('bn:weigh', () => dock.pulse('weigh'));
+setInterval(() => { if (!document.hidden) dockLive(); }, 60000);
+
+/** The tilt sheen on the dock: off by default; on from Mai mult, where iOS asks for the motion permission. */
+let tiltOn = false;
+try { tiltOn = localStorage.getItem('bn:tilt') === '1'; } catch { /* storage blocked */ }
+const onTilt = (e: DeviceOrientationEvent) => dock.tilt(e.gamma ?? 0);
+function tiltStart() { addEventListener('deviceorientation', onTilt); }
+function tiltStop() { removeEventListener('deviceorientation', onTilt); dock.tilt(null); }
+if (tiltOn) tiltStart();
+async function tiltToggle() {
+  if (tiltOn) { tiltOn = false; tiltStop(); try { localStorage.setItem('bn:tilt', '0'); } catch { /* */ } render(); return; }
+  const D = DeviceOrientationEvent as unknown as { requestPermission?: () => Promise<string> };
+  try { if (D.requestPermission && (await D.requestPermission()) !== 'granted') { toast('Fără acces la mișcare: Setări → Safari → Mișcare și orientare.'); return; } } catch { toast('Telefonul nu a dat acces la mișcare.'); return; }
+  tiltOn = true; tiltStart();
+  try { localStorage.setItem('bn:tilt', '1'); } catch { /* */ }
+  render();
+  toast('Înclină telefonul: lumina de pe bară te urmează.');
+}
+
 function render() {
   if (!s.profile || !s.plan || isEditing()) { dock.hide(); app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
@@ -111,6 +153,7 @@ function render() {
   app.innerHTML = `<main>${views[tab]()}</main>`;
   dock.show(shown());
   dock.set(tabAt());
+  dockLive();
   afterRender(app);
   mountHero(app);
   if (tab === 'azi') chapterCheck();
@@ -125,6 +168,7 @@ document.addEventListener('click', (ev) => {
   if (!el) { if (ev.target === sheet) close(); return; }
   if (el.closest('#toast')) return;
   if (el.dataset['close'] != null) { close(); return; }
+  if (el.dataset['dockTilt'] != null) { void tiltToggle(); return; }
   if (el.dataset['tab']) {
     // A tab always leads to its first screen, also from deep inside it.
     if (el.dataset['tab'] === 'fuel') { fuelHome(); if (el.dataset['sub']) fuelSub(el.dataset['sub']); }

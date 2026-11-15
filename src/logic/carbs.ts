@@ -6,7 +6,15 @@ import { addDays } from './review.ts';
 import type { Demand } from './training.ts';
 
 export type Factors = Record<Demand, number>;
-export const DEFAULT_FACTORS: Factors = { high: 1.25, moderate: 1, low: 0.85, rest: 0.75 };
+/**
+ * How far the days move from the week's average (2026-11-15 review). "Fuel for the work required" (Impey et al. 2018,
+ * Sports Med 48:1031) sizes carbohydrate to the session: the most on the hardest days, the least on the days without
+ * real training. The old spread (1.25 to 0.75) left the easy days almost where the hard ones were. Protein and fat stay
+ * the same every day; the week's carbs and calories stay those of the plan, so the cycling never adds or removes food.
+ */
+export const DEFAULT_FACTORS: Factors = { high: 1.3, moderate: 1, low: 0.8, rest: 0.65 };
+/** The spread before the review: saved settings still equal to it move to the new one. */
+export const OLD_FACTORS: Factors = { high: 1.25, moderate: 1, low: 0.85, rest: 0.75 };
 
 /**
  * The factor of an easy day (LOW or RECOVERY) before a HIGH day: halfway to MODERATE, not all the way.

@@ -66,6 +66,9 @@ export const weight = (s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?
 /** Hard boxing rounds. Rope, ladder and leg intervals use the same timer but are not boxing. */
 const combat = (s: Pick<Session, 'kind' | 'focus'>) => { const k = weightKey(s); return k === 'boxHard' || k === 'boxTech'; };
 const strength = (s: Pick<Session, 'kind'> & { id?: string; name?: string }) => (s.kind === 'workout' || s.kind === 'amrap') && !prehab(s);
+const legDay = (s: { id?: string; name?: string }) => /leg|picioare|lunge/i.test(`${s.id ?? ''} ${s.name ?? ''}`);
+/** Under this load, with nothing at moderate intensity for 10 minutes, the day is recovery (2026-11-15 review). */
+export const RECOVERY_LOAD = 20;
 
 export interface LoadPart { id: string; name: string; min: number; intensity: number; load: number; rpe?: number }
 export interface Rating { demand: Demand; load: number; reason: string; parts: LoadPart[] }
@@ -82,8 +85,12 @@ export function classify(list: (Pick<Session, 'kind' | 'focus' | 'name' | 'min'>
   const named = real.filter((s) => weight(s, r.weights) >= 0.3).map((s) => s.name);
   const text = named.length ? named.join(' + ') : real.map((s) => s.name).join(' + ');
   if (r.boxStrength && real.some(combat) && real.some(strength)) return { demand: 'high', load, reason: `${text}: box și forță în aceeași zi.`, parts };
+  // 2026-11-15 review: legs are the most muscle and the most glycogen; a long leg session is a HIGH day by itself
+  if (real.some((s) => strength(s) && s.min >= 40 && legDay(s))) return { demand: 'high', load, reason: `${text}: zi de picioare, cea mai mare masă musculară.`, parts };
   if (load >= r.limits.high) return { demand: 'high', load, reason: `${text}: încărcare estimată ${load}.`, parts };
   if (load >= r.limits.moderate) return { demand: 'moderate', load, reason: `${text}: încărcare estimată ${load}.`, parts };
+  // only light movement (a walk, mobility, breathing): a recovery day, the lowest carbs of the week
+  if (load < RECOVERY_LOAD && !parts.some((p) => p.intensity >= 0.5 && p.min >= 10)) return { demand: 'rest', load, reason: `${text}: doar mișcare ușoară, zi de recuperare.`, parts };
   return { demand: 'low', load, reason: `${text}: efort ușor, încărcare estimată ${load}.`, parts };
 }
 

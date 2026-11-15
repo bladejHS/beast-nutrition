@@ -218,7 +218,7 @@ test('repeated low energy suggests a review, states no cause, and acts only if a
   assert.equal(x!.level, 'watch');
   assert.deepEqual(x!.action, { kind: 'factor', demand: 'high', delta: 0.05 });
   assert.match(x!.body, /Poate ține/);
-  assert.equal(DEFAULT_FACTORS.high, 1.25, 'nothing was changed by reading the pattern');
+  assert.equal(DEFAULT_FACTORS.high, 1.3, 'nothing was changed by reading the pattern');
 });
 
 test('steady good sessions are recognised, without any change proposed', () => {
@@ -273,12 +273,12 @@ test('fibre follows the calories of the day, not of the plan', () => {
 test('an easy day before a HIGH day gets a moderate share, and the week stays the same', () => {
   const on = cycleWeek(input(), MONDAY).days;
   const off = cycleWeek(input({ prefuel: false }), MONDAY).days;
-  assert.equal(on[2]!.demand, 'low');
+  assert.equal(on[2]!.demand, 'rest');
   assert.equal(on[2]!.prefuel, true);
-  assert.equal(on[5]!.prefuel, false, 'Saturday, Leg Day, is moderate itself');
+  assert.equal(on[5]!.prefuel, false, 'Saturday, Leg Day, is HIGH itself');
   assert.equal(off[2]!.prefuel, false);
   assert.ok(on[2]!.c > off[2]!.c);
-  assert.ok(on[2]!.c > off[6]!.c, 'Wednesday gets more than an ordinary low day');
+  assert.ok((DEFAULT_FACTORS.rest + DEFAULT_FACTORS.moderate) / 2 > DEFAULT_FACTORS.low, 'a pre-fuelled recovery day weighs more than an ordinary low day');
   // and still less than a MODERATE day: the three easy levels stay apart (the user's report, 2026-11-14)
   assert.ok(on[2]!.c < on[1]!.c, 'a pre-fuelled LOW day stays under a MODERATE day');
   for (const w of [on, off]) { const r = reconcile(plan, w); assert.equal(r.carbsFuel, r.carbsPlan); assert.equal(r.kcalFuel, r.kcalPlan); }

@@ -19,6 +19,7 @@ export function makeDock(items: DockItem[]) {
   nav.setAttribute('aria-label', 'Navigare');
   nav.innerHTML = `<canvas class="dock-cv" aria-hidden="true"></canvas>
     ${items.map((it) => `<button class="dock-b" data-tab="${it.key}"><svg viewBox="0 0 24 24" aria-hidden="true">${it.icon}</svg><span>${it.label}</span></button>`).join('')}`;
+  nav.style.setProperty('--n', String(items.length));
   document.body.appendChild(nav);
   const cv = nav.querySelector('canvas')!, c = cv.getContext('2d')!;
   const buttons = [...nav.querySelectorAll<HTMLButtonElement>('.dock-b')];
@@ -26,7 +27,8 @@ export function makeDock(items: DockItem[]) {
 
   let W = 0, dpr = 1, at = -1, from = 0, to = 0, t0 = 0, raf = 0, last = 0, clock = 0, flash = 0, landed = -1;
   const sparks: { x: number; y: number; vx: number; vy: number; t: number; life: number }[] = [];
-  const slot = (i: number) => (W / items.length) * (i + 0.5);
+  let vis = items.map((x) => x.key);
+  const slot = (i: number) => (W / vis.length) * (i + 0.5);
 
   function size() {
     dpr = Math.min(devicePixelRatio || 1, 2);
@@ -66,7 +68,7 @@ export function makeDock(items: DockItem[]) {
     c.save(); bar(); c.clip();
     c.globalCompositeOperation = 'lighter';
     // the beam: from a narrow slit in the edge, widening onto the open tab
-    const bw = 22, fw = Math.min(W / items.length * 0.92, 110);
+    const bw = 22, fw = Math.min(W / vis.length * 0.92, 110);
     const beam = c.createLinearGradient(0, TOP, 0, H);
     beam.addColorStop(0, `rgba(170, 235, 255, ${(0.55 * breathe + 0.3 * flash).toFixed(3)})`);
     beam.addColorStop(0.5, `rgba(72, 207, 255, ${(0.2 * breathe).toFixed(3)})`);
@@ -137,12 +139,22 @@ export function makeDock(items: DockItem[]) {
       at = i;
       from = first ? slot(i) : to; to = slot(i);
       t0 = performance.now();
-      buttons.forEach((b, k) => {
-        b.classList.toggle('on', k === i);
-        if (k === i) { b.setAttribute('aria-current', 'page'); if (!first) { b.classList.remove('lit'); void b.offsetWidth; b.classList.add('lit'); } }
+      const key = vis[i];
+      buttons.forEach((b) => {
+        const on = b.dataset['tab'] === key;
+        b.classList.toggle('on', on);
+        if (on) { b.setAttribute('aria-current', 'page'); if (!first) { b.classList.remove('lit'); void b.offsetWidth; b.classList.add('lit'); } }
         else b.removeAttribute('aria-current');
       });
       if (calm()) frame(performance.now()); else kick();
+    },
+    /** Which tabs are in the bar, in order (the Carb tab comes and goes with carb cycling). */
+    show(keys: string[]) {
+      if (keys.join() === vis.join()) return;
+      vis = keys;
+      buttons.forEach((b) => { b.hidden = !keys.includes(b.dataset['tab'] ?? ''); });
+      nav.style.setProperty('--n', String(keys.length));
+      at = -1;
     },
     /** Away while the profile is being set up. */
     hide() { nav.classList.remove('ready'); },

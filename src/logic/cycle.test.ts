@@ -47,13 +47,13 @@ test('Knee Armor and Kick Armor count as prehab: they neither make a strength da
   assert.ok(tue.some((s) => s.name === 'Knee Armor'));
   assert.equal(classify(tue).demand, 'moderate');
   assert.equal(classify([{ id: 'mon-bag', name: 'Heavy Bag Training', kind: 'rounds', focus: 'move', min: 10 }, { id: 'kick-fri', name: 'Kick Armor', kind: 'workout', min: 10 }]).demand, 'low');
-  assert.deepEqual(FALLBACK_WEEK.map((d) => classify(d).demand), ['high', 'moderate', 'low', 'high', 'moderate', 'moderate', 'low']);
+  assert.deepEqual(FALLBACK_WEEK.map((d) => classify(d).demand), ['high', 'moderate', 'rest', 'high', 'moderate', 'high', 'low']);
 });
 
 test('demand follows the sessions, not the weekday', () => {
   const swapped: Training = { ...week, week: [FALLBACK_WEEK[2]!, FALLBACK_WEEK[1]!, FALLBACK_WEEK[0]!, ...FALLBACK_WEEK.slice(3)] };
   const { days } = cycleWeek(input({ training: swapped }), MONDAY);
-  assert.deepEqual([days[0]!.demand, days[2]!.demand], ['low', 'high']);
+  assert.deepEqual([days[0]!.demand, days[2]!.demand], ['rest', 'high']);
   assert.ok(days[2]!.c > days[0]!.c);
 });
 

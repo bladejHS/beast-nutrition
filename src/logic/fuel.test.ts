@@ -18,12 +18,13 @@ const week: Training = { linked: true, week: FALLBACK_WEEK, log: {}, sleep: {} }
 test('demand comes from the sessions, not the weekday name', () => {
   assert.equal(classify(FALLBACK_WEEK[0]!).demand, 'high');
   assert.equal(classify(FALLBACK_WEEK[1]!).demand, 'moderate');
-  assert.equal(classify(FALLBACK_WEEK[2]!).demand, 'low');
+  assert.equal(classify(FALLBACK_WEEK[2]!).demand, 'rest', 'a walk and meditation: a recovery day');
   assert.equal(classify(FALLBACK_WEEK[3]!).demand, 'high');
-  assert.equal(classify(FALLBACK_WEEK[5]!).demand, 'moderate');
+  assert.equal(classify(FALLBACK_WEEK[5]!).demand, 'high', 'Leg Day: the most muscle, a HIGH day');
   assert.equal(classify(FALLBACK_WEEK[6]!).demand, 'low');
   assert.equal(classify([]).demand, 'rest');
-  assert.equal(classify([{ name: 'Easy', kind: 'rounds', focus: 'slow', min: 10 }]).demand, 'low');
+  assert.equal(classify([{ name: 'Easy', kind: 'rounds', focus: 'slow', min: 10 }]).demand, 'rest');
+  assert.equal(classify([{ name: 'Easy', kind: 'rounds', focus: 'slow', min: 30 }, { name: 'Row', kind: 'run', min: 15 }]).demand, 'low');
 });
 
 test('box plus strength is high even at moderate minutes', () => {

@@ -5,7 +5,7 @@ import type { LabResult } from './labs.ts';
 import type { CheckIn } from './review.ts';
 import type { Food } from './foods.ts';
 import { freshFasting, type FastState } from './fasting.ts';
-import { DEFAULT_FACTORS, type Factors } from './carbs.ts';
+import { DEFAULT_FACTORS, OLD_FACTORS, type Factors } from './carbs.ts';
 import { DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand, type Limits, type Session, type Weights } from './training.ts';
 import type { Feedback } from './insights.ts';
 import type { Tolerance } from './timing.ts';
@@ -100,6 +100,8 @@ export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, 
 /** Saved states from older versions get the fields added since. */
 function withDefaults(d: Partial<State>): State {
   const base = empty();
+  const f = d.fuel?.factors;
+  if (f && (Object.keys(OLD_FACTORS) as (keyof typeof OLD_FACTORS)[]).every((k) => f[k] === OLD_FACTORS[k])) d.fuel!.factors = { ...DEFAULT_FACTORS };
   return { ...base, ...d, fuel: { ...base.fuel, ...d.fuel } };
 }
 

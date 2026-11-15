@@ -17,6 +17,8 @@ export const banner = (k: string, title: string, sub = '') => head(k === 'body' 
 
 /** Line icons for Fuel (24 × 24, currentColor): one per destination, so the tiles read without pictures. */
 export const ICON: Record<string, string> = {
+  // 2026-11-15: the Carb Cycling tab, two arrows going round a slice of bread
+  cycle: '<path d="M20.4 9.2A8.8 8.8 0 0 0 5.4 5.6M5.2 2.6v3.2h3.2M3.6 14.8a8.8 8.8 0 0 0 15 3.6M18.8 21.4v-3.2h-3.2"/><path d="M9.2 10a1.9 1.9 0 0 1 .2-3.8h5.2a1.9 1.9 0 0 1 .2 3.8v4.4a.7.7 0 0 1-.7.7H9.9a.7.7 0 0 1-.7-.7Z"/>',
   nutrition: '<path d="M12 3c1.2 3.2 4.6 5.1 4.6 9.4A4.6 4.6 0 0 1 12 17a4.6 4.6 0 0 1-4.6-4.6c0-2 .9-3.3 1.9-4.4.2 1.4.9 2.3 1.9 2.6-.3-3 .4-5.6 1.8-7.6z"/><path d="M6 21h12"/>',
   carbs: '<path d="M4 20h16"/><path d="M6 16v2M10 12v6M14 9v9M18 5v13" stroke-width="2.6"/>',
   meals: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 21V3c-2.2 1.4-3 4-3 7 0 1.6.9 2.8 3 3"/>',

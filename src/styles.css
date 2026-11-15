@@ -912,7 +912,7 @@ body:has(#sheet.on) .fab { display: none; }
 
 /* ---------- the dock, 2026-11-15 (screens/dock.ts): the canvas draws the bar, the neon edge, the beam and the sparks ---------- */
 .tabs { display: none; }
-.dock { position: fixed; z-index: 6; left: 10px; right: 10px; bottom: max(8px, var(--safe)); max-width: 540px; height: 76px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; pointer-events: none; }
+.dock { position: fixed; z-index: 6; left: 10px; right: 10px; bottom: max(8px, var(--safe)); max-width: 540px; height: 76px; margin: 0 auto; display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); align-items: end; pointer-events: none; }
 .dock::before { content: ''; position: fixed; left: 0; right: 0; bottom: 0; z-index: -2; height: calc(86px + var(--safe)); background: linear-gradient(rgba(5, 6, 10, 0), rgba(5, 6, 10, .92) 30px, #05060a); pointer-events: none; }
 .dock-cv { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
 .dock-b { pointer-events: auto; position: relative; display: grid; justify-items: center; align-content: center; gap: 5px; height: 62px; padding: 0; border: 0; background: none; color: #7f8ca3; font: 700 11.5px/1 'Saira', system-ui, sans-serif; letter-spacing: .04em; -webkit-tap-highlight-color: transparent; transition: color .25s; }
@@ -939,3 +939,20 @@ body:has(#sheet.on) .fab { display: none; }
 .ft .fbar { position: absolute; left: 14px; right: 14px; bottom: 10px; width: auto; margin: 0; }
 .list { margin-top: 0; }
 .more-note { margin: 14px 2px 0; font-size: 13px; }
+.dock-b[hidden] { display: none; }
+
+/* the Carb Cycling tab: the week as a table */
+.cyc-nav { margin: 4px 0 10px; }
+.cyc-card { padding: 6px 12px 14px; }
+.cyc-t { width: 100%; border-collapse: collapse; font-size: 14px; }
+.cyc-t th { padding: 10px 4px 8px; text-align: left; font: 700 11px/1 var(--font); letter-spacing: .12em; text-transform: uppercase; color: var(--t3); }
+.cyc-t td { padding: 11px 4px; border-top: 1px solid var(--line); vertical-align: top; }
+.cyc-t td small { display: block; margin-top: 4px; font-size: 12px; line-height: 1.3; color: var(--t3); }
+.cyc-t td small.pre { color: var(--sky); }
+.cyc-t td b.cap { text-transform: capitalize; font-size: 15px; }
+.cyc-t .n { text-align: right; white-space: nowrap; }
+.cyc-t .n b { font-size: 18px; }
+.cyc-t tr.now td { background: rgba(72, 207, 255, .08); }
+.cyc-t tr.now td:first-child { box-shadow: inset 3px 0 0 #48cfff; }
+.cyc-t tr.past { opacity: .6; }
+.cyc-t .dm { white-space: nowrap; }

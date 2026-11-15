@@ -4,11 +4,14 @@
 import { ctx, dayLong, dayShort, esc, n0 } from '../app.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
 import type { Demand } from '../logic/training.ts';
-import { demandTag, head, heroBand } from './parts.ts';
+import { demandTag, head } from './parts.ts';
 import { fuelWeek } from './state.ts';
 
 
 const ORDER: Demand[] = ['high', 'moderate', 'low', 'rest'];
+
+/** The columns grow once per visit; later redraws show them standing. */
+let ran = false;
 
 export function cycleTabHtml(): string {
   const today = ctx.today();
@@ -28,8 +31,8 @@ export function cycleTabHtml(): string {
       <td>${demandTag(d.demand)}${d.prefuel ? '<small class="pre">urcat: mâine e HIGH</small>' : ''}<small>${esc(what(d.date))}</small></td>
       <td class="n"><b>${n0(d.c)}</b><small>g carbo</small></td>
       <td class="n"><b>${n0(d.kcal)}</b><small>kcal</small></td></tr>`).join('');
-  return `${head('cycle', 'Carb cycling', 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
-  ${heroBand('fight')}
+  const html = `${head('cycle', 'Carb cycling', 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
+  <div class="hero-stage" aria-hidden="true"><canvas class="hero-cv" data-kind="carbs" data-j="${esc(JSON.stringify({ c: days.map((d) => d.c), d: days.map((d) => (d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase())), t: days.map((d) => d.demand), now: 0, intro: !ran }))}"></canvas></div>
   <h2 class="more-sec">Următoarele 7 zile</h2>
   <section class="card cyc-card"><table class="cyc-t">
     <thead><tr><th>Ziua</th><th>Tipul zilei</th><th class="n">Carbo</th><th class="n">Calorii</th></tr></thead>
@@ -44,6 +47,8 @@ export function cycleTabHtml(): string {
     <p><b>În ziua de antrenament</b>, carbohidrații se adună în masa dinainte și în cea de după.</p>
     <button class="ghost wide" data-tab="fuel" data-sub="carbs">Calendar, factori și setări</button>
   </section>`;
+  ran = true;
+  return html;
 }
 
 export function cycleAction(el: HTMLElement): boolean {

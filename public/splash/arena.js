@@ -667,6 +667,63 @@
         var Ji = injectJ(t);
         figure(c, Ji, cx - 4 * s, by, s, 1, o2);
         pen(c, Ji, cx - 4 * s, by, s, 1, o2, hot, pale);
+      } else if (kind === 'carbs') {
+        // the Carb tab (Beast Nutrition, 2026-11-15): the next days as glowing columns of carbs, a wave of energy
+        // running over their tops, today's column lit with a slice of bread above it, crumbs rising off the HIGH days
+        var cy = o.journey || { c: [300, 390, 300, 250, 390, 300, 390], d: [], t: [], now: 0 };
+        var cn = cy.c.length, cmax = Math.max.apply(null, cy.c), cmin = Math.min.apply(null, cy.c);
+        var bx0 = Wd * 0.1, bx1 = Wd * 0.9, base = Ht * 0.8, topY = Ht * 0.24, bw = ((bx1 - bx0) / Math.max(1, cn - 1)) * 0.42;
+        var tops = [];
+        c.save();
+        for (var bi = 0; bi < cn; bi++) {
+          var bxx = bx0 + ((bx1 - bx0) * bi) / Math.max(1, cn - 1);
+          var grow = cy.intro ? ease(clamp((t - 0.15 - bi * 0.09) / 0.7, 0, 1)) : 1;
+          var hh = (0.3 + 0.7 * ((cy.c[bi] - cmin) / (cmax - cmin || 1))) * (base - topY) * grow;
+          var ty2 = base - hh, isNow = bi === (cy.now || 0), kindT = cy.t[bi] || 'moderate';
+          tops.push([bxx, ty2]);
+          var strength = kindT === 'high' ? 1 : kindT === 'moderate' ? 0.7 : kindT === 'low' ? 0.5 : 0.35;
+          if (isNow) strength = Math.max(strength, 0.95);
+          var bg = c.createLinearGradient(0, ty2, 0, base);
+          bg.addColorStop(0, rgba(isNow ? pale : hot, 0.95 * strength + (isNow ? 0.05 : 0)));
+          bg.addColorStop(0.35, rgba(col, 0.55 * strength));
+          bg.addColorStop(1, rgba(col, 0.05));
+          c.fillStyle = bg; c.shadowColor = rgba(hot, 1); c.shadowBlur = isNow ? 22 : 10 * strength;
+          var rr = Math.min(bw / 2, 10);
+          c.beginPath(); c.moveTo(bxx - bw / 2, base); c.lineTo(bxx - bw / 2, ty2 + rr); c.quadraticCurveTo(bxx - bw / 2, ty2, bxx - bw / 2 + rr, ty2);
+          c.lineTo(bxx + bw / 2 - rr, ty2); c.quadraticCurveTo(bxx + bw / 2, ty2, bxx + bw / 2, ty2 + rr); c.lineTo(bxx + bw / 2, base); c.closePath(); c.fill();
+          c.shadowBlur = 0;
+          if (isNow) { c.strokeStyle = rgba(pale, 0.5 + 0.4 * Math.sin(t * 3)); c.lineWidth = 2; c.stroke(); }
+          // grams over the column, the day under it
+          c.font = '800 ' + Math.max(10, Ht * 0.05).toFixed(0) + 'px Saira, "Arial Narrow", sans-serif'; c.textAlign = 'center';
+          c.fillStyle = rgba(pale, (isNow ? 1 : 0.75) * grow); c.fillText(String(Math.round(cy.c[bi] * (cy.intro ? grow : 1))), bxx, ty2 - 8);
+          c.font = '700 ' + Math.max(9, Ht * 0.042).toFixed(0) + 'px Saira, "Arial Narrow", sans-serif';
+          c.fillStyle = isNow ? '#ffffff' : 'rgba(255,255,255,.5)'; c.fillText(cy.d[bi] || '', bxx, base + Ht * 0.08);
+          var letter = { high: 'H', moderate: 'M', low: 'L', rest: 'R' }[kindT] || '';
+          c.fillStyle = rgba(hot, strength); c.fillText(letter, bxx, base + Ht * 0.15);
+          if (kindT === 'high' && !o.still && Math.random() < dt * 4) sparks.push({ x: bxx + (Math.random() - 0.5) * bw, y: ty2, px: bxx, py: ty2, vx: (Math.random() - 0.5) * 20, vy: -30 - Math.random() * 40, t: 0, life: 0.8 + Math.random() * 0.6, w: 1.2 });
+        }
+        // the wave of energy over the tops, and the light running along it
+        if (tops.length > 1) {
+          c.beginPath(); c.moveTo(tops[0][0], tops[0][1] - 2);
+          for (var wi = 1; wi < tops.length; wi++) { var mx = (tops[wi - 1][0] + tops[wi][0]) / 2; c.bezierCurveTo(mx, tops[wi - 1][1] - 2, mx, tops[wi][1] - 2, tops[wi][0], tops[wi][1] - 2); }
+          c.strokeStyle = rgba(pale, 0.55); c.lineWidth = 2; c.shadowColor = rgba(hot, 1); c.shadowBlur = 10; c.stroke(); c.shadowBlur = 0;
+          var run = ((t * 0.22) % 1) * (tops.length - 1), seg = Math.floor(run), fr = run - seg, A2 = tops[seg], B2 = tops[Math.min(seg + 1, tops.length - 1)];
+          var ux = A2[0] + (B2[0] - A2[0]) * fr, uy = A2[1] + (B2[1] - A2[1]) * (fr * fr * (3 - 2 * fr)) - 2;
+          c.globalCompositeOperation = 'lighter';
+          var dg = c.createRadialGradient(ux, uy, 0, ux, uy, 16); dg.addColorStop(0, 'rgba(255,255,255,.95)'); dg.addColorStop(0.3, rgba(hot, 0.6)); dg.addColorStop(1, rgba(col, 0));
+          c.fillStyle = dg; c.beginPath(); c.arc(ux, uy, 16, 0, Math.PI * 2); c.fill();
+          c.globalCompositeOperation = 'source-over';
+        }
+        // a slice of bread floating over today's column
+        var nt = tops[cy.now || 0];
+        if (nt) {
+          var by2 = nt[1] - Ht * 0.17 + Math.sin(t * 2.2) * 3, bs = Ht * 0.05;
+          c.save(); c.translate(nt[0], by2); c.rotate(Math.sin(t * 1.3) * 0.08);
+          c.beginPath(); c.moveTo(-bs, bs * 0.2); c.arc(-bs * 0.55, -bs * 0.25, bs * 0.55, Math.PI * 0.85, Math.PI * 1.6); c.arc(bs * 0.55, -bs * 0.25, bs * 0.55, Math.PI * 1.4, Math.PI * 0.15); c.lineTo(bs * 0.85, bs * 1.1); c.lineTo(-bs * 0.85, bs * 1.1); c.closePath();
+          c.fillStyle = '#040508'; c.strokeStyle = rgba(rimc, 1); c.lineWidth = 2; c.shadowColor = rgba(hot, 1); c.shadowBlur = 12; c.fill(); c.stroke();
+          c.restore();
+        }
+        c.restore();
       } else if (kind === 'journey') {
         // the road to the goal (Beast Nutrition, Azi): a gate at every stretch, the runner where the scale says he is,
         // the road behind him lit; on the first look of the visit he runs there from the start and each gate he

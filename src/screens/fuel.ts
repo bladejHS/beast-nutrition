@@ -66,24 +66,28 @@ function home() {
   const tile = (k: string, attr: string, title: string, value: string, sub: string, f?: number) =>
     `<button class="ft" ${attr}><span class="ft-ic" data-k="${k}">${icon(k)}</span><span class="ft-t">${title}</span><b class="ft-v">${value}</b><small>${sub}</small>${f == null ? '' : bar(f)}</button>`;
   void demandTag; void dayLong;
-  return `<header class="fhero"><h1 class="ft-h"><span>Mai mult</span></h1><p class="fsub">Uneltele din spatele zilei și planul tău.</p></header>
+  // 2026-11-15, the user: the layout of Mai mult was off. Same head as the other tabs, tiles of one size in one order
+  // (icon, name, value, line, bar at the foot), a word instead of a lone dash, the lists as one group under a title.
+  return `${head('nutrition', 'Mai mult', 'Uneltele din spatele zilei și planul tău.')}
+  <h2 class="more-sec">Azi</h2>
   <div class="ftiles">
     ${tile('water', go('water'), 'Hidratare', `${n1(water / 1000)}<small> / ${n1(waterT / 1000)} L</small>`, water >= waterT ? 'Ținta e atinsă' : `Mai ai ${n1(Math.max(0, waterT - water) / 1000)} L`, water / waterT)}
     ${tile('carbs', go('carbs'), 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[demand] : 'Oprit', s.fuel.cycling ? `${n0(target.c)} g carbohidrați azi` : 'Carbohidrații după antrenament')}
-    ${tile('supp', go('supp'), 'Suplimente', s.supps.length ? `${taken}<small> / ${s.supps.length}</small>` : '—', s.supps.length ? (taken >= s.supps.length ? 'Toate luate azi' : 'luate azi') : 'Ce merită luat', s.supps.length ? taken / s.supps.length : undefined)}
-    ${tile('recovery', go('recovery'), 'Recuperare', sleep == null ? '—' : `${n1(sleep)}<small> h</small>`, sleep == null ? 'Somnul din Inner Beast' : 'somn, media pe 7 nopți', sleep == null ? undefined : sleep / 8)}
+    ${tile('supp', go('supp'), 'Suplimente', s.supps.length ? `${taken}<small> / ${s.supps.length}</small>` : '<small>Niciunul</small>', s.supps.length ? (taken >= s.supps.length ? 'Toate luate azi' : 'luate azi') : 'Ce merită luat', s.supps.length ? taken / s.supps.length : undefined)}
+    ${tile('recovery', go('recovery'), 'Recuperare', sleep == null ? '<small>Fără date</small>' : `${n1(sleep)}<small> h</small>`, sleep == null ? 'Somnul din Inner Beast' : 'somn, media pe 7 nopți', sleep == null ? undefined : sleep / 8)}
     ${tile('advanced', 'data-tab="post"', 'Post', w ? esc(w.ratio) : 'Oprit', w ? `${fast?.eating ? 'Fereastra e deschisă' : 'În post'} · ${esc(w.start)}–${esc(w.end)}` : '12:12, 14:10 sau 16:8')}
     ${tile('analytics', go('report'), 'Raport', 'Săptămâna', 'în cifre, din ce ai notat')}
   </div>
+  <h2 class="more-sec">Plan și sănătate</h2>
   <div class="list">
     ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
     ${listRow('data-tab="glp1"', 'Semaglutidă', s.glp1.on ? `${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Wegovy cu medicul: doze, zile, ritm')}
     ${listRow('data-mine="list"', 'Alimentele mele', s.custom.length ? `${s.custom.length} salvate` : 'Adaugi tu valorile de pe etichetă')}
-    ${listRow('data-f="sub" data-v="labs"', 'Analize', s.labs.length ? `${new Set(s.labs.map((r) => r.marker)).size} analize · ultima ${s.labs.map((r) => r.date).sort().at(-1)}` : 'HbA1c, feritină, vitamina D, testosteron')}
+    ${listRow('data-f="sub" data-v="labs"', 'Analize', s.labs.length ? `${new Set(s.labs.map((r) => r.marker)).size} analize · ultima pe ${dayLong(s.labs.map((r) => r.date).sort().at(-1)!).toLowerCase()}` : 'HbA1c, feritină, vitamina D, testosteron')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
   </div>
-  ${t.linked ? '' : '<p class="hint">Inner Beast nu a fost deschis în acest browser, așa că folosesc săptămâna lui standard.</p>'}`;
+  ${t.linked ? '' : '<p class="hint more-note">Inner Beast nu a fost deschis pe acest telefon, așa că folosesc săptămâna lui standard de antrenament.</p>'}`;
 }
 
 function recovery() {

@@ -926,3 +926,16 @@ body:has(#sheet.on) .fab { display: none; }
 .dock-b:focus-visible { outline: 2px solid #48cfff; outline-offset: -6px; border-radius: 16px; }
 @media (prefers-reduced-motion: reduce) { .dock-b.lit svg { animation: none; } }
 .dock:not(.ready) { display: none; }
+
+/* Mai mult, laid out again (2026-11-15): one head like the other tabs, two titled groups, tiles of one size */
+.more-sec { margin: 18px 2px 10px; font: 800 semi-condensed 13px/1 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--t2); }
+.ftiles { grid-auto-rows: 1fr; gap: 10px; }
+.ft { display: grid; grid-template-columns: 40px 1fr; grid-template-rows: auto 1fr auto; column-gap: 10px; row-gap: 8px; align-items: center; min-height: 128px; padding: 14px; }
+.ft .ft-ic { grid-row: 1; grid-column: 1; margin: 0; }
+.ft .ft-t { grid-row: 1; grid-column: 2; line-height: 1.2; }
+.ft .ft-v { grid-row: 2; grid-column: 1 / -1; align-self: end; }
+.ft .ft-v small { font-size: 17px; font-weight: 700; }
+.ft > small { grid-row: 3; grid-column: 1 / -1; align-self: start; min-height: 2.6em; }
+.ft .fbar { position: absolute; left: 14px; right: 14px; bottom: 10px; width: auto; margin: 0; }
+.list { margin-top: 0; }
+.more-note { margin: 14px 2px 0; font-size: 13px; }

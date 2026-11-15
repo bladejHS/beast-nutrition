@@ -1,4 +1,5 @@
-import { ctx, dayLong, dayShort, esc, n0, n1, nb, nowMinutes, nowTime, parseNum } from '../app.ts';
+import { ctx, dayLong, dayShort, esc, n0, n1, nb, nowMinutes, nowTime, parseNum } from '../app.ts';
+import { prepFor } from '../logic/prep.ts';
 import { AVOID, EVIDENCE, MINERALS } from '../data/supplements.ts';
 import { DEFAULT_FACTORS } from '../logic/carbs.ts';
 import { isBreakWeek, weekday } from '../logic/calc.ts';
@@ -121,12 +122,22 @@ function genDay(date: string, seed: number): Meal[] {
 const isPast = (d: string) => d < ctx.today();
 const needFoods = () => { if (pantry.foods.length) return false; void loadPantry().then(() => ctx.render()).catch(() => { pantry.failed = true; ctx.render(); }); return true; };
 
+/** The meal's preparation (logic/prep.ts): the steps with times and temperatures, the seasoning, the tricks. */
+export function prepHtml(m: Meal, open = false) {
+  const p = prepFor(m.name, m.items.map((it) => ({ name: pantry.map.get(it.foodId)?.name ?? '', g: it.g })), m.steps);
+  if (!p.steps.length) return `<p class="hint">${esc(m.steps)}</p>`;
+  return `<details class="prep"${open ? ' open' : ''}><summary><b>Mod de preparare</b><span>${p.min ? `~${p.min} min` : 'fără gătit'}</span></summary>
+    <ol class="prep-s">${p.steps.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+    ${p.tips.length ? `<div class="prep-t"><b>Ca să iasă bune</b>${p.tips.map((x) => `<p>${esc(x)}</p>`).join('')}</div>` : ''}
+    <p class="hint">Cantitățile sunt crude, cântărite înainte de gătit. Condimentele, sarea, lămâia și oțetul nu se numără.</p></details>`;
+}
+
 function mealCard(m: Meal, i: number) {
   const t = macros(m.items, pantry.map);
   const past = isPast(mealDay);
   return `<details class="mealc ${m.done ? 'done' : ''}" data-id="${m.id}" ${openMeals.has(m.id) ? 'open' : ''}><summary><span class="mt">${esc(m.time)}</span><span class="mb"><b>${esc(m.name)}</b>${m.tag ? `<em>${esc(m.tag)}</em>` : ''}<small>${nb(n0(t.kcal), 'kcal')}, ${nb(n0(t.p), 'g')} proteine, ${nb(n0(t.c), 'g')} carbo, ${nb(n0(t.f), 'g')} grăsimi</small></span></summary>
     ${m.items.map((it, k) => { const f = pantry.map.get(it.foodId); return `<div class="ing"><span>${nb(n0(it.g), 'g')} ${esc(f?.name ?? '')}</span>${past ? '' : `<button class="lnk" data-f="sw" data-m="${i}" data-i="${k}">Schimbă</button>`}</div>`; }).join('')}
-    <p class="hint">${esc(m.steps)}</p>
+    ${prepHtml(m)}
     ${past ? '' : `<div class="btns"><button class="${m.done ? 'ghost' : 'primary'}" data-f="${m.done ? 'uneat' : 'eat'}" data-m="${i}">${m.done ? 'Scoate din jurnal' : 'Am mâncat'}</button><button class="ghost" data-f="opts" data-m="${i}">Alte variante</button>${m.done ? '' : `<button class="ghost" data-f="move" data-m="${i}">Mută pe altă zi</button>`}<button class="ghost" data-f="rm" data-m="${i}">Scoate</button></div>`}</details>`;
 }
 

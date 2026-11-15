@@ -1130,3 +1130,21 @@ html[data-tod='night'] .hero-stage::before { background: radial-gradient(70% 60%
   .bn-cel *, .bn-chap *, .weigh *, .ring .liq i, .mc .bl-t div::after, .cn-main::after, .cn-k i, .perf b, .perf-fl, .dash.drop .ring::after { animation: none !important; }
   .weigh-l { opacity: 1; }
 }
+
+/* the meal's preparation (2026-11-16) */
+.prep { margin: 10px 0 4px; border-radius: 14px; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
+.prep > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 0 14px; cursor: pointer; list-style: none; }
+.prep > summary::-webkit-details-marker { display: none; }
+.prep > summary b { font: 800 condensed 16px/1 var(--font); letter-spacing: .04em; text-transform: uppercase; color: var(--sky); }
+.prep > summary span { font: 700 13px/1 var(--font); color: var(--t2); }
+.prep > summary::after { content: ''; width: 9px; height: 9px; border-right: 2px solid var(--t2); border-bottom: 2px solid var(--t2); transform: rotate(45deg) translateY(-3px); transition: transform .2s; }
+.prep[open] > summary::after { transform: rotate(225deg) translateY(-3px); }
+.prep > summary span { margin-left: auto; }
+.prep-s { margin: 0; padding: 0 14px 4px 34px; line-height: 1.5; font-size: 15px; }
+.prep-s li { margin: 0 0 10px; padding-left: 2px; }
+.prep-s li::marker { font-weight: 800; color: var(--sky); }
+.prep-t { margin: 4px 14px 10px; padding: 10px 12px; border-left: 3px solid var(--gold); background: rgba(220, 179, 94, .07); }
+.prep-t b { display: block; margin-bottom: 4px; font: 800 condensed 13px/1 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--gold-2); }
+.prep-t p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; color: var(--t1); }
+.prep > .hint { margin: 0 14px 12px; }
+.prep-lnk { margin-top: 2px; }

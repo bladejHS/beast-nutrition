@@ -9,7 +9,7 @@ import { dayRows, nextMeal } from '../logic/today.ts';
 import { CARB_LABEL, type Demand } from '../logic/training.ts';
 import { waterTarget } from '../logic/wellness.ts';
 import { fastChip } from './fast.ts';
-import { eatPlanned, generateToday, uneatPlanned, waterOn } from './fuel.ts';
+import { eatPlanned, generateToday, prepHtml, uneatPlanned, waterOn } from './fuel.ts';
 import { openAdd } from './log.ts';
 import { DAY_KIND, heroBand, icon, lvl } from './parts.ts';
 import { dayFuel, fuelWeek, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
@@ -189,7 +189,7 @@ function nextCard(d: string, slots: Slot[], shown: number | null, next: number |
   return `<section class="nextc${logged ? ' ate' : ''}${dir ? ` slide-${dir}` : ''}">${cardHead(title, shown, slots.length, shown !== next && next != null)}
     <div class="next-m"><b class="t">${esc(slot.time)}</b><div><b>${esc(slot.title)}</b>${slot.tag ? `<small>${esc(slot.tag)}</small>` : ''}</div></div>
     ${g ? `<p class="next-g">${nb(g.c, 'g')} carbo, ${nb(g.p, 'g')} proteine, ${nb(g.f, 'g')} grăsimi</p>` : ''}
-    ${m && pantry.foods.length ? `<p class="hint">${grams(m)}</p>` : ''}
+    ${m && pantry.foods.length ? `<p class="hint">${grams(m)}</p>${m.done ? '' : `<button class="lnk prep-lnk" data-az="prep" data-m="${slot.mi}">Cum o prepari ›</button>`}` : ''}
     <div class="btns">${acts}</div></section>`;
 }
 
@@ -319,6 +319,7 @@ export function todayAction(el: HTMLElement): boolean {
   if (a === 'uneat') uneatPlanned(currentDate(), Number(d['m']));
   if (a === 'gen') void generateToday(currentDate()).catch(() => ctx.toast('Baza de alimente nu s-a încărcat. Verifică internetul.'));
   if (a === 'weigh') openWeigh();
+  if (a === 'prep') { const m = (s.fuel.plan[currentDate()] ?? [])[Number(d['m'])]; if (m) ctx.open(`<h2>${esc(m.name)}</h2>${prepHtml(m, true)}`, esc(m.name)); }
   if (a === 'copy') {
     const day = currentDate();
     const prev = dayMeals(s, addDays(day, -1));

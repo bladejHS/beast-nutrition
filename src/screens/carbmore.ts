@@ -1,4 +1,5 @@
 /* Carb Cycling: nutrient timing, what the logs show, and the settings. */
+import { dextrinFor } from '../logic/timing.ts';
 import { ctx, dayShort, esc, n0, nb } from '../app.ts';
 import { dayBand } from '../logic/carbs.ts';
 import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Rated } from '../logic/insights.ts';
@@ -23,10 +24,22 @@ function preCard(t: Timing, date: string) {
     <div class="btns"><button class="ghost" data-f="topt" data-d="${date}" data-v="pre">Variante de masă</button><button class="ghost" data-f="topt" data-d="${date}" data-v="snack">Variantă ușoară</button></div></li>`;
 }
 
-function intraCard(t: Timing) {
+/** The cyclic dextrin drink for this session, with one tap to log it in the day (it counts in the day's carbs). */
+export function dextrinHtml(t: Timing, date: string, compact = false) {
+  const d = dextrinFor(t.intra);
+  if (!d) return '';
+  const logged = dayMeals(ctx.get(), date).flat().some((e) => e.name.startsWith('Dextrină ciclică'));
+  return `<div class="dx${d.needed ? '' : ' opt'}"><p class="dx-k">Dextrină ciclică${d.needed ? '' : ' · opțional'}</p>
+    <p class="dx-n"><b>${d.g} g</b><span>în ${d.ml} ml apă · ${Math.round(d.g * 0.95)} g carbo</span></p>
+    ${compact ? '' : `<p class="dx-t">${esc(d.text)}</p>`}
+    ${logged ? '<p class="hint">Notată azi.</p>' : `<button class="ghost wide" data-dx="${d.g}" data-d="${date}">Adaugă ${d.g} g dextrină în ziua ${date === ctx.today() ? 'de azi' : 'aceea'}</button>`}</div>`;
+}
+
+function intraCard(t: Timing, date: string) {
   const i = t.intra;
   return `<li class="ts intra"><h2>În timpul efortului</h2><div class="ts-h"><b>${t.start}–${t.end}</b><span>${i.minutes} min solicitante</span></div>
     <p>${esc(i.text)}</p>${i.total ? `<div class="ts-m">Maximum ${i.total} g în total</div><p class="hint">Intră în ținta de carbohidrați a zilei, nu se adaugă.</p>` : ''}
+    ${dextrinHtml(t, date)}
     <p class="hint">Reper: Thomas, Erdman și Burke, 2016 (ACSM, Academy of Nutrition and Dietetics, Dietitians of Canada).</p></li>`;
 }
 
@@ -52,7 +65,7 @@ export function timingView() {
   const sl = mealSlots(date);
   return `<div class="dayrow">${dates.map((d) => `<button data-f="tday" data-v="${d}" class="${d === date ? 'on' : ''}" aria-pressed="${d === date}"><span>${esc(dayShort(d))}</span><small>${Number(d.slice(8))}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
   <p class="hint cap">${esc(longDay(date))}</p><p class="hint">Sfaturi generale ale aplicației, nu din carte. Gramele ies din ținta zilei.</p>
-  ${t.hasSession && sl.trainingMeal != null ? `<ol class="tline">${preCard(t, date)}${s.fuel.intra ? intraCard(t) : ''}${postCard(t, date)}</ol>`
+  ${t.hasSession && sl.trainingMeal != null ? `<ol class="tline">${preCard(t, date)}${s.fuel.intra ? intraCard(t, date) : ''}${postCard(t, date)}</ol>`
     : `<section class="card"><h2>Fără masă specială</h2><p>${dem(date) === 'rest' ? 'Zi de recuperare' : 'Efort ușor'}: nu ai nevoie de o masă specială. Proteina rămâne ca în plan, iar carbohidrații se împart egal pe mese.</p>${t.hasSession ? `<p class="hint">${esc(t.intra.text)}</p>` : ''}</section>`}
   <button class="ghost wide" data-f="sub" data-v="meals">Deschide planul de mese</button>`;
 }
@@ -123,6 +136,7 @@ export function configView() {
     <h3>Toleranță digestivă</h3><div class="seg small">${(['low', 'normal', 'high'] as Tolerance[]).map((v) => `<button data-f="tol" data-v="${v}" class="${f.tolerance === v ? 'on' : ''}">${TOLERANCE_LABEL[v]}</button>`).join('')}</div>
     <label class="field">Minute între masă și antrenament (0 = după toleranță)<input type="text" inputmode="numeric" id="pregap" value="${f.preGap}"></label>
     <div class="gap">${sw('cintra', f.intra, 'Arată recomandările din timpul efortului')}</div>
+    <div class="gap">${sw('cdex', f.dextrin, 'Folosesc dextrină ciclică în antrenament: planul de mese îi lasă loc din carbohidrați')}</div>
     <button class="ghost wide" data-f="sub" data-v="meals">Preferințe în planul de mese</button></section>
   <section class="card"><h2>Zile schimbate manual</h2>${active.length ? active.map(([d, v]) => `<div class="line"><span class="cap">${esc(longDay(d))}</span><b>${CARB_LABEL[v]}</b><button class="xs" data-f="ov" data-d="${d}" data-v="" aria-label="Revino la automat">×</button></div>`).join('') : '<p class="hint">Niciuna. O zi se schimbă din detaliile ei, în calendar.</p>'}</section>
   <section class="card"><h2>Verificare</h2>

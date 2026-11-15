@@ -3,7 +3,9 @@ import { ctx, dayLong, esc, n0, n1, nb, nowMinutes, nowTime } from '../app.ts';
 import type { DayTarget } from '../logic/calc.ts';
 import type { Meal } from '../logic/mealplan.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
-import { dayMeals, MEALS, totals, type Entry } from '../logic/store.ts';
+import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
+import { DEXTRIN } from '../logic/foods.ts';
+import { dextrinHtml } from './carbmore.ts';
 import { mealGoal } from '../logic/timing.ts';
 import { dayRows, nextMeal } from '../logic/today.ts';
 import { CARB_LABEL, type Demand } from '../logic/training.ts';
@@ -215,7 +217,7 @@ function dayList(d: string, slots: Slot[], next: Slot | null) {
   const rows = dayRows(slots.map((x) => x.time), tm.hasSession ? { start: tm.start, end: tm.end } : null, d === ctx.today() ? nowTime() : null);
   return `<ol class="daylist">${rows.map((r, k) => {
     if (r.kind === 'now') return `<li class="r nowm"><span>acum, ${esc(r.time)}</span></li>`;
-    if (r.kind === 'train') return `<li class="r tr"><button class="r-b" data-f="dayopen" data-v="${d}"><span class="t">${esc(r.time)}</span><span class="b"><b>Antrenament</b><small>până la ${esc(r.end)}, ${tm.minutes} min</small></span><i class="chev" aria-hidden="true"></i></button></li>`;
+    if (r.kind === 'train') return `<li class="r tr"><button class="r-b" data-f="dayopen" data-v="${d}"><span class="t">${esc(r.time)}</span><span class="b"><b>Antrenament</b><small>până la ${esc(r.end)}, ${tm.minutes} min</small></span><i class="chev" aria-hidden="true"></i></button>${s.fuel.intra ? dextrinHtml(tm, d, true) : ''}</li>`;
     const x = slots[r.i]!;
     return mealRow(x, journal[x.i] ?? [], x === next).replace('<li class="r ', `<li style="--i:${k}" class="r `);
   }).join('')}</ol>`;
@@ -298,6 +300,21 @@ export function todayAction(el: HTMLElement): boolean {
   const d = el.dataset;
   if (d['day']) { date = addDays(currentDate(), Number(d['day'])); ctx.fresh = true; ctx.render(); return true; }
   if (d['add'] != null) { openAdd(currentDate(), Number(d['add'])); return true; }
+  if (d['dx']) {
+    // the dextrin goes in the meal closest to the training, so the day's carbs show it
+    const day = d['d'] || currentDate();
+    const g = Number(d['dx']);
+    const tm = timingFor(day), times = mealSlots(day).times;
+    const toMin = (x: string) => { const [h, m] = x.split(':').map(Number); return (h ?? 0) * 60 + (m ?? 0); };
+    const slot = times.reduce((best, x, i) => (Math.abs(toMin(x) - toMin(tm.start)) < Math.abs(toMin(times[best] ?? '00:00') - toMin(tm.start)) ? i : best), 0);
+    const before = s.days[day];
+    const days = dayMeals(s, day).map((m) => [...m]);
+    days[slot]!.push({ ...entryFrom(DEXTRIN, g), name: 'Dextrină ciclică (HBCD), intra-workout' });
+    s.days[day] = days;
+    ctx.commit(); ctx.render();
+    ctx.toast(`${g} g dextrină adăugată: ${Math.round(g * 0.95)} g carbohidrați.`, () => { if (before) s.days[day] = before; else delete s.days[day]; ctx.commit(); ctx.render(); });
+    return true;
+  }
   if (d['del']) {
     const day = currentDate();
     const [i, id] = d['del'].split(':');

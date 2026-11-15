@@ -282,3 +282,15 @@ test('the Splendid Chicken menu keeps the declared values and is searchable', ()
   assert.equal(search(menu, 'buffalo wings')[0]!.name, 'Buffalo Wings');
   for (const f of menu) assert.ok(Math.abs(f.p * 4 + f.c * 4 + f.f * 9 - f.kcal) <= Math.max(14, f.kcal * 0.12), f.name);
 });
+
+test('cyclic dextrin: the dose follows the hard minutes, about a 7 % drink', async () => {
+  const { dextrinFor } = await import('./timing.ts');
+  assert.equal(dextrinFor({ level: 'none', minutes: 30, gLow: 0, gHigh: 0, total: 0, text: '' }), null);
+  const long = dextrinFor({ level: 'advised', minutes: 120, gLow: 30, gHigh: 60, total: 120, text: '' })!;
+  assert.equal(long.g, 120);
+  assert.ok(long.ml >= 1500 * 0.99 && long.needed);
+  const mid = dextrinFor({ level: 'optional', minutes: 80, gLow: 0, gHigh: 30, total: 40, text: '' })!;
+  assert.equal(mid.g, 40);
+  assert.equal(mid.ml, 550);
+  assert.equal(dextrinFor({ level: 'small', minutes: 60, gLow: 0, gHigh: 0, total: 0, text: '' })!.needed, false);
+});

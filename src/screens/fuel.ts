@@ -1,4 +1,5 @@
 import { ctx, dayLong, dayShort, esc, n0, n1, nb, nowMinutes, nowTime, parseNum } from '../app.ts';
+import { dextrinFor } from '../logic/timing.ts';
 import { prepFor } from '../logic/prep.ts';
 import { AVOID, EVIDENCE, MINERALS } from '../data/supplements.ts';
 import { DEFAULT_FACTORS } from '../logic/carbs.ts';
@@ -117,7 +118,18 @@ function genDay(date: string, seed: number): Meal[] {
   const s = ctx.get();
   const sl = mealSlots(date);
   const recent = [-2, -1, 1].flatMap((k) => s.fuel.plan[addDays(date, k)] ?? []).map((m) => m.name);
-  return regenerate(s.fuel.plan[date] ?? [], dayFuel(date), sl.shares, sl.times, sl.tags, kitchen(), s.fuel.prefs, seed, sl.fatShares, recent);
+  return regenerate(s.fuel.plan[date] ?? [], mealTarget(date), sl.shares, sl.times, sl.tags, kitchen(), s.fuel.prefs, seed, sl.fatShares, recent);
+}
+
+/** The day's target for the meals: with cyclic dextrin in a hard session, its carbs are kept out of the meals
+ *  (2026-11-16), so the dextrin and the meals together make the day's carbs. */
+export function mealTarget(date: string) {
+  const s = ctx.get();
+  const t = dayFuel(date);
+  const dx = s.fuel.dextrin && s.fuel.intra ? dextrinFor(timingFor(date).intra) : null;
+  if (!dx?.needed) return t;
+  const c = Math.round(dx.g * 0.95);
+  return { ...t, c: Math.max(0, t.c - c), kcal: t.kcal - Math.round(dx.g * 3.8) };
 }
 
 const isPast = (d: string) => d < ctx.today();
@@ -578,6 +590,7 @@ export function fuelBind() {
   flag('#cbox', (v) => { s.fuel.boxStrength = v; });
   flag('#cpre', (v) => { s.fuel.prefuel = v; });
   on('#cintra', (i) => { s.fuel.intra = i.checked; save(); });
+  on('#cdex', (i) => { s.fuel.dextrin = i.checked; save(); });
   on('#pregap', (i) => { s.fuel.preGap = Math.max(0, parseNum(i.value) || 0); save(); });
   on('#frpe', (i) => { (s.fuel.feedback[i.dataset['d']!] ??= {} as Feedback).rpe = Number(i.value); fx.recalc = true; save(); });
   document.querySelectorAll<HTMLInputElement>('[data-weight]').forEach((i) => i.addEventListener('change', () => { s.fuel.weights[i.dataset['weight'] as keyof typeof s.fuel.weights] = Math.min(1.5, Math.max(0, parseNum(i.value) || 0)); s.fuel.sig = ''; save(); }));

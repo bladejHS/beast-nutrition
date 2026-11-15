@@ -124,6 +124,10 @@ export function parseMenu(rows: MenuRow[], chain = 'Splendid Chicken', prefix = 
   }));
 }
 
+/** Cyclic dextrin (highly branched cyclic dextrin, HBCD), the user's intra-workout carbohydrate (2026-11-16). Per 100 g,
+ *  as the common labels give it: almost all carbohydrate, no fat, no protein. */
+export const DEXTRIN: Food = { id: 'x-hbcd', name: 'Dextrină ciclică (HBCD)', en: 'Highly branched cyclic dextrin', cat: 'Suplimente', kcal: 380, p: 0, c: 95, f: 0, fiber: 0, sugar: 1, sat: 0, sodium: 50, portions: [['1 măsură (25 g)', 25], ['30 g', 30], ['45 g', 45], ['60 g', 60]], source: 'fdc', noFiber: true };
+
 export async function loadFoods(): Promise<Food[]> {
   if (db) return db;
   const res = await fetch(`${import.meta.env.BASE_URL}foods.json`);
@@ -133,7 +137,7 @@ export async function loadFoods(): Promise<Food[]> {
     const r = await fetch(`${import.meta.env.BASE_URL}${m.file}`).catch(() => null);
     return r?.ok ? parseMenu(await r.json() as MenuRow[], m.chain, m.prefix) : [];
   }));
-  db = [...menus.flat(), ...db];
+  db = [DEXTRIN, ...menus.flat(), ...db];
   return db;
 }
 

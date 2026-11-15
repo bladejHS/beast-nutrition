@@ -73,6 +73,18 @@ export function intraAdvice(sessions: Session[], tolerance: Tolerance, weights?:
   return { level: 'advised', minutes, gLow: 30, gHigh, total, text: `Pentru o sesiune atât de lungă ajută ${gHigh === 30 ? '30' : '30–60'} g pe oră, luați treptat. Încearcă întâi la antrenament, nu într-o zi importantă.` };
 }
 
+/** The intra-workout drink from cyclic dextrin (2026-11-16): grams for the hard minutes, water for a 6–8 % drink,
+ *  the hourly dose of the ACSM consensus. Null when the session asks for nothing during it. */
+export interface Dextrin { g: number; ml: number; needed: boolean; text: string }
+export function dextrinFor(i: Intra): Dextrin | null {
+  if (i.level === 'none') return null;
+  const needed = i.level === 'advised' || i.level === 'optional';
+  const g = needed ? Math.max(20, Math.round(Math.min(i.total, (i.gHigh * i.minutes) / 60) / 5) * 5) : 20;
+  const ml = Math.max(400, Math.min(1500, Math.round(g / 0.07 / 50) * 50));
+  const text = `${g} g dextrină ciclică în ${ml} ml apă (cam 7 %), cu un vârf de sare dacă transpiri mult. Începi după primele 15–20 de minute și bei câteva înghițituri la 10–15 minute, până cu 10 minute înainte de final. Se golește repede din stomac și nu balonează.`;
+  return { g, ml, needed, text: needed ? text : `Nu e necesar la ${i.minutes} minute solicitante. Dacă ai mâncat acum mult sau te antrenezi dimineața pe nemâncate: ${text}` };
+}
+
 export interface Pre { mealTime: string; gapMin: number; idealGap: number; p: number; c: number; f: number; slot: number; snackTime: string | null; snackC: number; tooClose: boolean; note: string }
 export interface Post { mealTime: string; afterMin: number; p: number; c: number; f: number; slot: number; urgent: boolean; note: string; litres: number | null }
 

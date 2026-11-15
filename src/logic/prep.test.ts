@@ -33,3 +33,7 @@ test('boiled potatoes and eggs when the dish says so', () => {
   assert.match(p.steps.join(' '), /apă rece cu sare/);
   assert.match(p.steps.join(' '), /9 minute/);
 });
+
+test('peanut butter is not taken for nuts', () => {
+  assert.match(prepFor('Pâine cu unt de arahide', [{ name: 'Unt de arahide', g: 26 }]).steps.join(' '), /Untul de arahide \(26 g\)/);
+});

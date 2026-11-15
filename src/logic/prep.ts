@@ -82,9 +82,9 @@ const TECH: Tech[] = [
   // ---- the fat, last ----
   { re: /ulei/i, kind: 'fat', min: 0, say: (g) => `Uleiul (${g} g, adică ${tsp(g)}) îl măsori cu lingurița, nu din sticlă: o parte în tigaie, restul crud, peste farfurie, la final.` },
   { re: /parmezan/i, kind: 'fat', min: 0, say: (g) => `Parmezanul (${g} g) ras fin, peste mâncarea fierbinte, ca să se topească.` },
+  { re: /unt de arahide/i, kind: 'fat', min: 0, say: (g) => `Untul de arahide (${g} g) cântărit pe cântar: din ochi iese dublu.` },
   { re: /nuci|migdale|semințe|susan|chia|fistic|caju|alune|arahide/i, kind: 'fat', min: 0, say: (g) => `Nucile sau semințele (${g} g) la final, presărate; prăjite 1–2 minute în tigaia uscată au gust dublu (chia nu, ea se înmoaie direct).` },
   { re: /avocado/i, kind: 'fat', min: 0, say: (g) => `Avocado (${g} g) tăiat chiar înainte de masă, cu sare și lămâie, ca să nu se înnegrească.` },
-  { re: /unt de arahide/i, kind: 'fat', min: 0, say: (g) => `Untul de arahide (${g} g) cântărit pe cântar: din ochi iese dublu.` },
 ];
 
 /** The seasoning by the dish's name: what makes this plate taste like a dish, not like diet food. */

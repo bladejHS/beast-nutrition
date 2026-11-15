@@ -956,3 +956,21 @@ body:has(#sheet.on) .fab { display: none; }
 .cyc-t tr.now td:first-child { box-shadow: inset 3px 0 0 #48cfff; }
 .cyc-t tr.past { opacity: .6; }
 .cyc-t .dm { white-space: nowrap; }
+
+/* Cookbook tab (2026-11-15) */
+.fhead .fh-ic[data-k=book] { --ic: #fb923c; }
+#cq { margin-top: 4px; }
+.cook-cat button { font-size: 13px; letter-spacing: .02em; padding: 0 2px; }
+.cook-sort button, .cook-share button { min-height: 40px; font-size: 14px; }
+.cook-sort .on, .cook-share .on { background: var(--t1); color: var(--bg); box-shadow: none; }
+#cook-list { margin-top: 14px; padding: 0; }
+#cook-list .row em small { font-weight: 500; }
+.cook-mac { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; }
+.cook-mac span { display: grid; gap: 2px; padding: 10px 4px; text-align: center; background: var(--s2); border-radius: 12px; font-size: 11.5px; color: var(--t2); }
+.cook-mac b { font: 800 22px/1 var(--font); color: var(--t1); }
+.cook-h { margin: 20px 0 8px; font: 800 13px/1 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--t2); }
+.cook-ing, .cook-steps { margin: 0; padding-left: 22px; line-height: 1.45; }
+.cook-ing li, .cook-steps li { margin: 4px 0; }
+.cook-steps li::marker { font-weight: 800; color: #fb923c; }
+.cook-slot { margin-top: 12px; }
+.dock-b span { white-space: nowrap; font-size: min(11.5px, calc((100vw - 20px) / var(--n, 5) / 5.4)); }

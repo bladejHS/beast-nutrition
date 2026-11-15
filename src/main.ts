@@ -1,5 +1,6 @@
 import './styles.css';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
+import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
 import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
@@ -68,12 +69,13 @@ const ICONS = {
   azi: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>',
   mese: '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v5M9 3v5M17 21V3c-2.2 1.4-3 4-3 7 0 1.6.9 2.8 3 3"/>',
   cicl: '<path d="M20.4 9.2A8.8 8.8 0 0 0 5.4 5.6M5.2 2.6v3.2h3.2M3.6 14.8a8.8 8.8 0 0 0 15 3.6M18.8 21.4v-3.2h-3.2"/><path d="M9.2 10a1.9 1.9 0 0 1 .2-3.8h5.2a1.9 1.9 0 0 1 .2 3.8v4.4a.7.7 0 0 1-.7.7H9.9a.7.7 0 0 1-.7-.7Z"/>',
+  cook: '<path d="M5 4.6A1.6 1.6 0 0 1 6.6 3H19v14H6.6A1.6 1.6 0 0 0 5 18.6z"/><path d="M5 18.6A1.6 1.6 0 0 0 6.6 20.2H19v-3.2"/><path d="M10 6.5v4.2M12 6.5v4.2M11 10.7v3.3M15.4 6.5c-1 .6-1.4 1.8-1.4 3.2 0 .8.5 1.3 1.4 1.4v2.9"/>',
   corp: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8 9.500a5.500 5.500 0 0 1 8 0l-2.500 2h-3Z"/>',
   fuel: '<path d="M12 3c.6 3.2 5.5 5.9 5.5 11a5.5 5.5 0 0 1-11 0c0-2.2 1-3.8 2.3-5 .3 1.3 1 2.2 1.900 2.600C10.400 9 10.800 6 12 3Z"/>',
 };
 type Main = keyof typeof ICONS;
 // 2026-11-12, fewer places: Azi, the meal plan, the body, and everything else under "Mai mult" (Fuel's tools and the plan)
-const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', cicl: 'Carb', corp: 'Corp', fuel: 'Mai mult' };
+const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', cicl: 'Carb', cook: 'Cookbook', corp: 'Corp', fuel: 'Mai mult' };
 const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' || t === 'glp1' ? 'fuel' : t);
 
 /** The living pictures (heroBand in parts.ts), drawn by the arena engine the opening loads. */
@@ -100,7 +102,7 @@ function render() {
   syncFuel();
   kitchen();
   if (tab === 'cicl' && !s.fuel.cycling) tab = 'azi';
-  const views: Record<Tab, () => string> = { cicl: cycleTabHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
+  const views: Record<Tab, () => string> = { cicl: cycleTabHtml, cook: cookHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
   app.innerHTML = `<main>${views[tab]()}</main>`;
   dock.show(shown());
   dock.set(tabAt());
@@ -123,13 +125,14 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 
 document.addEventListener('input', (ev) => {
   const t = ev.target as HTMLInputElement;
   logInput(t);
+  cookInput(t);
   if (t.type === 'range' && t.nextElementSibling && !t.closest('#ci')) t.nextElementSibling.textContent = t.value;
 });
 

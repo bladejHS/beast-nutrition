@@ -153,9 +153,17 @@ document.addEventListener('touchmove', (ev) => { if (ev.touches.length > 1) ev.p
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   const had = !!navigator.serviceWorker.controller;
-  void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
-  // A new version took over while the app is open: it says so instead of waiting for a second launch.
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (had) toast('Versiune nouă instalată.', () => location.reload(), 'Reîncarcă'); });
+  const reg = navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
+  // 2026-11-15: an iPhone home-screen app is resumed from memory, not launched again, so it never looked for a new
+  // version (the user kept the old Carb tab). It now asks each time it comes back to the screen…
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void reg.then((r) => r.update()).catch(() => {}); });
+  // …and when the new version has taken over, it reloads by itself, unless something is being typed or a sheet is open.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!had) return;
+    const busy = !!document.getElementById('sheet')?.innerHTML || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName ?? '');
+    if (busy) toast('Versiune nouă instalată.', () => location.reload(), 'Reîncarcă');
+    else location.reload();
+  });
 }
 
 followToday();

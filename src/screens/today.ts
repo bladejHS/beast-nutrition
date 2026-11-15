@@ -1,4 +1,5 @@
 /* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
+import { foodArt } from './foodart.ts';
 import { ctx, dayLong, esc, n0, n1, nb, nowMinutes, nowTime } from '../app.ts';
 import type { DayTarget } from '../logic/calc.ts';
 import type { Meal } from '../logic/mealplan.ts';
@@ -189,7 +190,7 @@ function nextCard(d: string, slots: Slot[], shown: number | null, next: number |
       : `<button class="primary" data-add="${slot.i}">${logged ? 'Adaugă încă ceva' : 'Adaugă mâncare'}</button>${(s.fuel.plan[d] ?? []).length ? '' : '<button class="ghost" data-az="gen">Generează mesele</button>'}`;
   const dir = slide; slide = '';
   return `<section class="nextc${logged ? ' ate' : ''}${dir ? ` slide-${dir}` : ''}">${cardHead(title, shown, slots.length, shown !== next && next != null)}
-    <div class="next-m"><b class="t">${esc(slot.time)}</b><div><b>${esc(slot.title)}</b>${slot.tag ? `<small>${esc(slot.tag)}</small>` : ''}</div></div>
+    <div class="next-m">${m ? foodArt(m.name, m.items.map((it) => pantry.map.get(it.foodId)?.name ?? ''), 'md') : ''}<b class="t">${esc(slot.time)}</b><div><b>${esc(slot.title)}</b>${slot.tag ? `<small>${esc(slot.tag)}</small>` : ''}</div></div>
     ${g ? `<p class="next-g">${nb(g.c, 'g')} carbo, ${nb(g.p, 'g')} proteine, ${nb(g.f, 'g')} grăsimi</p>` : ''}
     ${m && pantry.foods.length ? `<p class="hint">${grams(m)}</p>${m.done ? '' : `<button class="lnk prep-lnk" data-az="prep" data-m="${slot.mi}">Cum o prepari ›</button>`}` : ''}
     <div class="btns">${acts}</div></section>`;

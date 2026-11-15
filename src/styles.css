@@ -1269,3 +1269,17 @@ html[data-tod='night'] .hero-stage::before { background: radial-gradient(70% 60%
 .dx-t { margin: 4px 0 8px; font-size: 14px; line-height: 1.45; color: var(--t2); }
 .dx .ghost { margin-top: 6px; }
 .r.tr .dx { margin: 0 12px 10px 12px; }
+
+/* food illustrations (2026-11-16) */
+.fart { display: block; flex: none; overflow: visible; }
+.fart.sm { width: 50px; height: 50px; }
+.fart.md { width: 62px; height: 62px; }
+.fart.lg { width: 168px; height: 168px; margin: 0 auto 6px; filter: drop-shadow(0 18px 26px rgba(0, 0, 0, .45)); }
+.fart.cn { position: absolute; right: -8px; top: -10px; width: 132px; height: 132px; transform: rotate(-8deg); filter: drop-shadow(0 16px 22px rgba(0, 0, 0, .5)); pointer-events: none; }
+.cn-main .cn-t, .cn-main .cn-cat, .cn-main .cn-p { padding-right: 104px; }
+.mealc > summary { align-items: center; }
+.mealc > summary .fart { margin-right: 2px; }
+.next-m { align-items: center; }
+.next-m .fart { margin-right: 4px; }
+.cook-row { gap: 12px; }
+.cook-row > span { flex: 1; min-width: 0; }

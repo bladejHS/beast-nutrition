@@ -1,4 +1,5 @@
 import { ctx, dayLong, dayShort, esc, n0, n1, nb, nowMinutes, nowTime, parseNum } from '../app.ts';
+import { foodArt } from './foodart.ts';
 import { dextrinFor } from '../logic/timing.ts';
 import { prepFor } from '../logic/prep.ts';
 import { AVOID, EVIDENCE, MINERALS } from '../data/supplements.ts';
@@ -148,7 +149,7 @@ export function prepHtml(m: Meal, open = false) {
 function mealCard(m: Meal, i: number) {
   const t = macros(m.items, pantry.map);
   const past = isPast(mealDay);
-  return `<details class="mealc ${m.done ? 'done' : ''}" data-id="${m.id}" ${openMeals.has(m.id) ? 'open' : ''}><summary><span class="mt">${esc(m.time)}</span><span class="mb"><b>${esc(m.name)}</b>${m.tag ? `<em>${esc(m.tag)}</em>` : ''}<small>${nb(n0(t.kcal), 'kcal')}, ${nb(n0(t.p), 'g')} proteine, ${nb(n0(t.c), 'g')} carbo, ${nb(n0(t.f), 'g')} grăsimi</small></span></summary>
+  return `<details class="mealc ${m.done ? 'done' : ''}" data-id="${m.id}" ${openMeals.has(m.id) ? 'open' : ''}><summary><span class="mt">${esc(m.time)}</span>${foodArt(m.name, m.items.map((it) => pantry.map.get(it.foodId)?.name ?? ''), 'sm')}<span class="mb"><b>${esc(m.name)}</b>${m.tag ? `<em>${esc(m.tag)}</em>` : ''}<small>${nb(n0(t.kcal), 'kcal')}, ${nb(n0(t.p), 'g')} proteine, ${nb(n0(t.c), 'g')} carbo, ${nb(n0(t.f), 'g')} grăsimi</small></span></summary>
     ${m.items.map((it, k) => { const f = pantry.map.get(it.foodId); return `<div class="ing"><span>${nb(n0(it.g), 'g')} ${esc(f?.name ?? '')}</span>${past ? '' : `<button class="lnk" data-f="sw" data-m="${i}" data-i="${k}">Schimbă</button>`}</div>`; }).join('')}
     ${prepHtml(m)}
     ${past ? '' : `<div class="btns"><button class="${m.done ? 'ghost' : 'primary'}" data-f="${m.done ? 'uneat' : 'eat'}" data-m="${i}">${m.done ? 'Scoate din jurnal' : 'Am mâncat'}</button><button class="ghost" data-f="opts" data-m="${i}">Alte variante</button>${m.done ? '' : `<button class="ghost" data-f="move" data-m="${i}">Mută pe altă zi</button>`}<button class="ghost" data-f="rm" data-m="${i}">Scoate</button></div>`}</details>`;

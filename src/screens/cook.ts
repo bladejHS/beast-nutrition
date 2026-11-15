@@ -1,5 +1,6 @@
 /* The Cookbook tab (2026-11-15, the user: "un tab care să se numească Cookbook", the recipes of the two books with
    their preparation and macros, each once, and a button that adds the meal to Azi so it counts in the macros). */
+import { foodArt } from './foodart.ts';
 import { ctx, esc, n0, n1, nb } from '../app.ts';
 import { COOK_CAT, RECIPES, type CookCat, type Recipe } from '../data/cookbook.ts';
 import { portionOf, shareLabel, suggest } from '../logic/cook.ts';
@@ -31,7 +32,7 @@ const per = (r: Recipe) => (r.pieces > 1 ? `${r.pieces} buc. · ${n0(r.kcal / r.
 function rowsHtml() {
   const list = listed();
   return list.length
-    ? list.map((r) => `<button class="row" data-cook="${r.id}"><span><b>${esc(r.name)}</b><small>${COOK_CAT[r.cat]} · ${per(r)}</small></span><em>${nb(n0(r.kcal), 'kcal')}<small>${nb(n0(r.p), 'g')} proteine</small></em></button>`).join('')
+    ? list.map((r) => `<button class="row cook-row" data-cook="${r.id}">${foodArt(r.name, r.ing, 'sm')}<span><b>${esc(r.name)}</b><small>${COOK_CAT[r.cat]} · ${per(r)}</small></span><em>${nb(n0(r.kcal), 'kcal')}<small>${nb(n0(r.p), 'g')} proteine</small></em></button>`).join('')
     : '<p class="hint pad">Nicio rețetă găsită. Caută după nume sau după un ingredient: ton, ovăz, cottage.</p>';
 }
 
@@ -50,7 +51,7 @@ function suggestCard(): string {
   const [a, ...more] = picks;
   const pill = (x: typeof a) => `<button class="cn-alt" data-cook="${x!.r.id}" data-cshare0="${x!.share}"><b>${esc(x!.r.name)}</b><span>${esc(shareLabel(x!.r, x!.share))} · ${n0(x!.kcal)} kcal · ${n0(x!.p)} g P</span></button>`;
   return `<section class="cook-now"><p class="cn-k"><i aria-hidden="true"></i>Ce gătesc acum?</p>
-    <button class="cn-main" data-cook="${a!.r.id}" data-cshare0="${a!.share}">
+    <button class="cn-main" data-cook="${a!.r.id}" data-cshare0="${a!.share}">${foodArt(a!.r.name, a!.r.ing, 'cn')}
       <span class="cn-cat">${COOK_CAT[a!.r.cat]}</span><b class="cn-t">${esc(a!.r.name)}</b>
       <span class="cn-p">${esc(shareLabel(a!.r, a!.share))}</span>
       <span class="cn-m"><span><b>${n0(a!.kcal)}</b>kcal</span><span><b>${n0(a!.p)}</b>g proteine</span><span><b>${n0(a!.r.c * a!.share)}</b>g carbo</span></span>
@@ -134,7 +135,7 @@ function paintBox() {
 
 function recipeSheet() {
   const r = open!;
-  ctx.open(`<h2>${esc(r.name)}</h2>
+  ctx.open(`${foodArt(r.name, r.ing, 'lg')}<h2>${esc(r.name)}</h2>
     <p class="hint">${COOK_CAT[r.cat]} · Cookbook ${r.book}, Nicolas Aesthetics${r.est ? ' · macronutrienți estimați' : ''}</p>
     <div class="cook-mac"><span><b>${n0(r.kcal)}</b>kcal</span><span><b>${n0(r.p)}</b>g proteine</span><span><b>${n0(r.c)}</b>g carbo</span><span><b>${n0(r.f)}</b>g grăsimi</span></div>
     <p class="hint">${r.pieces > 1 ? `Toată rețeta, ${r.pieces} bucăți. O bucată: ${nb(n0(r.kcal / r.pieces), 'kcal')}, ${nb(n1(r.p / r.pieces), 'g')} proteine.` : 'Toată rețeta.'}</p>

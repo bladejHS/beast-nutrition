@@ -28,52 +28,46 @@
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/start-750x1334.png">
 <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/start-1242x2208.png">
 <link rel="preload" href="splash/umbra.webp" as="image" type="image/webp">
-<script src="splash/forge.js"></script>
+<script src="splash/arena.js"></script>
 <link rel="preload" href="fonts/saira-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/saira-latin-ext-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-wdth-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-ext-wdth-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 html,body{margin:0;background:#05060a;color:#f3f5fa}
-/* THE FORGE, the Beast Nutrition cut, about 2.5 s (shared engine: splash/forge.js, in the family's ice blue).
-   0–.45 darkness, navy smoke, embers; .45–1.25 thousands of sparks stream in and lock into the wolf; 1.25 impact: flash,
-   shake, shock ring, the wolf burns through, the fuel ring fills with this person's own protein, carbs and fat;
-   1.4–1.95 BEAST NUTRITION stamped in, the rule, the tagline; 2.45 the sparks blow out and a blue slash opens the app. */
-#splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#05070b;color:#f2f6fc;animation:sp-guard 0s linear 9s forwards}
+/* THE ARENA, the Beast Nutrition cut, about 3.3 s (engine: splash/arena.js, shared with Inner Beast, here in blue).
+   The wolf's eyes in the dark; the light rises over the arena: two fighters trade, pull-ups, push-ups, a runner behind;
+   at 2.0 s the high kick lands (flash, sparks, shake, slow motion) and BEAST NUTRITION is stamped under the fight.
+   Then a blue slash opens the app. Reduced motion, the short intro and Data Saver get the same arena, frozen. */
+#splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#05070b;color:#f2f6fc;animation:sp-guard 0s linear 10s forwards;--w:min(88vw,40vh,520px)}
 @keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
-.sp-smoke,.sp-flash,.sp-vig{position:absolute;inset:0;pointer-events:none}
-.sp-smoke{opacity:0}
-.sp-smoke b{position:absolute;width:120vmax;height:120vmax;border-radius:50%;background:radial-gradient(closest-side,rgba(16,38,76,.62),rgba(7,17,31,.3) 55%,transparent 72%);will-change:transform}
-.sp-smoke b:nth-child(1){left:-70vmax;top:-30vmax}.sp-smoke b:nth-child(2){right:-74vmax;top:-12vmax}.sp-smoke b:nth-child(3){left:-30vmax;bottom:-84vmax}
-.sp-go .sp-smoke{animation:sp-in .5s ease-out both}
-.sp-go .sp-smoke b:nth-child(1){animation:sp-drift1 2.6s linear both}.sp-go .sp-smoke b:nth-child(2){animation:sp-drift2 2.6s linear both}.sp-go .sp-smoke b:nth-child(3){animation:sp-drift3 2.6s linear both}
-.sp-vig{background:radial-gradient(120% 90% at 50% 40%,transparent 40%,rgba(0,0,0,.72) 100%)}
+.sp-bg{position:absolute;inset:0;opacity:0;pointer-events:none;background:radial-gradient(70% 34% at 50% 30%,rgba(22,119,255,.36),rgba(10,40,100,.16) 55%,transparent 78%),radial-gradient(110% 26% at 50% 72%,rgba(22,119,255,.2),transparent 70%),linear-gradient(180deg,#05070b,#06101e 52%,#05070b 80%)}
+.sp-stage{position:absolute;left:50%;top:max(4vh,env(safe-area-inset-top));width:var(--w);margin-left:calc(var(--w) / -2);aspect-ratio:680/801;transform-origin:50% 50%;pointer-events:none}
+.sp-emb{position:absolute;inset:0;opacity:0}
+.sp-emb img{display:block;width:100%;height:100%;filter:brightness(.8) contrast(1.08) drop-shadow(0 0 2px rgba(72,207,255,.7)) drop-shadow(0 0 30px rgba(22,119,255,.45))}
+.sp-eye{position:absolute;width:19%;aspect-ratio:2.4;margin:-3.96% 0 0 -9.5%;border-radius:50%;transform:rotate(var(--r));opacity:0;pointer-events:none;mix-blend-mode:screen;background:radial-gradient(closest-side,#fff 0,#cdeeff 9%,#48cfff 22%,rgba(22,119,255,.32) 42%,transparent 70%)}
+.sp-eye.l{left:36.6%;top:42%;--r:27deg}.sp-eye.r{left:63.4%;top:42%;--r:-27deg}
+.sp-flash,.sp-vig{position:absolute;inset:0;pointer-events:none}
+.sp-vig{background:radial-gradient(130% 95% at 50% 42%,transparent 45%,rgba(0,0,0,.8) 100%)}
 #sp-cv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.sp-flash{background:radial-gradient(circle at 50% 42%,#fff 0,#fff 5%,rgba(205,232,255,.85) 14%,rgba(47,140,255,.4) 32%,rgba(5,7,11,0) 56%);opacity:0}
-.sp-cam{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:clamp(24px,4.6vh,38px);--w:min(54vw,33vh,300px)}
-.sp-stage{position:relative;width:var(--w);aspect-ratio:680/801}
-.sp-halo{position:absolute;left:50%;top:50%;width:170%;aspect-ratio:1;margin:-85% 0 0 -85%;border-radius:50%;pointer-events:none;opacity:0;background:radial-gradient(closest-side,rgba(22,119,255,.32),rgba(22,119,255,.08) 55%,transparent 74%)}
-.sp-emb{position:absolute;inset:0;opacity:0;transform:scale(1.1)}
-.sp-emb img{display:block;width:100%;height:100%;filter:drop-shadow(0 0 1px rgba(72,207,255,.85)) drop-shadow(0 0 16px rgba(22,119,255,.55))}
-.sp-id{position:relative;display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px)}
-.sp-name{margin:0;font:900 extra-condensed clamp(46px,14vw,84px)/.9 'Saira','Arial Narrow',sans-serif;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
+.sp-flash{background:radial-gradient(circle at var(--ix,50%) var(--iy,55%),#fff 0,#fff 3%,rgba(205,232,255,.85) 10%,rgba(47,140,255,.38) 26%,rgba(5,7,11,0) 50%);opacity:0}
+.sp-id{position:absolute;left:0;right:0;bottom:max(7vh,calc(env(safe-area-inset-bottom) + 34px));display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px);pointer-events:none}
+.sp-name{margin:0;font:900 extra-condensed clamp(44px,13vw,84px)/.9 'Saira','Arial Narrow',sans-serif;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
 .sp-name i{display:inline-block;font-style:normal;opacity:0;color:#f2f6fc;text-shadow:0 0 0 transparent}
 .sp-name .b{color:#48cfff}
 .sp-name .sp-gap{width:.28em}
 .sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#1677ff 22%,#48cfff 50%,#1677ff 78%,transparent);transform:scaleX(0);opacity:0}
 .sp-tag{margin:0;font:700 semi-condensed clamp(11px,3vw,13.5px)/1.2 'Saira',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#b9c3d0;white-space:nowrap;opacity:0}
-.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));padding:10px 12px;border:0;background:none;color:#b9c3d0;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
+.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));padding:10px 12px;border:0;background:none;color:#b9c3d0;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
 .sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
 .sp-skip:focus-visible{outline:2px solid #48cfff;opacity:1}
-/* the impact, keyed off .sp-hit (the engine adds it when the sparks lock) */
-.sp-hit .sp-flash{animation:sp-flash .5s cubic-bezier(.16,1,.3,1) both}
-.sp-hit .sp-emb{animation:sp-burn .55s cubic-bezier(.2,.8,.2,1) .05s forwards}
-.sp-hit .sp-halo{animation:sp-in .7s ease-out .2s both}
+/* the impact, keyed off .sp-hit (the engine calls the page when the kick lands) */
+.sp-hit .sp-flash{animation:sp-flash .55s cubic-bezier(.16,1,.3,1) both}
 .sp-hit .sp-name i{animation:sp-stamp .42s cubic-bezier(.2,1.4,.3,1) var(--d) forwards}
 .sp-hit .sp-rule{animation:sp-rule .34s cubic-bezier(.2,.8,.2,1) .72s forwards}
 .sp-hit .sp-tag{animation:sp-flicker .5s steps(1) .82s forwards}
-/* reduced motion or the short intro: the finished picture, only faded */
-.sp-calm .sp-emb{opacity:1;transform:none}.sp-calm .sp-halo{opacity:1}.sp-calm .sp-smoke{opacity:1}
+/* the still poster */
+.sp-calm .sp-bg{opacity:1}.sp-calm .sp-emb{opacity:.66}.sp-calm .sp-eye{opacity:.9}
 .sp-calm .sp-name i,.sp-calm .sp-tag{opacity:1}.sp-calm .sp-rule{opacity:1;transform:none}
 #splash.sp-fade{animation:none;opacity:0;transition:opacity .24s linear;pointer-events:none}
 /* the entry: a blue slash, and the splash wiped away behind it */
@@ -82,47 +76,27 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 #sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
 .sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Saira',system-ui,sans-serif;color:#f2f6fc}
 .sp-fail a{color:#48cfff;font-weight:700}
-@keyframes sp-in{to{opacity:1}}
-@keyframes sp-drift1{to{transform:translate(9vmax,-3vmax)}}
-@keyframes sp-drift2{to{transform:translate(-8vmax,4vmax)}}
-@keyframes sp-drift3{to{transform:translate(5vmax,-6vmax)}}
 @keyframes sp-flash{0%{opacity:0}8%{opacity:1}100%{opacity:0}}
-@keyframes sp-burn{0%{opacity:0;transform:scale(1.1)}100%{opacity:1;transform:scale(1)}}
 @keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #48cfff,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #48cfff,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
 @keyframes sp-rule{to{opacity:1;transform:none}}
 @keyframes sp-flicker{0%{opacity:.8}12%{opacity:.1}24%{opacity:.9}36%{opacity:.25}52%,100%{opacity:1}}
 @keyframes sp-wipe{from{clip-path:polygon(calc(-50% + 7vh) 0,220% 0,220% 100%,calc(-50% - 7vh) 100%)}to{clip-path:polygon(calc(130% + 7vh) 0,220% 0,220% 100%,calc(130% - 7vh) 100%)}}
 @keyframes sp-slash{0%{opacity:1;transform:translateX(-65vw) skewX(-8deg)}100%{opacity:1;transform:translateX(115vw) skewX(-8deg)}}
-/* the fuel ring: three arcs, one per macronutrient, drawn after the impact */
-.sp-ring{position:absolute;left:50%;top:50%;width:134%;aspect-ratio:1;transform:translate(-50%,-50%);overflow:visible;pointer-events:none}
-.sp-ring circle{fill:none;stroke-width:2.4}
-.sp-ring .t{stroke:#101c2d;opacity:0}
-.sp-ring .m{stroke-linecap:butt;stroke-dasharray:0 100;transform-origin:50% 50%;transform:rotate(var(--rot))}
-.sp-ring .p{stroke:#f2f6fc}.sp-ring .c{stroke:#1677ff}.sp-ring .f{stroke:#48cfff}
-.sp-hit .sp-ring .t{animation:sp-in .3s ease-out .1s forwards}
-.sp-hit .sp-ring .p{animation:sp-arc .34s cubic-bezier(.3,0,.2,1) .2s forwards}
-.sp-hit .sp-ring .c{animation:sp-arc .42s cubic-bezier(.3,0,.2,1) .45s forwards}
-.sp-hit .sp-ring .f{animation:sp-arc .26s cubic-bezier(.3,0,.2,1) .8s forwards}
-.sp-calm .sp-ring .t{opacity:1}.sp-calm .sp-ring .m{stroke-dasharray:var(--len) 100}
-@keyframes sp-arc{to{stroke-dasharray:var(--len) 100}}
 </style>
 </head>
 <body>
 <div id="splash">
-  <div class="sp-smoke" aria-hidden="true"><b></b><b></b><b></b></div>
-  <div class="sp-vig" aria-hidden="true"></div>
+  <div class="sp-bg" aria-hidden="true"></div>
+  <div class="sp-stage" aria-hidden="true">
+    <div class="sp-emb"><img src="splash/umbra.webp" alt="" width="680" height="801" decoding="sync"></div>
+    <i class="sp-eye l"></i><i class="sp-eye r"></i>
+  </div>
   <canvas id="sp-cv" aria-hidden="true"></canvas>
-  <div class="sp-cam">
-    <div class="sp-stage" aria-hidden="true">
-      <div class="sp-halo"></div>
-      <svg class="sp-ring" viewBox="0 0 120 120"><circle class="t" cx="60" cy="60" r="57"/><circle class="m p" cx="60" cy="60" r="57" pathLength="100"/><circle class="m c" cx="60" cy="60" r="57" pathLength="100"/><circle class="m f" cx="60" cy="60" r="57" pathLength="100"/></svg>
-      <div class="sp-emb"><img src="splash/umbra.webp" alt="" width="680" height="801" decoding="sync"></div>
-    </div>
-    <div class="sp-id">
-      <p class="sp-name" aria-label="Beast Nutrition"><i style="--d:.16s">B</i><i style="--d:.2s">E</i><i style="--d:.24s">A</i><i style="--d:.28s">S</i><i style="--d:.32s">T</i><i class="sp-gap"></i><i class="b" style="--d:.4s">N</i><i class="b" style="--d:.43s">U</i><i class="b" style="--d:.46s">T</i><i class="b" style="--d:.49s">R</i><i class="b" style="--d:.52s">I</i><i class="b" style="--d:.55s">T</i><i class="b" style="--d:.58s">I</i><i class="b" style="--d:.61s">O</i><i class="b" style="--d:.64s">N</i></p>
-      <i class="sp-rule" aria-hidden="true"></i>
-      <p class="sp-tag">ENERGIE. PERFORMANȚĂ. RECUPERARE.</p>
-    </div>
+  <div class="sp-vig" aria-hidden="true"></div>
+  <div class="sp-id">
+    <p class="sp-name" aria-label="Beast Nutrition"><i style="--d:.16s">B</i><i style="--d:.2s">E</i><i style="--d:.24s">A</i><i style="--d:.28s">S</i><i style="--d:.32s">T</i><i class="sp-gap"></i><i class="b" style="--d:.4s">N</i><i class="b" style="--d:.43s">U</i><i class="b" style="--d:.46s">T</i><i class="b" style="--d:.49s">R</i><i class="b" style="--d:.52s">I</i><i class="b" style="--d:.55s">T</i><i class="b" style="--d:.58s">I</i><i class="b" style="--d:.61s">O</i><i class="b" style="--d:.64s">N</i></p>
+    <i class="sp-rule" aria-hidden="true"></i>
+    <p class="sp-tag">ENERGIE. PERFORMANȚĂ. RECUPERARE.</p>
   </div>
   <div class="sp-flash" aria-hidden="true"></div>
   <button class="sp-skip" type="button" aria-label="Sari peste intro">Sari</button>
@@ -135,19 +109,8 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 // Plays on the first launch of the day by default, never on a reload in the same session, and a tap skips it.
 // The session key is this app's own: both apps share an origin, and opening one must not silence the other.
 // main.ts builds the dashboard underneath at the same time, so the exit only waits if that is genuinely not ready.
-// The sparks are drawn by splash/forge.js, the engine shared by the Beast apps.
+// The arena is drawn by splash/arena.js, shared with Inner Beast.
 (function () {
-  // The ring shows this person's own plan: each macro's share of the calories.
-  try {
-    var saved = JSON.parse(localStorage.getItem('beast-nutrition:v2') || 'null'), m = saved && saved.plan && saved.plan.macros;
-    var parts = m && m.kcal > 0 ? [m.p * 4, m.c * 4, m.f * 9] : [30, 50, 20];
-    var sum = parts[0] + parts[1] + parts[2], at = -90;
-    ['p', 'c', 'f'].forEach(function (k, i) {
-      var share = parts[i] / sum * 100, arc = document.querySelector('.sp-ring .' + k);
-      if (arc) { arc.style.setProperty('--len', (share - 1.4).toFixed(2)); arc.style.setProperty('--rot', at.toFixed(1) + 'deg'); }
-      at += share * 3.6;
-    });
-  } catch (e) { /* the default look of the stylesheet stays */ }
   var sp = document.getElementById('splash'), slash = document.getElementById('sp-slash');
   if (!sp) return;
   var mode = 'daily', seen = false, today = new Date().toDateString();
@@ -158,8 +121,8 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
   function drop() { if (forge) forge.destroy(); sp.remove(); if (slash) slash.remove(); }
   if (seen || mode === 'off') { drop(); return; }
   var conn = navigator.connection;
-  var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches || !!(conn && conn.saveData) || !window.BeastForge;
-  var HOLD = calm ? 800 : 2450, LIMIT = 6000;
+  var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches || !!(conn && conn.saveData) || !window.BeastArena;
+  var HOLD = calm ? 1100 : 3300, LIMIT = 6500;
   var t0 = 0, started = false, leaving = false, broken = false;
   function ready() { var a = document.getElementById('app'); return !!a && a.children.length > 0; }
   addEventListener('error', function (e) { if (e.error || (e.target && e.target.tagName === 'SCRIPT')) broken = true; }, true);
@@ -181,16 +144,16 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
     if (started) return;
     started = true;
     t0 = performance.now();
-    if (calm) { sp.classList.add('sp-calm'); setTimeout(leave, HOLD); return; }
+    if (calm) { sp.classList.add('sp-calm'); poster(); setTimeout(leave, HOLD); return; }
     sp.classList.add('sp-go');
-    forge = window.BeastForge.create({
-      canvas: document.getElementById('sp-cv'), mark: 'splash/umbra.webp', stage: sp.querySelector('.sp-stage'),
-      color: [22, 119, 255], hot: [72, 207, 255], count: 2400,
-      onImpact: function () { sp.classList.add('sp-hit'); try { navigator.vibrate && navigator.vibrate(40); } catch (e) { /* not here */ } }
-    });
+    forge = arena(function () { sp.classList.add('sp-hit'); try { navigator.vibrate && navigator.vibrate([30, 40, 60]); } catch (e) { /* not here */ } });
     forge.start();
     setTimeout(leave, HOLD);
   }
+  function arena(hit) {
+    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, color: [22, 119, 255], hot: [72, 207, 255], onImpact: hit });
+  }
+  function poster() { if (!window.BeastArena) return; try { forge = arena(null); forge.still(2.08); } catch (e) { /* the wolf and the name are enough */ } }
   // starts when the dashboard underneath is drawn, so that work does not stutter the sparks; after half a second anyway
   var boot = performance.now();
   (function arm() { if (started) return; if (ready() || performance.now() - boot > 500) { requestAnimationFrame(go); return; } setTimeout(arm, 25); })();

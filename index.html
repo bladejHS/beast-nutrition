@@ -77,6 +77,7 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 #sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
 .sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Saira',system-ui,sans-serif;color:#f2f6fc}
 .sp-fail a{color:#48cfff;font-weight:700}
+.sp-why{max-width:34ch;font:500 13px/1.4 ui-monospace,monospace;color:#9aa6b8;word-break:break-word}
 @keyframes sp-flash{0%{opacity:0}8%{opacity:1}100%{opacity:0}}
 @keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #48cfff,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #48cfff,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
 @keyframes sp-rule{to{opacity:1;transform:none}}
@@ -124,16 +125,30 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
   var conn = navigator.connection;
   var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches || !!(conn && conn.saveData) || !window.BeastArena;
   var HOLD = calm ? 1100 : 3300, LIMIT = 6500;
-  var t0 = 0, started = false, leaving = false, broken = false;
+  var t0 = 0, started = false, leaving = false, broken = false, why = '';
   function ready() { var a = document.getElementById('app'); return !!a && a.children.length > 0; }
-  addEventListener('error', function (e) { if (e.error || (e.target && e.target.tagName === 'SCRIPT')) broken = true; }, true);
+  addEventListener('error', function (e) {
+    if (e.error || (e.target && e.target.tagName === 'SCRIPT')) { broken = true; why = why || (e.message ? e.message + (e.filename ? ' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ')' : '') : 'nu s-a încărcat ' + (e.target && e.target.src || 'un script')); }
+  }, true);
+  addEventListener('unhandledrejection', function (e) { var r = e.reason; if (!why && r) why = String(r && r.message || r); });
+  // 2026-11-15: a launch can catch the app between two versions (the page from the old one, its files already gone).
+  // The first failure heals itself: the stored copy is dropped and the page reloads once from the network.
+  function heal() {
+    try { if (sessionStorage.getItem('bn-healed') === '1') return false; sessionStorage.setItem('bn-healed', '1'); } catch (e) { return false; }
+    var jobs = [];
+    try { if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) { /* none */ }
+    try { if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k.indexOf('bn-') === 0; }).map(function (k) { return caches.delete(k); })); })); } catch (e) { /* none */ }
+    Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
+    return true;
+  }
   function leave() {
     if (leaving) return;
     if (!ready() && !broken && performance.now() - t0 < LIMIT) { setTimeout(leave, 60); return; }
     leaving = true;
     if (!ready()) {
       var a = document.getElementById('app');
-      if (a) a.innerHTML = '<div class="sp-fail"><p>Aplicația nu s-a putut încărca.</p><a href="./">Încearcă din nou</a></div>';
+      if (heal()) return;
+      if (a) a.innerHTML = '<div class="sp-fail"><p>Aplicația nu s-a putut încărca.</p>' + (why ? '<p class="sp-why">' + why.replace(/[<>&]/g, '') + '</p>' : '') + '<a href="./" onclick="try{sessionStorage.removeItem(&quot;bn-healed&quot;)}catch(e){}">Încearcă din nou</a></div>';
     }
     if (calm || !ready()) { sp.classList.add('sp-fade'); setTimeout(drop, 280); return; }
     if (forge) forge.burst();

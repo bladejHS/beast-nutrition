@@ -1148,3 +1148,52 @@ html[data-tod='night'] .hero-stage::before { background: radial-gradient(70% 60%
 .prep-t p { margin: 4px 0 0; font-size: 14px; line-height: 1.45; color: var(--t1); }
 .prep > .hint { margin: 0 14px 12px; }
 .prep-lnk { margin-top: 2px; }
+
+/* progress photos: front, side, back, and the comparison (2026-11-16) */
+.pp-add { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 14px; }
+.pp-b { position: relative; display: grid; justify-items: center; gap: 4px; padding: 12px 6px 10px; border-radius: 14px; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); cursor: pointer; }
+.pp-b input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.pp-ic { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: var(--sky); background: rgba(var(--glow), .12); }
+.pp-ic svg { width: 26px; height: 26px; }
+.pp-b b { font: 800 condensed 16px/1 var(--font); text-transform: uppercase; letter-spacing: .04em; }
+.pp-st { font: 700 semi-condensed 10.5px/1 var(--font); letter-spacing: .1em; text-transform: uppercase; color: var(--t3); }
+.pp-b.ok { box-shadow: inset 0 0 0 1.5px var(--gold); }
+.pp-b.ok .pp-ic { color: #241805; background: var(--gold); }
+.pp-b.ok .pp-st { color: var(--gold-2); }
+.pp-next { margin: 0 0 10px; font: 700 13px/1.3 var(--font); color: var(--sky); }
+.pp-pose, .pp-mode { margin-bottom: 10px; }
+.pp-cmp { position: relative; aspect-ratio: 3 / 4; overflow: hidden; border-radius: 16px; background: #000; touch-action: pan-y; }
+.pp-cmp img, .pp-one img, .pp-two img, .pp-row img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.pp-cmp img { position: absolute; inset: 0; }
+.pp-cmp .pp-top { clip-path: inset(0 0 0 var(--x)); }
+.pp-line { position: absolute; top: 0; bottom: 0; left: var(--x); width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 12px rgba(var(--glow), .9); pointer-events: none; }
+.pp-line u { position: absolute; top: 50%; left: 50%; width: 38px; height: 38px; margin: -19px 0 0 -19px; border-radius: 50%; background: rgba(5, 6, 10, .7); box-shadow: inset 0 0 0 2px #fff; }
+.pp-line u::before, .pp-line u::after { content: ''; position: absolute; top: 50%; width: 7px; height: 7px; margin-top: -4px; border-left: 2px solid #fff; border-bottom: 2px solid #fff; }
+.pp-line u::before { left: 9px; transform: rotate(45deg); }
+.pp-line u::after { right: 9px; transform: rotate(-135deg); }
+.pp-cmp input[type=range] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+.pp-tag { position: absolute; bottom: 10px; display: grid; gap: 2px; padding: 6px 9px; border-radius: 10px; background: rgba(5, 6, 10, .72); font: 600 12px/1.2 var(--font); color: var(--t1); pointer-events: none; }
+.pp-tag b { font: 800 semi-condensed 10.5px/1 var(--font); letter-spacing: .14em; text-transform: uppercase; color: var(--t2); }
+.pp-tag.a { left: 10px; }
+.pp-tag.b { right: 10px; text-align: right; }
+.pp-tag.b b { color: var(--sky); }
+.pp-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.pp-two figure, .pp-one { position: relative; margin: 0; aspect-ratio: 3 / 4; overflow: hidden; border-radius: 14px; background: #000; }
+.pp-two .pp-tag { left: 6px; right: 6px; bottom: 6px; text-align: left; }
+.pp-one figcaption { position: absolute; left: 8px; bottom: 8px; padding: 5px 8px; border-radius: 8px; background: rgba(5, 6, 10, .72); font-size: 12px; }
+.pp-sum { margin: 10px 0; font: 600 14px/1.3 var(--font); color: var(--t2); }
+.pp-sum b { color: var(--t1); }
+.pp-sum b.down { color: #7ef0b0; }
+.pp-sum b.up { color: var(--warn); }
+.pp-vs { margin-top: 6px; }
+.pp-vs button { min-height: 40px; font-size: 13px; }
+.pp-vs .on { background: var(--t1); color: var(--bg); box-shadow: none; }
+.pp-all { margin-top: 14px; }
+.pp-all > summary { min-height: 44px; display: flex; align-items: center; font-weight: 700; cursor: pointer; }
+.pp-day > p { margin: 10px 0 6px; font-size: 14px; color: var(--t2); }
+.pp-day > p b { color: var(--t1); }
+.pp-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pp-row figure { margin: 0; }
+.pp-row img { aspect-ratio: 3 / 4; height: auto; border-radius: 10px; }
+.pp-row figcaption { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--t2); }
+.pp-row figure.none { display: grid; place-items: center; aspect-ratio: 3 / 4; border-radius: 10px; border: 1px dashed var(--line); font-size: 12px; color: var(--t3); }

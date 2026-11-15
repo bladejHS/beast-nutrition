@@ -2,6 +2,7 @@ import './styles.css';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
 import { chapterCheck, trophyInit } from './screens/show.ts';
+import { photosAction, photosInput } from './screens/photos.ts';
 import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
@@ -130,7 +131,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (photosAction(el) || cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 
@@ -138,6 +139,7 @@ document.addEventListener('input', (ev) => {
   const t = ev.target as HTMLInputElement;
   logInput(t);
   cookInput(t);
+  if (photosInput(t)) return;
   if (t.type === 'range' && t.nextElementSibling && !t.closest('#ci')) t.nextElementSibling.textContent = t.value;
 });
 

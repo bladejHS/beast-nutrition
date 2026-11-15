@@ -1,4 +1,5 @@
 /* Corp: the scale, the weekly decision, the check-in and the measurements. */
+import { photosBind, photosCard } from './photos.ts';
 import { audioOn, transformCard, trendNow, trophyCheck, trophyInit, weighReveal } from './show.ts';
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
 import { kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
@@ -124,25 +125,6 @@ function measuresCard(points: TrendPoint[]) {
     <button class="primary wide">Salvează măsurătorile</button></form></details>`;
 }
 
-const db = () => new Promise<IDBDatabase>((res, rej) => {
-  const r = indexedDB.open('bn-photos', 1);
-  r.onupgradeneeded = () => r.result.createObjectStore('p', { keyPath: 'id' });
-  r.onsuccess = () => res(r.result);
-  r.onerror = () => rej(r.error);
-});
-async function putPhoto(id: string, url: string) {
-  const d = await db();
-  await new Promise((res, rej) => { const t = d.transaction('p', 'readwrite'); t.objectStore('p').put({ id, url }); t.oncomplete = res; t.onerror = rej; });
-}
-async function dropPhoto(id: string) {
-  const d = await db();
-  await new Promise((res, rej) => { const t = d.transaction('p', 'readwrite'); t.objectStore('p').delete(id); t.oncomplete = res; t.onerror = rej; });
-}
-async function allPhotos(): Promise<{ id: string; url: string }[]> {
-  const d = await db();
-  return new Promise((res, rej) => { const r = d.transaction('p').objectStore('p').getAll(); r.onsuccess = () => res(r.result as { id: string; url: string }[]); r.onerror = rej; });
-}
-
 export function bodyHtml() {
   const s = ctx.get();
   const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
@@ -155,8 +137,7 @@ export function bodyHtml() {
   ${checkinCard()}
   ${weeksCard()}
   ${measuresCard(points)}
-  <details class="card"><summary><b>Fotografii</b></summary><p class="hint">Stau doar pe acest dispozitiv și nu intră în backup.</p>
-    <label class="ghost file wide">Adaugă o fotografie<input type="file" id="ph" accept="image/*"></label><div id="phs" class="photos"></div></details>`;
+  ${photosCard()}`;
 }
 
 /** The only way the plan's numbers move from here: one change a week, never under the floor, and it can be undone. */
@@ -180,11 +161,6 @@ export function bodyAction(el: HTMLElement): boolean {
   if (d['weigh'] != null) { openWeigh(); return true; }
   if (d['apply']) { applyStep(Number(d['apply']), d['note'] ?? ''); return true; }
   if (d['range']) { range = Number(d['range']); ctx.render(); return true; }
-  if (d['photo']) {
-    const id = d['photo'];
-    void dropPhoto(id).then(() => { ctx.render(); ctx.toast('Fotografie ștearsă.'); });
-    return true;
-  }
   return false;
 }
 
@@ -215,22 +191,5 @@ export function bodyBind() {
     s.checkins[week] = { ...s.checkins[week], ...(m.hips != null ? { hips: m.hips } : {}), ...(m.bf != null ? { bf: m.bf } : {}) };
     ctx.commit(); ctx.render(); ctx.toast('Măsurători salvate.');
   });
-  const box = document.querySelector('#phs');
-  if (box && 'indexedDB' in window) {
-    void allPhotos().then((list) => { box.innerHTML = list.slice(-6).reverse().map((p) => `<figure><img src="${p.url}" alt="Fotografie din ${esc(p.id.slice(0, 10))}"><figcaption>${esc(p.id.slice(0, 10))}<button class="xs" data-photo="${esc(p.id)}" aria-label="Șterge fotografia">×</button></figcaption></figure>`).join(''); }).catch(() => {});
-  }
-  document.querySelector<HTMLInputElement>('#ph')?.addEventListener('change', (ev) => {
-    const file = (ev.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    const img = new Image();
-    img.onload = () => {
-      const k = Math.min(1, 900 / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = img.width * k; c.height = img.height * k;
-      c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
-      void putPhoto(`${ctx.today()}-${Date.now()}`, c.toDataURL('image/jpeg', 0.8)).then(() => ctx.render());
-      URL.revokeObjectURL(img.src);
-    };
-    img.src = URL.createObjectURL(file);
-  });
+  photosBind();
 }

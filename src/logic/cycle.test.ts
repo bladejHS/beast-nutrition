@@ -124,8 +124,8 @@ test('the next session skips what the log shows as done', () => {
 const mk = (id: string, name: string, kcal: number, p: number, c: number, f: number, fiber = 0) => ({ id, name, en: `en ${name}`, cat: '', kcal, p, c, f, fiber, sugar: 0, sat: 0, sodium: 0, portions: [], source: 'usda' as const });
 const pantry = [
   mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('b', 'Ovăz fulgi, crud', 379, 13, 68, 6.5, 10), mk('c', 'Nuci', 654, 15, 14, 65, 7), mk('d', 'Afine', 57, 0.7, 14.5, 0.3, 2.4),
-  mk('e', 'Piept de pui, gătit', 165, 31, 0, 3.6), mk('f', 'Orez alb fiert', 130, 2.7, 28, 0.3), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli fiert', 35, 2.4, 7, 0.4, 3.3),
-  mk('i', 'Piept de curcan, gătit', 147, 30, 0, 2), mk('j', 'Cartofi la cuptor', 93, 2.5, 21, 0.1, 2.2), mk('k', 'Salată verde', 15, 1.4, 2.9, 0.2, 1.3), mk('l', 'Somon gătit', 206, 22, 0, 12.4), mk('m', 'Cartofi fierți', 86, 1.7, 20, 0.1, 1.8),
+  mk('e', 'Piept de pui, crud', 120, 22.5, 0, 2.6), mk('f', 'Orez alb crud', 365, 7.1, 80, 0.7), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli crud', 34, 2.8, 6.6, 0.4, 3.3),
+  mk('i', 'Piept de curcan, crud', 114, 23.7, 0.1, 1.5), mk('j', 'Cartofi cruzi', 77, 2, 17.5, 0.1, 2.2), mk('k', 'Salată verde', 15, 1.4, 2.9, 0.2, 1.3), mk('l', 'Somon crud', 208, 20.4, 0, 13.4), mk('m', 'Cartofi cruzi', 77, 2, 17.5, 0.1, 1.8),
 ];
 const db = new Map(pantry.map((f) => [f.id, f]));
 const prefs: Prefs = { meals: 4, exclude: '', allergies: '', maxCook: 60, budget: 0 };
@@ -183,7 +183,7 @@ test('changing a logged meal changes the journal and what remains, and leaves th
   assert.equal(base[1]!.length, 0, 'the input is not mutated');
   const smaller = relog(logged, 'meal-1', [entryFrom(pantry[4]!, 100)], 0, true)!;
   assert.equal(smaller[1]!.length, 1, 'stays in its slot');
-  assert.equal(totals(smaller).kcal, totals(logged).kcal - Math.round(165));
+  assert.equal(totals(smaller).kcal, totals(logged).kcal - Math.round(pantry[4]!.kcal));
   assert.equal(smaller[0]![0], other);
   const gone = relog(smaller, 'meal-1', [], 0, true)!;
   assert.equal(gone.flat().length, 1);

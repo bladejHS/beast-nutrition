@@ -71,20 +71,20 @@ test('numbers typed with a Romanian comma are read', () => {
 });
 
 const food = (name: string, id = name): Food => ({ id, name, en: 'x', cat: '', kcal: 100, p: 10, c: 10, f: 1, fiber: 0, sugar: 0, sat: 0, sodium: 0, portions: [], source: 'usda' });
-const kitchen = ['Ovăz fulgi, crud', 'Banană', 'Orez alb fiert', 'Cartofi fierți', 'Whey (proteină din zer)', 'Piept de pui, gătit', 'Iaurt grecesc degresat', 'Tofu', 'Nuci', 'Ulei de măsline'].map((n) => food(n));
+const kitchen = ['Ovăz fulgi, crud', 'Banană', 'Orez alb crud', 'Cartofi cruzi', 'Whey (proteină din zer)', 'Piept de pui, crud', 'Iaurt grecesc degresat', 'Tofu', 'Nuci', 'Ulei de măsline'].map((n) => food(n));
 const prefs: Prefs = { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 };
 
 test('a swap keeps the food rules: oats only with whey, sweet and savory apart', () => {
   const names = (l: Food[]) => l.map((f) => f.name);
-  const savory = names(alternatives('carb', 'Orez alb fiert', kitchen, prefs, ['Piept de pui, gătit', 'Ulei de măsline']));
-  assert.ok(savory.includes('Cartofi fierți'));
+  const savory = names(alternatives('carb', 'Orez alb crud', kitchen, prefs, ['Piept de pui, crud', 'Ulei de măsline']));
+  assert.ok(savory.includes('Cartofi cruzi'));
   assert.ok(!savory.includes('Ovăz fulgi, crud'), 'no oats next to chicken');
   assert.ok(!savory.includes('Banană'), 'no banana next to chicken');
   const bowl = names(alternatives('protein', 'Whey (proteină din zer)', kitchen, prefs, ['Ovăz fulgi, crud', 'Banană']));
   assert.deepEqual(bowl, [], 'whey stays with the oats');
   const sweet = names(alternatives('carb', 'Ovăz fulgi, crud', kitchen, prefs, ['Whey (proteină din zer)', 'Nuci']));
   assert.ok(sweet.includes('Banană'));
-  assert.ok(!sweet.includes('Orez alb fiert'));
+  assert.ok(!sweet.includes('Orez alb crud'));
   assert.ok(names(alternatives('carb', 'Banană', kitchen, prefs, ['Whey (proteină din zer)'])).includes('Ovăz fulgi, crud'), 'oats are fine when whey is there');
 });
 

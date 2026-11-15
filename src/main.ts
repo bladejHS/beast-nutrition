@@ -85,6 +85,10 @@ function mountHero(root: HTMLElement) {
   });
 }
 
+/** The tab bar's orb slides from the tab it was on (the bar is redrawn with each screen). */
+let tabFrom = -1;
+const tabAt = () => (Object.keys(ICONS) as Main[]).indexOf(home(tab));
+
 function render() {
   if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
@@ -92,8 +96,9 @@ function render() {
   kitchen();
   const views: Record<Tab, () => string> = { azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
   app.innerHTML = `<main>${views[tab]()}</main>
-    <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
+    <nav class="tabs${tabFrom >= 0 && tabFrom !== tabAt() ? ' moved' : ''}" aria-label="Navigare" style="--i:${tabAt()};--from:${tabFrom < 0 ? tabAt() : tabFrom}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
+  tabFrom = tabAt();
   afterRender(app);
   mountHero(app);
   if (tab === 'azi') todayBind();

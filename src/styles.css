@@ -883,3 +883,29 @@ body:has(#sheet.on) .fab { display: none; }
 .road-set { display: grid; gap: 4px; width: 100%; margin: 0 0 16px; padding: 14px 16px; border: 1px solid rgba(72, 207, 255, .35); border-radius: 18px; background: rgba(22, 119, 255, .08); color: inherit; text-align: left; font: inherit; cursor: pointer; }
 .road-set b { font-size: 16px; }
 .road-set span { font-size: 13.5px; color: var(--dim, #9aa6b8); }
+
+/* ---------- the tab bar, 2026-11-15 (the user: "fă bara de jos mult mai spectaculoasă") ----------
+   A glass capsule with a ring of light running round its edge; the open tab rises into a glowing blue orb that
+   floats above the bar, ringed by a pulse; changing tab, the orb slides over from the tab you left. */
+@property --tab-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.tabs { height: 68px; }
+.tabs-plate { border-radius: 30px !important; background: conic-gradient(from var(--tab-a), rgba(72, 207, 255, 0) 0deg, rgba(72, 207, 255, .95) 50deg, rgba(22, 119, 255, 0) 120deg, rgba(22, 119, 255, 0) 190deg, rgba(255, 255, 255, .55) 235deg, rgba(72, 207, 255, 0) 300deg) !important; animation: tab-spin 6s linear infinite; box-shadow: 0 20px 44px -14px rgba(0, 0, 0, .95), 0 0 34px -10px rgba(22, 119, 255, .7); }
+.tabs-plate::before { inset: 1.5px !important; border-radius: 29px !important; background: linear-gradient(180deg, rgba(26, 32, 46, .92), rgba(7, 9, 14, .96)) !important; }
+@keyframes tab-spin { to { --tab-a: 360deg; } }
+.tabs .tabs-blade { display: block; top: 0; height: 100%; width: 25%; transform: translateX(calc(var(--i, 0) * 100%)); z-index: 0; }
+.tabs.moved .tabs-blade { animation: tab-slide .65s cubic-bezier(.34, 1.36, .64, 1) both; }
+@keyframes tab-slide { from { transform: translateX(calc(var(--from, 0) * 100%)); } }
+.tabs .tabs-blade::before {
+  left: 50%; top: -22px; width: 58px; height: 58px; margin-left: -29px; border-radius: 50%; transform: none;
+  background: radial-gradient(circle at 34% 28%, #d9f1ff, #48cfff 24%, #1677ff 62%, #0a3f8f);
+  box-shadow: 0 0 0 6px #05060a, 0 0 0 7px rgba(72, 207, 255, .35), 0 0 30px 6px rgba(72, 207, 255, .6), 0 14px 26px -6px rgba(22, 119, 255, .95);
+}
+.tabs .tabs-blade::after { content: ''; position: absolute; left: 50%; top: -22px; width: 58px; height: 58px; margin-left: -29px; border-radius: 50%; border: 2px solid rgba(72, 207, 255, .85); animation: tab-ring 2.4s ease-out infinite; pointer-events: none; }
+@keyframes tab-ring { 0% { transform: scale(1); opacity: .9; } 100% { transform: scale(1.75); opacity: 0; } }
+.tabs button { z-index: 1; }
+.tabs .on::before { display: none; }
+.tabs .on { color: #fff; text-shadow: 0 0 12px rgba(72, 207, 255, .95); }
+.tabs .on svg { stroke: #fff; stroke-width: 2.1; transform: translateY(-21px) scale(1.15); filter: drop-shadow(0 0 6px rgba(255, 255, 255, .75)); animation: tab-pop .6s cubic-bezier(.34, 1.56, .64, 1) both; }
+@keyframes tab-pop { from { transform: translateY(0) scale(.7); } }
+.tabs button:not(.on):active svg { transform: scale(.85); }
+@media (prefers-reduced-motion: reduce) { .tabs-plate, .tabs .tabs-blade::after, .tabs.moved .tabs-blade, .tabs .on svg { animation: none; } }

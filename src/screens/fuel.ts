@@ -165,6 +165,7 @@ function meals() {
   const dem = (d: string) => days.find((x) => x.date === d)!.demand;
   return `${bk}${head('meals', 'Mese', 'Pe ținta zilei, cu înlocuiri și lista de cumpărături.')}
   ${heroBand('cook')}
+  <p class="hint raw-note">Toate cantitățile din plan sunt pentru alimente <b>crude</b>, cântărite înainte de gătit: carnea, peștele, orezul, pastele, cartofii și leguminoasele uscate.</p>
   <div class="wknav"><button class="ib" data-f="mwk" data-v="0" aria-label="Săptămâna curentă" ${mealWeek === 0 ? 'disabled' : ''}>‹</button><b>${mealWeek ? 'Săptămâna viitoare' : 'Săptămâna asta'}</b><button class="ib" data-f="mwk" data-v="1" aria-label="Săptămâna viitoare" ${mealWeek === 1 ? 'disabled' : ''}>›</button></div>
   <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}

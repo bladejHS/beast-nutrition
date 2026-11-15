@@ -179,7 +179,7 @@ test('light snacks come from real food values and respect allergies', () => {
 });
 
 test('a planned snack stays, counts against the day, and takes no meal slot', () => {
-  const full = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('e', 'Piept de pui, gătit', 165, 31, 0, 3.6), mk('f', 'Orez alb fiert', 130, 2.7, 28, 0.3), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli fiert', 35, 2.4, 7, 0.4), mk('j', 'Piept de curcan, gătit', 147, 30, 0, 2), mk('k', 'Cartofi fierți', 86, 1.7, 20, 0.1), mk('l', 'Somon gătit', 206, 22, 0, 12.4), ...pantry];
+  const full = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('e', 'Piept de pui, crud', 120, 22.5, 0, 2.6), mk('f', 'Orez alb crud', 365, 7.1, 80, 0.7), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli crud', 34, 2.8, 6.6, 0.4), mk('j', 'Piept de curcan, crud', 114, 23.7, 0.1, 1.5), mk('k', 'Cartofi cruzi', 77, 2, 17.5, 0.1), mk('l', 'Somon crud', 208, 20.4, 0, 13.4), ...pantry];
   const db = new Map(full.map((f) => [f.id, f]));
   const day = { p: 180, c: 240, f: 50 };
   const times = ['08:00', '12:00', '16:00', '20:00'];
@@ -193,7 +193,7 @@ test('a planned snack stays, counts against the day, and takes no meal slot', ()
 });
 
 test('a meal the user chose stays when the rest of the day is rebuilt', () => {
-  const full = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('e', 'Piept de pui, gătit', 165, 31, 0, 3.6), mk('f', 'Orez alb fiert', 130, 2.7, 28, 0.3), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli fiert', 35, 2.4, 7, 0.4), mk('j', 'Piept de curcan, gătit', 147, 30, 0, 2), mk('k', 'Cartofi fierți', 86, 1.7, 20, 0.1), mk('l', 'Somon gătit', 206, 22, 0, 12.4)];
+  const full = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('e', 'Piept de pui, crud', 120, 22.5, 0, 2.6), mk('f', 'Orez alb crud', 365, 7.1, 80, 0.7), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli crud', 34, 2.8, 6.6, 0.4), mk('j', 'Piept de curcan, crud', 114, 23.7, 0.1, 1.5), mk('k', 'Cartofi cruzi', 77, 2, 17.5, 0.1), mk('l', 'Somon crud', 208, 20.4, 0, 13.4)];
   const day = { p: 180, c: 240, f: 50 };
   const times = ['08:00', '12:00', '16:00', '20:00'];
   const even = [0.25, 0.25, 0.25, 0.25];
@@ -319,7 +319,7 @@ test('sport references inform and never hide a shortfall', () => {
   assert.deepEqual(waterBefore(80), [400, 550]);
 });
 
-const kitchen = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('n', 'Nuci', 654, 15, 14, 65), mk('e', 'Piept de pui, gătit', 165, 31, 0, 3.6), mk('f', 'Orez alb fiert', 130, 2.7, 28, 0.3), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli fiert', 35, 2.4, 7, 0.4), mk('j', 'Piept de curcan, gătit', 147, 30, 0, 2), mk('k', 'Cartofi fierți', 86, 1.7, 20, 0.1), mk('l', 'Somon gătit', 206, 22, 0, 12.4), mk('v', 'Carne tocată de vită 90%, gătită', 217, 26, 0, 11.8), mk('w', 'Paste fierte', 158, 5.8, 31, 0.9), mk('z', 'Dovlecei', 17, 1.2, 3.1, 0.3), mk('q', 'Linte fiartă', 116, 9, 20, 0.4), mk('m2', 'Morcovi', 41, 0.9, 10, 0.2), mk('t', 'Ton la conservă în apă', 116, 26, 0, 0.8), mk('u', 'Quinoa fiartă', 120, 4.4, 21, 1.9), mk('r', 'Roșii', 18, 0.9, 3.9, 0.2)];
+const kitchen = [mk('a', 'Whey (proteină din zer)', 352, 78, 6, 1.6), mk('o', 'Ovăz fulgi, crud', 379, 13, 68, 6.5), mk('n', 'Nuci', 654, 15, 14, 65), mk('e', 'Piept de pui, crud', 120, 22.5, 0, 2.6), mk('f', 'Orez alb crud', 365, 7.1, 80, 0.7), mk('g', 'Ulei de măsline', 884, 0, 0, 100), mk('h', 'Broccoli crud', 34, 2.8, 6.6, 0.4), mk('j', 'Piept de curcan, crud', 114, 23.7, 0.1, 1.5), mk('k', 'Cartofi cruzi', 77, 2, 17.5, 0.1), mk('l', 'Somon crud', 208, 20.4, 0, 13.4), mk('v', 'Carne tocată de vită 90%, crudă', 176, 20, 0, 10), mk('w', 'Paste crude', 371, 13, 75, 1.5), mk('z', 'Dovlecei', 17, 1.2, 3.1, 0.3), mk('q', 'Linte uscată', 352, 24.6, 63, 1.1), mk('m2', 'Morcovi', 41, 0.9, 10, 0.2), mk('t', 'Ton la conservă în apă', 116, 26, 0, 0.8), mk('u', 'Quinoa crudă', 368, 14.1, 64, 6.1), mk('r', 'Roșii', 18, 0.9, 3.9, 0.2)];
 const kitchenDb = new Map(kitchen.map((f) => [f.id, f]));
 
 test('a big carb meal never turns into a mountain of potatoes', () => {

@@ -1,4 +1,5 @@
 /* The fuel week as the screens need it, read fresh from the saved state and from Inner Beast. */
+import { RAW_OF } from '../logic/raw.ts';
 import { ctx } from '../app.ts';
 import { weekday, type DayTarget } from '../logic/calc.ts';
 import { mealCarbShares, mealFatShares, type FuelDay } from '../logic/carbs.ts';
@@ -125,6 +126,23 @@ export async function loadPantry() {
   pantry.foods = await loadFoods();
   pantry.map = new Map(pantry.foods.map((f) => [f.id, f]));
   for (const f of ctx.get().custom) pantry.map.set(f.id, f);
+  rawPlans();
+}
+
+/** Plans made before 2026-11-15 named cooked foods; now everything is weighed raw (logic/raw.ts). Idempotent. */
+function rawPlans() {
+  const s = ctx.get();
+  const byName = new Map(pantry.foods.map((f) => [f.name, f]));
+  let changed = false;
+  for (const meals of Object.values(s.fuel.plan)) for (const m of meals) for (const it of m.items) {
+    const r = RAW_OF[pantry.map.get(it.foodId)?.name ?? ''];
+    const to = r && byName.get(r[0]);
+    if (!r || !to) continue;
+    it.foodId = to.id;
+    it.g = Math.max(5, Math.round((it.g * r[1]) / 5) * 5);
+    changed = true;
+  }
+  if (changed) ctx.commit();
 }
 
 /** The pantry with the user's own foods in it: they can be planned, swapped and bought like the rest. */

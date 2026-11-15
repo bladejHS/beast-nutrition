@@ -13,7 +13,7 @@ import { toTime, type Tolerance } from '../logic/timing.ts';
 import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../logic/training.ts';
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
-import { back, demandTag, head, icon, listRow } from './parts.ts';
+import { back, demandTag, head, heroBand, icon, listRow } from './parts.ts';
 import { labsHtml, stackCard } from './extra.ts';
 import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 
@@ -164,6 +164,7 @@ function meals() {
   const { days } = fuelWeek(monday);
   const dem = (d: string) => days.find((x) => x.date === d)!.demand;
   return `${bk}${head('meals', 'Mese', 'Pe ținta zilei, cu înlocuiri și lista de cumpărături.')}
+  ${heroBand('cook')}
   <div class="wknav"><button class="ib" data-f="mwk" data-v="0" aria-label="Săptămâna curentă" ${mealWeek === 0 ? 'disabled' : ''}>‹</button><b>${mealWeek ? 'Săptămâna viitoare' : 'Săptămâna asta'}</b><button class="ib" data-f="mwk" data-v="1" aria-label="Săptămâna viitoare" ${mealWeek === 1 ? 'disabled' : ''}>›</button></div>
   <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}

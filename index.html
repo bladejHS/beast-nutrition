@@ -36,8 +36,9 @@
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-ext-wdth-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 html,body{margin:0;background:#05060a;color:#f3f5fa}
 /* THE ARENA, the Beast Nutrition cut, about 3.3 s (engine: splash/arena.js, shared with Inner Beast, here in blue).
-   The wolf's eyes in the dark; the light rises over the arena: two fighters trade, pull-ups, push-ups, a runner behind;
-   at 2.0 s the high kick lands (flash, sparks, shake, slow motion) and BEAST NUTRITION is stamped under the fight.
+   The wolf's eyes in the dark (in its chef's toque); the light rises over the kitchen: a cook at the stove, someone on
+   the scale, someone with the weekly pen, a runner behind; at 2.0 s the big toss lands back in the pan (sizzle, steam,
+   flash, slow motion) and BEAST NUTRITION is stamped under it.
    Then a blue slash opens the app. Reduced motion, the short intro and Data Saver get the same arena, frozen. */
 #splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#05070b;color:#f2f6fc;animation:sp-guard 0s linear 10s forwards;--w:min(88vw,40vh,520px)}
 @keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
@@ -151,7 +152,7 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
     setTimeout(leave, HOLD);
   }
   function arena(hit) {
-    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, color: [22, 119, 255], hot: [72, 207, 255], onImpact: hit });
+    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, scene: 'kitchen', color: [22, 119, 255], hot: [72, 207, 255], onImpact: hit });
   }
   function poster() { if (!window.BeastArena) return; try { forge = arena(null); forge.still(2.08); } catch (e) { /* the wolf and the name are enough */ } }
   // starts when the dashboard underneath is drawn, so that work does not stutter the sparks; after half a second anyway

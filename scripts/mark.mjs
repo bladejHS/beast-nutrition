@@ -45,6 +45,24 @@ const SIZES = {
   small: { tones: null, fill: '#232835', gap: 0, rim: 9, rimA: 1, eye: 1.3, glow: 5, halo: 0.9 },
 };
 
+/** 2026-11-15, the user: "la Beast Nutrition pune-i o pălărie de bucătar cu un morcov în colțul gurii". A white chef's
+ *  toque between the ears and a carrot held in the right corner of the mouth, leaves out. Same 240 grid. */
+function accessory(id) {
+  const hat = ['<circle cx="104" cy="40" r="17"/>', '<circle cx="136" cy="40" r="17"/>', '<circle cx="120" cy="29" r="20"/>', '<path d="M90 44L150 44L148 74Q120 68 92 74Z"/>'];
+  return `<defs><linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c3d0e2"/></linearGradient>
+    <linearGradient id="${id}c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffb24a"/><stop offset="1" stop-color="#e4570e"/></linearGradient></defs>
+  <g fill="#05060a" stroke="#05060a" stroke-width="5" stroke-linejoin="round">${hat.join('')}</g>
+  <g fill="url(#${id}t)">${hat.join('')}</g>
+  <path d="M93 62Q120 56 147 62L146 74Q120 68 94 74Z" fill="#d7e2f0" stroke="#05060a" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M110 30Q114 22 122 20" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" opacity=".9"/>
+  <g stroke="#05060a" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M203 226Q214 210 226 206Q218 220 206 230Z" fill="#3fb950"/>
+    <path d="M204 230Q222 226 234 232Q220 236 205 234Z" fill="#2ea043"/>
+    <path d="M140 205L202 224Q206 231 199 238Z" fill="url(#${id}c)"/>
+  </g>
+  <path d="M158 213L161 219M171 217L174 224M184 221L186 228" stroke="#a63a06" stroke-width="1.4" stroke-linecap="round"/>`;
+}
+
 let n = 0;
 /** The mark's body on the 240 grid; `id` keeps the gradient and filter names apart when several sit in one page. */
 export function umbra(size = 'medium', id = `u${++n}`) {
@@ -69,7 +87,8 @@ export function umbra(size = 'medium', id = `u${++n}`) {
   <path d="${OUTLINE_D}" fill="none" stroke="url(#${id}r)" stroke-opacity="${o.rimA}" stroke-width="${o.rim}" stroke-linejoin="round"/>
   <g filter="url(#${id}g)">${eyes.map((e) => `<path d="${d(e)}" fill="${P.eye}"/>`).join('')}</g>
   ${eyes.map((e) => `<path d="${d(e)}" fill="${P.eye}"/>`).join('')}
-  ${eyes.map((e) => `<path d="${d(grow(e, 0.42))}" fill="${P.core}" opacity=".85"/>`).join('')}`;
+  ${eyes.map((e) => `<path d="${d(grow(e, 0.42))}" fill="${P.core}" opacity=".85"/>`).join('')}
+  ${accessory(id)}`;
 }
 
 /** The icon's field: steel black under a cold spotlight, a blue light behind the head, darker at the bottom. */

@@ -11,4 +11,16 @@
   <path d="M120 66L140 62L174 26L190 86L210 108L197 118L214 146L186 156L160 190L146 212L132 226L120 230L108 226L94 212L80 190L54 156L26 146L43 118L30 108L50 86L66 26L100 62Z" fill="none" stroke="url(#u13r)" stroke-opacity="1" stroke-width="9" stroke-linejoin="round"/>
   <g filter="url(#u13g)"><path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#2f8cff"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#2f8cff"/></g>
   <path d="M118.6 125L173.2 96.4L160.2 114.6Z" fill="#2f8cff"/><path d="M79.8 114.6L66.8 96.4L121.4 125Z" fill="#2f8cff"/>
-  <path d="M137.2 117.46L160.13 105.45L154.67 113.09Z" fill="#cfe6ff" opacity=".85"/><path d="M85.33 113.09L79.87 105.45L102.8 117.46Z" fill="#cfe6ff" opacity=".85"/></g></g></svg>
+  <path d="M137.2 117.46L160.13 105.45L154.67 113.09Z" fill="#cfe6ff" opacity=".85"/><path d="M85.33 113.09L79.87 105.45L102.8 117.46Z" fill="#cfe6ff" opacity=".85"/>
+  <defs><linearGradient id="u13t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c3d0e2"/></linearGradient>
+    <linearGradient id="u13c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffb24a"/><stop offset="1" stop-color="#e4570e"/></linearGradient></defs>
+  <g fill="#05060a" stroke="#05060a" stroke-width="5" stroke-linejoin="round"><circle cx="104" cy="40" r="17"/><circle cx="136" cy="40" r="17"/><circle cx="120" cy="29" r="20"/><path d="M90 44L150 44L148 74Q120 68 92 74Z"/></g>
+  <g fill="url(#u13t)"><circle cx="104" cy="40" r="17"/><circle cx="136" cy="40" r="17"/><circle cx="120" cy="29" r="20"/><path d="M90 44L150 44L148 74Q120 68 92 74Z"/></g>
+  <path d="M93 62Q120 56 147 62L146 74Q120 68 94 74Z" fill="#d7e2f0" stroke="#05060a" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M110 30Q114 22 122 20" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" opacity=".9"/>
+  <g stroke="#05060a" stroke-width="1.6" stroke-linejoin="round">
+    <path d="M203 226Q214 210 226 206Q218 220 206 230Z" fill="#3fb950"/>
+    <path d="M204 230Q222 226 234 232Q220 236 205 234Z" fill="#2ea043"/>
+    <path d="M140 205L202 224Q206 231 199 238Z" fill="url(#u13c)"/>
+  </g>
+  <path d="M158 213L161 219M171 217L174 224M184 221L186 228" stroke="#a63a06" stroke-width="1.4" stroke-linecap="round"/></g></g></svg>

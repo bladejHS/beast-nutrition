@@ -73,6 +73,16 @@ type Main = keyof typeof ICONS;
 const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', corp: 'Corp', fuel: 'Mai mult' };
 const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' || t === 'glp1' ? 'fuel' : t);
 
+/** The living pictures (heroBand in parts.ts), drawn by the arena engine the opening loads. */
+function mountHero(root: HTMLElement) {
+  const arena = (window as unknown as { BeastArena?: { hero: (c: HTMLCanvasElement, o: object) => unknown } }).BeastArena;
+  if (!arena) return;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  root.querySelectorAll<HTMLCanvasElement>('canvas.hero-cv').forEach((cv) => {
+    try { arena.hero(cv, { kind: cv.dataset['kind'], color: [22, 119, 255], hot: [72, 207, 255], still }); } catch { /* the screen stands without it */ }
+  });
+}
+
 function render() {
   if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
@@ -83,6 +93,7 @@ function render() {
     <nav class="tabs" aria-label="Navigare" style="--i:${(Object.keys(ICONS) as Main[]).indexOf(home(tab))}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
       `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
   afterRender(app);
+  mountHero(app);
   if (tab === 'azi') todayBind();
   if (tab === 'corp') { bodyBind(); goalBind(); }
   fuelBind(); fastBind(); labsBind();

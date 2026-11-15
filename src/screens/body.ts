@@ -4,7 +4,7 @@ import { kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
 import { addDays, finishedWeeks, mondayOf, review, type CheckIn } from '../logic/review.ts';
 import { chartRange, trendAlpha, trendChange, weightTrend, type TrendPoint } from '../logic/trend.ts';
 import { fatMass, type Measure } from '../logic/wellness.ts';
-import { banner, shortDate } from './parts.ts';
+import { banner, heroBand, shortDate } from './parts.ts';
 import { latestKg } from './state.ts';
 import { goalCard } from './extra.ts';
 
@@ -140,6 +140,7 @@ export function bodyHtml() {
   const s = ctx.get();
   const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
   return `${banner('body', 'Corp')}
+  ${heroBand('weigh')}
   ${goalCard()}
   ${reviewCard()}
   ${weighCard(points)}

@@ -8,6 +8,11 @@ export const back = (label = 'Mai mult', attr = 'data-tab="fuel"') => `<button c
 
 /** A band across the middle of a card's picture, under the screen's title: it leaves out the icon above and the English printed below. */
 /** The other tabs' heads (Corp, Plan): since 2026-11-12 the same icon head as Fuel, no photo. */
+/** A living picture (2026-11-15): the family's arena engine (public/splash/arena.js) draws `kind` on a loop, in blue. */
+export const heroBand = (kind: string) => `<div class="hero-stage" aria-hidden="true"><img class="hero-wolf" src="${import.meta.env.BASE_URL}splash/umbra.webp" alt="" width="680" height="801" decoding="async"><canvas class="hero-cv" data-kind="${kind}"></canvas></div>`;
+/** The day's training, as Inner Beast plans it, Monday first: what the living picture on Azi shows. */
+export const DAY_KIND = ['fight', 'push', 'run', 'fight', 'pull', 'run', 'calm'];
+
 export const banner = (k: string, title: string, sub = '') => head(k === 'body' ? 'scale' : k === 'settings' ? 'engine' : k, title, sub);
 
 /** Line icons for Fuel (24 × 24, currentColor): one per destination, so the tiles read without pictures. */

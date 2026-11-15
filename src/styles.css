@@ -909,3 +909,28 @@ body:has(#sheet.on) .fab { display: none; }
 @keyframes tab-pop { from { transform: translateY(0) scale(.7); } }
 .tabs button:not(.on):active svg { transform: scale(.85); }
 @media (prefers-reduced-motion: reduce) { .tabs-plate, .tabs .tabs-blade::after, .tabs.moved .tabs-blade, .tabs .on svg { animation: none; } }
+
+/* ---------- the dock, 2026-11-15 (screens/dock.ts): the canvas draws the bar, its notch and the light ---------- */
+.tabs { display: none; }
+.dock { position: fixed; z-index: 6; left: 10px; right: 10px; bottom: max(8px, var(--safe)); max-width: 540px; height: 80px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; pointer-events: none; }
+.dock::before { content: ''; position: fixed; left: 0; right: 0; bottom: 0; z-index: -2; height: calc(90px + var(--safe)); background: linear-gradient(rgba(5, 6, 10, 0), rgba(5, 6, 10, .92) 30px, #05060a); pointer-events: none; }
+.dock-cv { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -1; }
+.dock-b { pointer-events: auto; position: relative; display: grid; justify-items: center; align-content: end; gap: 4px; height: 56px; padding: 0 0 9px; border: 0; background: none; color: #8d9ab0; font: 700 11.5px/1 'Saira', system-ui, sans-serif; letter-spacing: .04em; -webkit-tap-highlight-color: transparent; }
+.dock-b svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .35s cubic-bezier(.34, 1.56, .64, 1), opacity .2s; }
+.dock-b:active svg { transform: translateY(2px) scale(.86); }
+.dock-b.on svg { opacity: 0; transform: translateY(-14px) scale(.6); }
+.dock-b.on span { color: #fff; text-shadow: 0 0 10px rgba(72, 207, 255, .95), 0 0 2px rgba(72, 207, 255, 1); }
+.dock-b:focus-visible { outline: 2px solid #48cfff; outline-offset: -6px; border-radius: 16px; }
+.dock-orb { position: absolute; left: 0; top: 0; width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; pointer-events: none; will-change: transform;
+  background: radial-gradient(circle at 34% 28%, #e3f5ff, #6fd8ff 20%, #1677ff 58%, #0a3c8c);
+  box-shadow: 0 0 0 1px rgba(200, 240, 255, .7) inset, 0 0 26px 4px rgba(72, 207, 255, .55), 0 12px 24px -6px rgba(22, 119, 255, .95); }
+.dock-orb svg { width: 26px; height: 26px; fill: none; stroke: #fff; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 4px rgba(255, 255, 255, .8)); }
+.dock-orb::before { content: ''; position: absolute; inset: -6px; border-radius: 50%; background: conic-gradient(from 0deg, transparent, rgba(160, 230, 255, .9), transparent 40%, transparent 60%, rgba(72, 207, 255, .7), transparent); -webkit-mask: radial-gradient(circle, transparent 30px, #000 31px); mask: radial-gradient(circle, transparent 30px, #000 31px); animation: dock-spin 3s linear infinite; }
+@keyframes dock-spin { to { transform: rotate(360deg); } }
+.dock-ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(120, 220, 255, .9); opacity: 0; }
+.dock-orb.land .dock-ring { animation: dock-land .7s ease-out; }
+@keyframes dock-land { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(2.2); } }
+.dock-orb.land svg { animation: dock-pop .5s cubic-bezier(.34, 1.56, .64, 1); }
+@keyframes dock-pop { 0% { transform: scale(.5) rotate(-20deg); } 100% { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .dock-orb::before, .dock-orb.land .dock-ring, .dock-orb.land svg { animation: none; } }
+.dock:not(.ready) { display: none; }

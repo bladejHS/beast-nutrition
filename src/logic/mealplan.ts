@@ -42,13 +42,23 @@ const TEMPLATES: Template[] = [
   { name: 'Bol mexican cu pui', sweet: false, cook: 20, heavy: true, steps: 'Fierbe fasolea neagră (o noapte la înmuiat), gătește puiul, încălzește porumbul, adaugă roșiile, ardeiul și avocado. Totul e cântărit crud.', protein: ['Piept de pui, crud'], carb: ['Fasole neagră uscată', 'Porumb dulce'], fat: ['Avocado'], veg: ['Roșii', 'Ardei gras roșu', 'Ceapă'] },
   { name: 'Pâine cu unt de arahide, banană și whey', sweet: true, cook: 3, steps: 'Unge pâinea cu unt de arahide, pune banana feliată; whey-ul îl bei cu apă sau lapte.', protein: ['Whey (proteină din zer)'], carb: ['Pâine integrală'], fat: ['Unt de arahide'], veg: ['Banană'] },
   { name: 'Shake de whey cu fructe', sweet: true, cook: 3, steps: 'Mixează whey-ul cu apă, fructele și nucile sau semințele.', protein: ['Whey (proteină din zer)'], carb: ['Banană', 'Curmale'], fat: ['Unt de arahide', 'Migdale'], veg: ['Căpșuni', 'Afine', 'Zmeură'] },
+  // 2026-11-15, more foods (the user asked): fish from Romanian shelves, buckwheat, bulgur, lean cuts; everything raw
+  { name: 'Păstrăv cu cartofi noi și salată', sweet: false, cook: 25, steps: 'Coace păstrăvul cu lămâie, fierbe cartofii noi, amestecă salata cu uleiul. Totul e cântărit crud.', protein: ['Păstrăv, crud', 'Șalău, crud', 'Tilapia, crudă'], carb: ['Cartofi noi', 'Cartofi cruzi'], fat: ['Ulei de măsline'], veg: ['Salată verde', 'Rucola', 'Roșii'] },
+  { name: 'Vită cu hrișcă și legume', sweet: false, cook: 25, heavy: true, steps: 'Fierbe hrișca, rumenește carnea de vită, călește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Pulpă de vită, crudă', 'Carne tocată de vită 95%, crudă'], carb: ['Hrișcă crudă', 'Bulgur crud'], fat: ['Ulei de măsline'], veg: ['Ardei gras roșu', 'Ciuperci', 'Dovlecei'] },
+  { name: 'Curcan cu bulgur și legume', sweet: false, cook: 25, steps: 'Fierbe bulgurul, gătește curcanul la tigaie, călește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Pulpă de curcan, crudă', 'Piept de curcan, crud'], carb: ['Bulgur crud', 'Orz perlat crud'], fat: ['Ulei de măsline'], veg: ['Varză roșie', 'Morcovi', 'Fasole verde'] },
+  { name: 'Ton proaspăt cu orez basmati și legume', sweet: false, cook: 20, steps: 'Fierbe orezul, frige tonul 1–2 minute pe fiecare parte, gătește legumele la abur, adaugă susanul. Totul e cântărit crud.', protein: ['Ton proaspăt, crud', 'Somon crud'], carb: ['Orez basmati crud', 'Orez brun crud'], fat: ['Semințe de susan', 'Ulei de măsline'], veg: ['Broccoli crud', 'Sparanghel', 'Morcovi'] },
+  { name: 'Porc cu cartofi noi și varză', sweet: false, cook: 30, steps: 'Coace pulpa de porc și cartofii, călește varza cu ceapă. Totul e cântărit crud.', protein: ['Pulpă de porc, crudă', 'Cotlet de porc, crud', 'Mușchi de porc, crud'], carb: ['Cartofi noi', 'Cartofi cruzi'], fat: ['Ulei de măsline'], veg: ['Varză', 'Varză roșie', 'Ceapă'] },
+  { name: 'Vițel cu mei și legume', sweet: false, cook: 25, steps: 'Fierbe meiul, rumenește vițelul, gătește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Carne de vițel, crudă', 'Pulpă de vită, crudă'], carb: ['Mei crud', 'Hrișcă crudă'], fat: ['Ulei de măsline'], veg: ['Sfeclă roșie', 'Fasole verde', 'Dovlecei'] },
+  { name: 'Pui cu paste integrale și legume', sweet: false, cook: 20, steps: 'Fierbe pastele, gătește puiul cu legumele în tigaie, adaugă uleiul și parmezanul. Totul e cântărit crud.', protein: ['Piept de pui, crud'], carb: ['Paste integrale crude'], fat: ['Ulei de măsline', 'Parmezan'], veg: ['Spanac crud', 'Roșii', 'Kale'] },
+  { name: 'Skyr cu fructe și nuci', sweet: true, cook: 3, steps: 'Pune skyr-ul într-un bol, adaugă fructele, mierea și nucile.', protein: ['Skyr natur', 'Brânză cottage 1%'], carb: ['Miere', 'Banană', 'Mango'], fat: ['Nuci', 'Fistic', 'Migdale'], veg: ['Mure', 'Cireșe', 'Zmeură'] },
+  { name: 'Linte roșie cu pui și legume', sweet: false, cook: 25, heavy: true, steps: 'Fierbe lintea roșie cu morcovii și ceapa, adaugă puiul gătit în tigaie și uleiul. Totul e cântărit crud.', protein: ['Piept de pui, crud', 'Pulpă de pui, crudă, fără piele'], carb: ['Linte roșie uscată', 'Fasole albă uscată'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă', 'Țelină apio'] },
 ];
 
 export const PAIRS: Record<Role, string[]> = {
-  protein: ['Piept de pui, crud', 'Piept de curcan, crud', 'Pulpă de pui, crudă, fără piele', 'Somon crud', 'Cod, crud', 'Macrou, crud', 'Ton la conservă în apă', 'Carne tocată de vită 90%, crudă', 'Mușchi de vită, crud', 'Mușchi de porc, crud', 'Creveți cruzi', 'Tofu', 'Albuș de ou', 'Brânză de vaci', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Whey (proteină din zer)'],
-  carb: ['Orez alb crud', 'Orez brun crud', 'Paste crude', 'Cartofi cruzi', 'Cartofi dulci cruzi', 'Quinoa crudă', 'Cuscus crud', 'Mălai crud', 'Pâine integrală', 'Pâine de secară', 'Lipie tortilla', 'Linte uscată', 'Năut uscat', 'Fasole boabe uscată', 'Fasole neagră uscată', 'Mazăre verde crudă', 'Porumb dulce', 'Ovăz fulgi, crud', 'Banană', 'Miere', 'Măr', 'Pară', 'Curmale', 'Stafide', 'Struguri'],
-  fat: ['Ulei de măsline', 'Avocado', 'Parmezan', 'Telemea tip feta', 'Semințe de dovleac', 'Semințe de floarea-soarelui', 'Semințe de in', 'Nuci', 'Migdale', 'Caju', 'Alune de pădure', 'Arahide', 'Unt de arahide', 'Semințe de chia'],
-  veg: ['Broccoli crud', 'Fasole verde', 'Roșii', 'Castraveți', 'Salată verde', 'Morcovi', 'Dovlecei', 'Ciuperci', 'Spanac crud', 'Conopidă', 'Ardei gras roșu', 'Varză', 'Vinete', 'Ceapă', 'Afine', 'Căpșuni', 'Zmeură', 'Banană', 'Măr', 'Pară', 'Piersică', 'Kiwi', 'Portocală', 'Ananas'],
+  protein: ['Piept de pui, crud', 'Pulpă de curcan, crudă', 'Pulpă de vită, crudă', 'Carne tocată de vită 95%, crudă', 'Pulpă de porc, crudă', 'Cotlet de porc, crud', 'Carne de vițel, crudă', 'Păstrăv, crud', 'Șalău, crud', 'Tilapia, crudă', 'Ton proaspăt, crud', 'Skyr natur', 'Brânză cottage 1%', 'Piept de curcan, crud', 'Pulpă de pui, crudă, fără piele', 'Somon crud', 'Cod, crud', 'Macrou, crud', 'Ton la conservă în apă', 'Carne tocată de vită 90%, crudă', 'Mușchi de vită, crud', 'Mușchi de porc, crud', 'Creveți cruzi', 'Tofu', 'Albuș de ou', 'Brânză de vaci', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Whey (proteină din zer)'],
+  carb: ['Hrișcă crudă', 'Bulgur crud', 'Mei crud', 'Orz perlat crud', 'Orez basmati crud', 'Paste integrale crude', 'Cartofi noi', 'Fasole albă uscată', 'Linte roșie uscată', 'Mango', 'Cireșe', 'Caise', 'Orez alb crud', 'Orez brun crud', 'Paste crude', 'Cartofi cruzi', 'Cartofi dulci cruzi', 'Quinoa crudă', 'Cuscus crud', 'Mălai crud', 'Pâine integrală', 'Pâine de secară', 'Lipie tortilla', 'Linte uscată', 'Năut uscat', 'Fasole boabe uscată', 'Fasole neagră uscată', 'Mazăre verde crudă', 'Porumb dulce', 'Ovăz fulgi, crud', 'Banană', 'Miere', 'Măr', 'Pară', 'Curmale', 'Stafide', 'Struguri'],
+  fat: ['Fistic', 'Semințe de susan', 'Ulei de rapiță', 'Unt de migdale', 'Ulei de măsline', 'Avocado', 'Parmezan', 'Telemea tip feta', 'Semințe de dovleac', 'Semințe de floarea-soarelui', 'Semințe de in', 'Nuci', 'Migdale', 'Caju', 'Alune de pădure', 'Arahide', 'Unt de arahide', 'Semințe de chia'],
+  veg: ['Sfeclă roșie', 'Rucola', 'Varză roșie', 'Varză de Bruxelles', 'Sparanghel', 'Kale', 'Praz', 'Țelină apio', 'Mure', 'Cireșe', 'Caise', 'Mandarine', 'Broccoli crud', 'Fasole verde', 'Roșii', 'Castraveți', 'Salată verde', 'Morcovi', 'Dovlecei', 'Ciuperci', 'Spanac crud', 'Conopidă', 'Ardei gras roșu', 'Varză', 'Vinete', 'Ceapă', 'Afine', 'Căpșuni', 'Zmeură', 'Banană', 'Măr', 'Pară', 'Piersică', 'Kiwi', 'Portocală', 'Ananas'],
   extra: [],
 };
 
@@ -83,7 +93,8 @@ export function solve(items: Item[], target: { p: number; c: number; f: number }
     cG = cf && cf.c > 0 ? Math.max(0, (target.c - vc - (pf?.c ?? 0) * pG / 100 - (ff?.c ?? 0) * fG / 100) / cf.c * 100) : 0;
     fG = ff && ff.f > 0 ? Math.max(0, (target.f - vf - (pf?.f ?? 0) * pG / 100 - (cf?.f ?? 0) * cG / 100) / ff.f * 100) : 0;
   }
-  const round = (g: number) => Math.round(g / 5) * 5;
+  // to the gram: the plan is weighed raw on a kitchen scale, and 5 g of raw rice is 4 g of carbs
+  const round = (g: number) => Math.round(g);
   if (prot) prot.g = Math.max(10, round(pG));
   if (carb) carb.g = round(cG);
   if (fat) fat.g = Math.max(0, Math.round(fG));
@@ -121,7 +132,7 @@ type GenOpts = { avoid?: string[]; firstSweet?: boolean; fatShares?: number[]; r
 export function generateDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: GenOpts = {}): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const tries = Array.from({ length: 8 }, (_, k) => {
-    const meals = oneDay(day, carbShares, times, tags, foods, prefs, seed + k * 17, opts);
+    const meals = polish(oneDay(day, carbShares, times, tags, foods, prefs, seed + k * 17, opts), day, db);
     const got = macros(meals.flatMap((m) => m.items), db);
     return { meals, key: meals.map((m) => m.name).join('|'), miss: Math.abs(got.f - day.f) * 9 + Math.abs(got.c - day.c) * 4 + Math.abs(got.p - day.p) * 4 + bulk(meals.flatMap((m) => m.items)) * 4 + (carbShares.length - meals.length) * 1000 };
   });
@@ -132,6 +143,31 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
   const fresh = near.filter((t) => repeats(t) === fewest);
   const close = fresh.filter((t, i) => fresh.findIndex((x) => x.key === t.key) === i);
   return close[Math.abs(seed) % close.length]!.meals;
+}
+
+/**
+ * The last word on precision (2026-11-15, the user: "asigură-te de precizia macronutrienților"). Whatever the day still
+ * misses after each meal was sized (a fatty fish, rounding to the gram, a portion cap) is handed back to the meals,
+ * the last one first: each is solved again for its own macros plus the gap, until the day lands within a gram or two.
+ */
+export function polish(meals: Meal[], day: { p: number; c: number; f: number }, db: Map<string, Food>): Meal[] {
+  const out = meals.map((m) => ({ ...m, items: m.items.map((i) => ({ ...i })) }));
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      const got = macros(out.flatMap((m) => m.items), db);
+      const gap = { p: day.p - got.p, c: day.c - got.c, f: day.f - got.f };
+      if (Math.abs(gap.p) < 1 && Math.abs(gap.c) < 1.5 && Math.abs(gap.f) < 1) return out;
+      const m = out[i]!;
+      if (m.done || m.snack || m.keep) continue;
+      const own = macros(m.items, db);
+      const want = { p: Math.max(0, own.p + gap.p), c: Math.max(0, own.c + gap.c), f: Math.max(0, own.f + gap.f) };
+      const next = solve(m.items, want, db);
+      // a fix that needs an absurd portion is not a fix
+      if (next.some((x) => x.g > CAP[x.role])) continue;
+      out[i] = { ...m, items: next };
+    }
+  }
+  return out;
 }
 
 /** Targets per meal: protein evenly, fat by its share, carbs by training share. */
@@ -229,7 +265,7 @@ export function substitute(meal: Meal, index: number, next: Food, db: Map<string
 }
 
 /** Foods that belong in a sweet bowl, and foods that belong next to meat and vegetables. */
-const SWEET = new Set(['Ovăz fulgi, crud', 'Banană', 'Miere', 'Whey (proteină din zer)', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Afine', 'Căpșuni', 'Zmeură', 'Nuci', 'Migdale', 'Semințe de chia',
+const SWEET = new Set(['Skyr natur', 'Brânză cottage 1%', 'Mango', 'Cireșe', 'Caise', 'Mure', 'Mandarine', 'Fistic', 'Unt de migdale', 'Ovăz fulgi, crud', 'Banană', 'Miere', 'Whey (proteină din zer)', 'Iaurt grecesc degresat', 'Iaurt grecesc 2%', 'Afine', 'Căpșuni', 'Zmeură', 'Nuci', 'Migdale', 'Semințe de chia',
   'Măr', 'Pară', 'Piersică', 'Kiwi', 'Portocală', 'Ananas', 'Curmale', 'Stafide', 'Struguri', 'Caju', 'Alune de pădure', 'Unt de arahide']);
 const OATS = 'Ovăz fulgi, crud';
 const WHEY = 'Whey (proteină din zer)';

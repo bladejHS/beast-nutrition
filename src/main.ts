@@ -1,4 +1,5 @@
 import './styles.css';
+import { makeDock } from './screens/dock.ts';
 import { afterRender, ctx, type Tab } from './app.ts';
 import { load, save, type State } from './logic/store.ts';
 import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
@@ -85,20 +86,18 @@ function mountHero(root: HTMLElement) {
   });
 }
 
-/** The tab bar's orb slides from the tab it was on (the bar is redrawn with each screen). */
-let tabFrom = -1;
+/** The dock (screens/dock.ts): built once, outside #app, so the orb can leap from tab to tab. */
+const dock = makeDock((Object.keys(ICONS) as Main[]).map((k) => ({ key: k, label: TAB_NAME[k], icon: ICONS[k] })));
 const tabAt = () => (Object.keys(ICONS) as Main[]).indexOf(home(tab));
 
 function render() {
-  if (!s.profile || !s.plan || isEditing()) { app.innerHTML = setupHtml(); setupBind(); return; }
+  if (!s.profile || !s.plan || isEditing()) { dock.hide(); app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
   syncFuel();
   kitchen();
   const views: Record<Tab, () => string> = { azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
-  app.innerHTML = `<main>${views[tab]()}</main>
-    <nav class="tabs${tabFrom >= 0 && tabFrom !== tabAt() ? ' moved' : ''}" aria-label="Navigare" style="--i:${tabAt()};--from:${tabFrom < 0 ? tabAt() : tabFrom}"><i class="tabs-plate" aria-hidden="true"></i><i class="tabs-blade" aria-hidden="true"></i>${(Object.keys(ICONS) as Main[]).map((t) =>
-      `<button data-tab="${t}" class="${home(tab) === t ? 'on' : ''}" ${home(tab) === t ? 'aria-current="page"' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[t]}</svg>${TAB_NAME[t]}</button>`).join('')}</nav>`;
-  tabFrom = tabAt();
+  app.innerHTML = `<main>${views[tab]()}</main>`;
+  dock.set(tabAt());
   afterRender(app);
   mountHero(app);
   if (tab === 'azi') todayBind();

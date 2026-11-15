@@ -90,3 +90,78 @@ export function goalView(g: Goal, points: TrendPoint[], phase: Phase, today: str
   if (left <= 3) return { ...v, state: 'close', title: `Mai ai ${kg(left)} kg`, text: `Aproape. Când trendul trece de ${kg(g.kg)} kg, aplicația îți propune ieșirea din deficit.${eta ? ` La ritmul de acum: pe ${dateRo(eta)}.` : ''}` };
   return { ...v, state: 'far', title: `Mai ai ${kg(left)} kg`, text: eta ? `La ritmul de acum (${kg(rate!)} kg pe săptămână) ajungi pe ${dateRo(eta)}.` : 'Ritmul se vede după două săptămâni de cântăriri.' };
 }
+
+// ---- the road to the goal: segments and the chance (2026-11-15) -------------------------------------------------
+// The user: "vreau să fie împărțite kg până la target în segmente și să-mi zică aplicația procentajul care sunt
+// șansele să ajung la acel target până la data stabilită".
+
+export interface Segment { from: number; to: number; done: number }
+
+/** The kilos from the start to the goal, cut into even stretches of about 5 kg (3 to 8 of them). */
+export function segments(g: Goal, now: number): Segment[] {
+  const total = g.from - g.kg;
+  if (!(total > 0)) return [];
+  const n = Math.max(3, Math.min(8, Math.round(total / 5)));
+  const size = total / n;
+  return Array.from({ length: n }, (_, i) => {
+    const from = g.from - i * size, to = from - size;
+    return { from, to, done: Math.max(0, Math.min(1, (from - now) / size)) };
+  });
+}
+
+/** Normal CDF (Abramowitz–Stegun 7.1.26). */
+export function phi(z: number): number {
+  const t = 1 / (1 + 0.3275911 * Math.abs(z) / Math.SQRT2);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-(z * z) / 2);
+  return z >= 0 ? (1 + y) / 2 : (1 - y) / 2;
+}
+
+export interface Chance {
+  /** 0–100, or null without a date. */
+  pct: number | null;
+  /** Kg per week the goal needs from today to the day the deficit stops. */
+  need: number | null;
+  /** Kg per week the forecast uses: the scale's own pace, blended with the plan's while there are few weeks. */
+  pace: number;
+  /** The forecast weight on the day the deficit stops. */
+  at: number | null;
+  /** The day the deficit stops (STOP_WEEKS before the selection). */
+  deadline: string | null;
+  weeks: number | null;
+}
+
+/**
+ * How likely the goal is by the date. The forecast: the weekly pace in percent of body weight (so it slows as the
+ * weight drops), from the trend of the last 4 weeks, blended with the plan's pace while there are fewer than 6 weeks
+ * of weighing. The spread: the week-to-week noise of the trend, plus 30 % doubt about the pace itself (weeks of good
+ * and bad adherence, plateaus). The chance is the share of that spread that ends at or under the goal.
+ */
+export function chance(g: Goal, points: TrendPoint[], planPace: number, today: string): Chance {
+  const now = points.at(-1)?.trend ?? g.from;
+  const deadline = g.by ? addDays(g.by, -STOP_WEEKS * 7) : null;
+  const span = points.length ? gap(points[0]!.date, points.at(-1)!.date) : 0;
+  const seen = lossRate(points);
+  const w = seen == null ? 0 : Math.min(1, span / 42);
+  const pace = Math.max(0, (seen ?? 0) * w + planPace * (1 - w));
+  const left = now - g.kg;
+  if (!deadline) return { pct: null, need: null, pace, at: null, deadline: null, weeks: null };
+  const weeks = gap(today, deadline) / 7;
+  if (left <= 0) return { pct: 100, need: 0, pace, at: now, deadline, weeks };
+  if (weeks <= 0) return { pct: 0, need: null, pace, at: now, deadline, weeks };
+  const p = pace / now;
+  const at = now * Math.pow(1 - p, weeks);
+  // the week-to-week noise of the trend over the last 8 weeks, 0.5 kg when there is too little to tell
+  const weekly: number[] = [];
+  for (let i = points.length - 1; i > 0 && weekly.length < 8; ) {
+    let j = i - 1;
+    while (j >= 0 && gap(points[j]!.date, points[i]!.date) < 7) j--;
+    if (j < 0) break;
+    weekly.push(points[j]!.trend - points[i]!.trend);
+    i = j;
+  }
+  const mean = weekly.length ? weekly.reduce((a, b) => a + b, 0) / weekly.length : 0;
+  const sdw = weekly.length >= 3 ? Math.sqrt(weekly.reduce((a, b) => a + (b - mean) ** 2, 0) / (weekly.length - 1)) : 0.5;
+  const sd = Math.sqrt(weeks * sdw * sdw + (0.3 * (now - at)) ** 2) || 0.5;
+  const pct = Math.round(Math.max(1, Math.min(99, phi((g.kg - at) / sd) * 100)));
+  return { pct, need: left / weeks, pace, at, deadline, weeks };
+}

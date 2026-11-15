@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { goalView, lossRate } from './goal.ts';
+import { chance, goalView, lossRate, phi, segments } from './goal.ts';
 import { homa, labStatus } from './labs.ts';
 
 const line = (from: number, perWeek: number, days: number, end = '2026-11-14') => {
@@ -45,4 +45,25 @@ test('lab ranges, the laboratory first', () => {
   assert.equal(labStatus({ id: '1', marker: 'ferritin', date: '2026-11-01', value: 20, lo: 15 }), 'ok');
   assert.equal(labStatus({ id: '1', marker: 'hba1c', date: '2026-11-01', value: 6 }), 'high');
   assert.equal(homa([{ id: 'a', marker: 'glucose', date: '2026-11-01', value: 90 }, { id: 'b', marker: 'insulin', date: '2026-11-01', value: 15 }])!.value, 3.3);
+});
+
+
+test('segments of about 5 kg, the current one part done', () => {
+  const s = segments({ kg: 105, by: '', from: 134.9 }, 129.2);
+  assert.equal(s.length, 6);
+  assert.equal(s[0]!.done, 1);
+  assert.ok(s[1]!.done > 0 && s[1]!.done < 1);
+  assert.equal(s[5]!.done, 0);
+});
+
+test('the normal curve', () => {
+  assert.equal(Math.round(phi(0) * 100), 50);
+  assert.equal(Math.round(phi(1.96) * 1000), 975);
+});
+
+test('the chance: on pace is likely, too far is unlikely, no date is no number', () => {
+  const pts = line(134, 1, 42);
+  assert.ok(chance({ kg: 120, by: '2027-06-01', from: 134 }, pts, 0.7, '2026-11-14').pct! > 80);
+  assert.ok(chance({ kg: 90, by: '2027-01-15', from: 134 }, pts, 0.7, '2026-11-14').pct! < 10);
+  assert.equal(chance({ kg: 105, by: '', from: 134 }, pts, 0.7, '2026-11-14').pct, null);
 });

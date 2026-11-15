@@ -667,6 +667,59 @@
         var Ji = injectJ(t);
         figure(c, Ji, cx - 4 * s, by, s, 1, o2);
         pen(c, Ji, cx - 4 * s, by, s, 1, o2, hot, pale);
+      } else if (kind === 'journey') {
+        // the road to the goal (Beast Nutrition, Azi): a gate at every stretch, the runner where the scale says he is,
+        // the road behind him lit; on the first look of the visit he runs there from the start and each gate he
+        // passes lights up with sparks; the finish flag waves over the goal
+        var jy = o.journey || { p: 0, n: 5, marks: [] }, x0 = Wd * 0.07, x1 = Wd * 0.9, ty = Ht * 0.8;
+        s = Ht / 250;
+        var q = jy.intro ? jy.p * ease(clamp((t - 0.25) / 1.8, 0, 1)) : jy.p, xq = x0 + (x1 - x0) * q;
+        // the spotlight follows the runner
+        c.save(); c.globalCompositeOperation = 'lighter';
+        var sp = c.createRadialGradient(xq, ty, 0, xq, ty, Ht * 0.7);
+        sp.addColorStop(0, rgba(hot, 0.22)); sp.addColorStop(1, rgba(col, 0));
+        c.fillStyle = sp; c.fillRect(0, 0, Wd, Ht);
+        c.restore();
+        // the road: dim ahead, lit behind
+        c.save(); c.lineCap = 'round';
+        c.strokeStyle = 'rgba(255,255,255,.14)'; c.lineWidth = 3; c.setLineDash([6, 7]);
+        c.beginPath(); c.moveTo(xq, ty); c.lineTo(x1, ty); c.stroke(); c.setLineDash([]);
+        var lg = c.createLinearGradient(x0, 0, xq, 0); lg.addColorStop(0, rgba(col, 0.5)); lg.addColorStop(1, rgba(pale, 1));
+        c.strokeStyle = lg; c.lineWidth = 4; c.shadowColor = rgba(hot, 1); c.shadowBlur = 14;
+        c.beginPath(); c.moveTo(x0, ty); c.lineTo(xq, ty); c.stroke();
+        c.restore();
+        // the gates and their kilos
+        c.save(); c.font = '700 ' + Math.max(9, Ht * 0.042).toFixed(0) + 'px Saira, "Arial Narrow", sans-serif'; c.textAlign = 'center';
+        for (var gi = 0; gi <= jy.n; gi++) {
+          var gx = x0 + (x1 - x0) * (gi / jy.n), lit = gx <= xq + 0.5, last = gi === jy.n, gh = last ? Ht * 0.42 : Ht * 0.2;
+          if (jy.intro && lit && jy._lit !== undefined && gi > jy._lit && gi > 0) {
+            for (var k3 = 0; k3 < 34; k3++) { var a3 = (-90 + (Math.random() - 0.5) * 160) * R, v3 = 300 * (0.3 + Math.random()); sparks.push({ x: gx, y: ty - gh, px: gx, py: ty - gh, vx: Math.cos(a3) * v3, vy: Math.sin(a3) * v3, t: 0, life: 0.35 + Math.random() * 0.4, w: 1 + Math.random() * 1.3 }); }
+          }
+          if (lit && (jy._lit === undefined || gi > jy._lit)) jy._lit = gi;
+          c.lineCap = 'round';
+          c.strokeStyle = lit ? rgba(hot, 1) : 'rgba(255,255,255,.18)'; c.shadowColor = rgba(hot, 1); c.shadowBlur = lit ? 12 : 0;
+          c.lineWidth = last ? 3 : 2;
+          if (gi > 0 && !last) { c.beginPath(); c.moveTo(gx - 7, ty); c.lineTo(gx - 7, ty - gh); c.quadraticCurveTo(gx, ty - gh - 8, gx + 7, ty - gh); c.lineTo(gx + 7, ty); c.stroke(); }
+          if (gi === 0) { c.beginPath(); c.moveTo(gx, ty); c.lineTo(gx, ty - gh * 0.6); c.stroke(); }
+          if (last) {
+            c.beginPath(); c.moveTo(gx, ty); c.lineTo(gx, ty - gh); c.stroke();
+            // the flag
+            c.fillStyle = lit ? rgba(pale, 1) : rgba(hot, 0.9); c.beginPath(); c.moveTo(gx, ty - gh);
+            for (var fxw = 0; fxw <= 10; fxw++) c.lineTo(gx + fxw * 3, ty - gh + Math.sin(t * 6 + fxw * 0.7) * 2.2 + fxw * 0.15);
+            for (var fxb = 10; fxb >= 0; fxb--) c.lineTo(gx + fxb * 3, ty - gh + 16 + Math.sin(t * 6 + fxb * 0.7) * 2.2 + fxb * 0.15);
+            c.closePath(); c.fill();
+          }
+          c.shadowBlur = 0;
+          var mk = jy.marks[gi];
+          if (mk != null && (gi === 0 || last || jy.n <= 6 || gi % 2 === 0)) { c.fillStyle = lit ? rgba(pale, 0.95) : 'rgba(255,255,255,.4)'; c.fillText(mk, gx, ty + Ht * 0.1); }
+        }
+        c.restore();
+        // the runner, running in place where he is, the road sliding under him
+        c.save(); c.strokeStyle = rgba(pale, 0.35); c.lineWidth = 1.4;
+        for (var dl = 0; dl < 4; dl++) { var dx = xq - 10 - ((t * 120 + dl * 22) % 88); c.beginPath(); c.moveTo(dx, ty - 9 * s - dl * 5 * s); c.lineTo(dx - 14, ty - 9 * s - dl * 5 * s); c.stroke(); }
+        c.restore();
+        by = ty - HIPY * s;
+        figure(c, runner(t), xq - 2 * s, by, s, 1, o2);
       } else if (kind === 'push') {
         s = Math.min(Wd / 100, Ht / 42); by = gy - HIPY * s;
         figure(c, pushup(t), cx + 4 * s, by, s, -1, o2);

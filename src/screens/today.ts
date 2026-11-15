@@ -15,6 +15,8 @@ import { DAY_KIND, heroBand, icon, lvl } from './parts.ts';
 import { dayFuel, fuelWeek, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
 import { openWeigh } from './body.ts';
 import { glp1Card } from './glp1.ts';
+import { chance, dateRo, segments } from '../logic/goal.ts';
+import { trendAlpha, weightTrend } from '../logic/trend.ts';
 
 let date = '';
 let seen = '';
@@ -47,6 +49,54 @@ const demandOn = (d: string): Demand | null => {
 };
 
 /** The class of the day, and in one breath the training behind it. */
+/** The road plays its run from the start once per visit; every later redraw shows the runner where he is. */
+let roadRan = false;
+const kgs = (v: number) => n1(v).replace(/,0$/, '');
+
+/**
+ * The road to the final weight (2026-11-15, the user: the kilos to the goal cut into segments, and the chance of
+ * getting there by the date). A living picture of the road with a gate at every stretch, the chance in big, the
+ * segments under it. Without a goal it is the day's picture and a way to set one.
+ */
+function road() {
+  const s = ctx.get();
+  const g = s.goal;
+  const today = ctx.today();
+  if (!g) {
+    return `${heroBand(DAY_KIND[(new Date(`${today}T12:00:00`).getDay() + 6) % 7]!)}
+    <button class="road-set" data-tab="corp"><b>Setează ținta finală</b><span>Greutatea la care te oprești și data selecției: aplicația îți arată drumul pe segmente și șansele.</span></button>`;
+  }
+  const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
+  const now = points.at(-1)?.trend ?? g.from;
+  const segs = segments(g, now);
+  const total = g.from - g.kg;
+  const p = total > 0 ? Math.max(0, Math.min(1, (g.from - now) / total)) : 1;
+  const planPace = s.plan!.phase === 'cut' ? (now * s.plan!.ratePct) / 100 : 0;
+  const ch = chance(g, points, planPace, today);
+  const cur = segs.findIndex((x) => x.done < 1);
+  const marks = [kgs(g.from), ...segs.map((x) => kgs(x.to))];
+  const intro = !roadRan && !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  roadRan = true;
+  const j = esc(JSON.stringify({ p, n: Math.max(1, segs.length), marks, intro }));
+  const tone = ch.pct == null ? '' : ch.pct >= 70 ? 'ok' : ch.pct >= 40 ? 'mid' : 'low';
+  const pct = ch.pct == null
+    ? '<div class="road-pct"><b>—</b><span>Pune data selecției pe Corp și îți spun șansele.</span></div>'
+    : `<div class="road-pct ${tone}"><b><span data-count="road-pct" data-to="${ch.pct}">${ch.pct}</span>%</b><span>șanse să ajungi la ${kgs(g.kg)} kg până pe ${esc(dateRo(ch.deadline!))}</span></div>`;
+  const left = Math.max(0, now - g.kg);
+  const segLine = cur < 0
+    ? `Ai ajuns la ${kgs(g.kg)} kg. Toate cele ${segs.length} segmente sunt gata.`
+    : `Segmentul ${cur + 1} din ${segs.length}: de la ${kgs(segs[cur]!.from)} la ${kgs(segs[cur]!.to)} kg, mai ai ${kgs(Math.max(0, now - segs[cur]!.to))} kg din el. În total ${kgs(left)} kg până la țintă.`;
+  const why = ch.pct == null || ch.need == null
+    ? ''
+    : `Ritmul tău: ${n1(ch.pace)} kg pe săptămână. Ținta cere ${n1(ch.need)} kg pe săptămână până pe ${esc(dateRo(ch.deadline!))}, când se oprește deficitul (cu ${3} săptămâni înaintea selecției). La ritmul de acum ajungi atunci în jur de ${kgs(ch.at!)} kg.`;
+  return `<section class="road" aria-label="Drumul până la țintă">
+    <div class="hero-stage road-stage"><img class="hero-wolf" src="${import.meta.env.BASE_URL}splash/umbra.webp" alt="" width="680" height="801" decoding="async"><canvas class="hero-cv" data-kind="journey" data-j="${j}" aria-hidden="true"></canvas>${pct}</div>
+    <div class="road-segs" role="img" aria-label="${segs.filter((x) => x.done >= 1).length} din ${segs.length} segmente gata">${segs.map((x, i) => `<i class="${x.done >= 1 ? 'done' : i === cur ? 'cur' : ''}" style="--f:${x.done.toFixed(3)}"><u></u></i>`).join('')}</div>
+    <p class="road-t">${segLine}</p>
+    ${why ? `<p class="road-n">${why}</p>` : ''}
+  </section>`;
+}
+
 function hero(d: string, t: DayTarget) {
   const s = ctx.get();
   const demand = demandOn(d);
@@ -216,7 +266,7 @@ export function todayHtml() {
   // the entrance plays once per visit (ctx.fresh), never when an action redraws the screen
   return `<div class="azi${ctx.fresh ? ' enter' : ''}">
   <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
-  ${heroBand(DAY_KIND[(new Date(`${d}T12:00:00`).getDay() + 6) % 7]!)}
+  ${d === today ? road() : heroBand(DAY_KIND[(new Date(`${d}T12:00:00`).getDay() + 6) % 7]!)}
   ${d === today ? '' : '<button class="backbtn" data-az="today">‹ Înapoi la azi</button>'}
   ${hero(d, t)}
   ${d === today ? glp1Card(d) : ''}

@@ -79,7 +79,9 @@ function mountHero(root: HTMLElement) {
   if (!arena) return;
   const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
   root.querySelectorAll<HTMLCanvasElement>('canvas.hero-cv').forEach((cv) => {
-    try { arena.hero(cv, { kind: cv.dataset['kind'], color: [22, 119, 255], hot: [72, 207, 255], still }); } catch { /* the screen stands without it */ }
+    let journey: unknown = null;
+    try { journey = cv.dataset['j'] ? JSON.parse(cv.dataset['j']) : null; } catch { journey = null; }
+    try { arena.hero(cv, { kind: cv.dataset['kind'], color: [22, 119, 255], hot: [72, 207, 255], still, journey }); } catch { /* the screen stands without it */ }
   });
 }
 

@@ -9,7 +9,6 @@ import { openAi } from './ai.ts';
 
 let meal = 0;
 let logDate = '';
-let mode: 'db' | 'brand' = 'db';
 let added: Entry[] = [];
 let searchTimer = 0;
 let searchRun = 0;
@@ -50,59 +49,43 @@ function showRecent() {
   res.innerHTML = list.length ? `<h3>Recente · o atingere pe + adaugă porția de data trecută</h3>${list.map(recentRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România. Poți căuta în română.</p>';
 }
 
-/** The Romanian shelf and USDA answer from the app's own files; Open Food Facts online is slower, can fail and only adds to the list. */
-async function runBrandSearch(q: string, res: Element, run: number) {
-  res.innerHTML = '<p class="hint pad">Caut în produsele de marcă…</p>';
-  const [ro, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
-  const close = [...(ro?.near ?? []), ...(usda?.near ?? [])].slice(0, 25);
-  if (run !== searchRun) return;
-  const found = (ro?.total ?? 0) + (usda?.total ?? 0), shown = (ro?.foods.length ?? 0) + (usda?.foods.length ?? 0);
-  const more = found > shown ? `<p class="hint pad">${found.toLocaleString('ro-RO')} produse găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
-  const list = (title: string, foods: Food[] | undefined) => (foods?.length ? `<h3>${title}</h3>${foods.map(foodRow).join('')}` : '');
-  const local = `${more}${list('România', ro?.foods)}${list('USDA', usda?.foods)}${list('Asemănătoare', close)}`;
-  res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
-  const off = await searchBranded(q).catch(() => null);
-  if (run !== searchRun) return;
-  const seen = new Set(ro?.foods.map((f) => f.id));
-  const extra = list('Open Food Facts, online', off?.filter((f) => !seen.has(f.id)));
-  res.innerHTML = (shown || close.length ? local : '') + extra || `<p class="hint pad">${ro || usda || off ? 'Niciun produs găsit.' : 'Produsele de marcă nu s-au încărcat. Încearcă din nou, folosește Alimente sau introdu valorile manual.'}</p>`;
-}
-
+/** One search for everything: foods first (instant, from the app's files), then the Romanian shelf and USDA brands,
+ *  then Open Food Facts online, which is slower, can fail and only adds to the list. */
 async function runSearch(q: string) {
   const res = document.querySelector('#res');
   const run = ++searchRun;
   if (!res) return;
   if (q.trim().length < 2) { showRecent(); return; }
   shown.clear();
-  try {
-    if (mode === 'brand') {
-      await runBrandSearch(q, res, run);
-    } else {
-      const all = [...ctx.get().custom, ...await loadFoods()];
-      if (run !== searchRun) return;
-      // exact words first; a typo is forgiven only after the brands had their say, so "quark" is not Quarter Pounder
-      const plain = searchExact(all, q).map(foodRow).join('');
-      res.innerHTML = plain || '<p class="hint pad">Caut și în produsele de marcă…</p>';
-      if (q.trim().length < 3) { if (!plain) res.innerHTML = search(all, q).map(foodRow).join('') || '<p class="hint pad">Nimic găsit.</p>'; return; }
-      // the Romanian shelf answers too, from the app's own files: "quark" finds the high protein dairy by brand
-      const ro = await searchOffRo(q, undefined, 12).catch(() => null);
-      if (run !== searchRun) return;
-      const brands = [...(ro?.foods ?? []), ...(ro?.near ?? [])].slice(0, 12);
-      const brandHtml = brands.length ? `<h3>Produse de marcă din România</h3>${brands.map(foodRow).join('')}<button class="ghost wide" data-mode="brand">Toate produsele de marcă</button>` : '';
-      const typo = plain || brands.length ? '' : search(all, q).map(foodRow).join('');
-      res.innerHTML = plain + brandHtml + (typo ? `<h3>Poate te referi la</h3>${typo}` : '') || '<p class="hint pad">Nimic găsit. Încearcă și în engleză sau la Produse de marcă.</p>';
-    }
-  } catch {
-    res.innerHTML = '<p class="hint pad">Baza de alimente nu s-a încărcat. Încearcă din nou sau introdu valorile manual.</p>';
-  }
+  const list = (title: string, foods: Food[] | undefined) => (foods?.length ? `<h3>${title}</h3>${foods.map(foodRow).join('')}` : '');
+  let all: Food[] = ctx.get().custom;
+  try { all = [...all, ...await loadFoods()]; } catch { /* brands can still answer */ }
+  if (run !== searchRun) return;
+  // exact words first; a typo is forgiven only after the brands had their say, so "quark" is not Quarter Pounder
+  const plain = searchExact(all, q);
+  const foods = list('Alimente', plain);
+  if (q.trim().length < 3) { res.innerHTML = foods || list('Poate te referi la', search(all, q)) || '<p class="hint pad">Nimic găsit.</p>'; return; }
+  res.innerHTML = `${foods}<p class="hint pad">Caut și în produsele de marcă…</p>`;
+  const [ro, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
+  if (run !== searchRun) return;
+  const close = [...(ro?.near ?? []), ...(usda?.near ?? [])].slice(0, 25);
+  const found = (ro?.total ?? 0) + (usda?.total ?? 0), brands = (ro?.foods.length ?? 0) + (usda?.foods.length ?? 0);
+  const more = found > brands ? `<p class="hint pad">${found.toLocaleString('ro-RO')} produse de marcă găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
+  const typo = plain.length || brands || close.length ? [] : search(all, q);
+  const local = `${foods}${list('Produse din România', ro?.foods)}${list('Produse USDA', usda?.foods)}${more}${list('Asemănătoare', close)}${list('Poate te referi la', typo)}`;
+  res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
+  const off = await searchBranded(q).catch(() => null);
+  if (run !== searchRun) return;
+  const seen = new Set([...(ro?.foods ?? []), ...close].map((f) => f.id));
+  const extra = list('Open Food Facts, online', off?.filter((f) => !seen.has(f.id)));
+  res.innerHTML = local + extra || '<p class="hint pad">Nimic găsit. Încearcă și în engleză, scanează codul sau introdu valorile manual.</p>';
 }
 
 function searchSheet() {
   ctx.open(`<h2>${MEALS[meal]}</h2>
     ${added.length ? `<p class="added"><b>Adăugat:</b> ${added.map((e) => `${esc(e.name)}, ${nb(n0(e.g), 'g')}`).join('; ')}</p>` : ''}
     <p class="hint" id="left">${leftLine()}</p>
-    <div class="seg"><button data-mode="db" class="${mode === 'db' ? 'on' : ''}">Alimente</button><button data-mode="brand" class="${mode === 'brand' ? 'on' : ''}">Produse de marcă</button></div>
-    <label class="sr" for="q">Caută un aliment</label><input id="q" type="search" placeholder="piept de pui, ovăz, Chicken Tenders" autocomplete="off" enterkeyhint="search">
+    <label class="sr" for="q">Caută un aliment</label><input id="q" type="search" placeholder="Caută alimente și produse: pui, ovăz, Pilos" autocomplete="off" enterkeyhint="search">
     <div class="btns"><button class="ghost scanbtn" data-scan><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M10.5 8v8M13.5 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Scanează codul</button><button class="ghost" data-manual>Introdu manual</button></div>
     <button class="ghost wide aibtn" data-ai><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3v10H4zM12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM18.5 2.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>Poză sau descriere, cu AI</button>
     <div id="res"></div>
@@ -112,7 +95,7 @@ function searchSheet() {
 }
 
 export function openAdd(date: string, i: number) {
-  logDate = date; meal = i; mode = 'db'; added = [];
+  logDate = date; meal = i; added = [];
   searchSheet();
 }
 
@@ -182,12 +165,6 @@ let notFoundCode = '';
 
 export function logAction(el: HTMLElement): boolean {
   const d = el.dataset;
-  if (d['mode']) {
-    mode = d['mode'] as typeof mode;
-    document.querySelectorAll('#sheet [data-mode]').forEach((b) => b.classList.toggle('on', b === el));
-    void runSearch(document.querySelector<HTMLInputElement>('#q')?.value ?? '');
-    return true;
-  }
   if (d['food']) { const f = shown.get(d['food']); if (f) openQuantity(f); return true; }
   if (d['qadd']) {
     const f = shown.get(d['qadd']);
@@ -234,5 +211,5 @@ export function logAction(el: HTMLElement): boolean {
 export function logInput(t: HTMLInputElement) {
   if (t.id !== 'q') return;
   clearTimeout(searchTimer);
-  searchTimer = window.setTimeout(() => void runSearch(t.value), mode === 'brand' ? 500 : 120);
+  searchTimer = window.setTimeout(() => void runSearch(t.value), 250);
 }

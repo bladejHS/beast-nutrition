@@ -135,8 +135,8 @@ export function save(s: State): boolean {
 /** Refuses a file that would leave the app unusable, before it replaces anything. */
 export function parseBackup(text: string): State {
   let data: Partial<State>;
-  try { data = JSON.parse(text) as Partial<State>; } catch { throw new Error('Fișierul nu este un backup BEAST NUTRITION.'); }
-  if (data?.v !== 1 || typeof data.days !== 'object' || data.days === null) throw new Error('Fișierul nu este un backup BEAST NUTRITION.');
+  try { data = JSON.parse(text) as Partial<State>; } catch { throw new Error('Fișierul nu este un backup NUTRIX.'); }
+  if (data?.v !== 1 || typeof data.days !== 'object' || data.days === null) throw new Error('Fișierul nu este un backup NUTRIX.');
   const macros = data.plan?.macros, who = data.profile;
   if (data.plan != null && !(macros && macros.kcal > 0 && macros.p > 0)) throw new Error('Backup-ul nu are un plan valid.');
   if (who != null && !(who.age > 0 && who.weightKg > 0 && who.bf > 0)) throw new Error('Backup-ul nu are un profil valid.');

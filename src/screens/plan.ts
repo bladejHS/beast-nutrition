@@ -272,7 +272,7 @@ export function setupHtml() {
   const s = ctx.get();
   const p = s.profile, pl = s.plan;
   const opt = (v: unknown, cur: unknown) => (v === cur ? 'selected' : '');
-  return `<div class="setup"><span class="wolf" aria-hidden="true"></span><h1>BEAST NUTRITION</h1><p class="sub">Calculăm punctul de start. Îl corectează apoi datele tale.</p>
+  return `<div class="setup"><span class="wolf" aria-hidden="true"></span><h1>NUTRIX</h1><p class="sub">Calculăm punctul de start. Îl corectează apoi datele tale.</p>
   <form id="sf">
     <div class="grid2"><label class="field">Sex<select name="sex"><option value="m" ${opt('m', p?.sex)}>Bărbat</option><option value="f" ${opt('f', p?.sex)}>Femeie</option></select></label>
     <label class="field">Vârstă<input name="age" type="number" inputmode="numeric" min="14" max="90" required value="${p?.age ?? ''}"></label>

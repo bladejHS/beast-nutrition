@@ -5,7 +5,7 @@
 // lighter the head, the thicker the rim and the bigger the eyes, so the wolf still reads at 16 px.
 
 /** The light of this app: the eyes, their core, the halo behind the head and the field's glow. */
-const P = { eye: '#2f8cff', core: '#cfe6ff', halo: '#0b6fd6', glow: '#0b6fd6', deep: '#0a2f5c' };
+const P = { eye: '#a47aff', core: '#e6dcff', halo: '#8759e8', glow: '#8759e8', deep: '#321d5c' };
 
 const C = 120;
 const mir = ([x, y]) => [2 * C - x, y];
@@ -40,22 +40,22 @@ export const OUTLINE_D = d(OUTLINE);
 
 const SIZES = {
   // tones from the lit side, rim width and strength, eye scale and glow, the red halo behind the head
-  large: { tones: ['#2a303d', '#212632', '#191d27', '#12151d', '#0b0d12'], gap: 1.6, rim: 2.4, rimA: 0.75, eye: 1, glow: 8, halo: 0.5 },
-  medium: { tones: ['#363d4c', '#2b313e', '#222733', '#1a1e28', '#12151c'], gap: 0, rim: 4.6, rimA: 0.9, eye: 1.08, glow: 7, halo: 0.75 },
-  small: { tones: null, fill: '#232835', gap: 0, rim: 9, rimA: 1, eye: 1.3, glow: 5, halo: 0.9 },
+  large: { tones: ['#343434', '#2a2a2a', '#202020', '#181818', '#0e0e0e'], gap: 1.6, rim: 2.4, rimA: 0.75, eye: 1, glow: 8, halo: 0.5 },
+  medium: { tones: ['#414141', '#343434', '#2b2b2b', '#212121', '#171717'], gap: 0, rim: 4.6, rimA: 0.9, eye: 1.08, glow: 7, halo: 0.75 },
+  small: { tones: null, fill: '#2c2c2c', gap: 0, rim: 9, rimA: 1, eye: 1.3, glow: 5, halo: 0.9 },
 };
 
 /** 2026-11-15, the user: "la Beast Nutrition pune-i o pălărie de bucătar cu un morcov în colțul gurii". A white chef's
  *  toque between the ears and a carrot held in the right corner of the mouth, leaves out. Same 240 grid. */
 function accessory(id) {
   const hat = ['<circle cx="104" cy="40" r="17"/>', '<circle cx="136" cy="40" r="17"/>', '<circle cx="120" cy="29" r="20"/>', '<path d="M90 44L150 44L148 74Q120 68 92 74Z"/>'];
-  return `<defs><linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#c3d0e2"/></linearGradient>
+  return `<defs><linearGradient id="${id}t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#cdc3e2"/></linearGradient>
     <linearGradient id="${id}c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffb24a"/><stop offset="1" stop-color="#e4570e"/></linearGradient></defs>
-  <g fill="#05060a" stroke="#05060a" stroke-width="5" stroke-linejoin="round">${hat.join('')}</g>
+  <g fill="#07050a" stroke="#07050a" stroke-width="5" stroke-linejoin="round">${hat.join('')}</g>
   <g fill="url(#${id}t)">${hat.join('')}</g>
-  <path d="M93 62Q120 56 147 62L146 74Q120 68 94 74Z" fill="#d7e2f0" stroke="#05060a" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M93 62Q120 56 147 62L146 74Q120 68 94 74Z" fill="#dfd7f0" stroke="#07050a" stroke-width="1.4" stroke-linejoin="round"/>
   <path d="M110 30Q114 22 122 20" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" opacity=".9"/>
-  <g stroke="#05060a" stroke-width="1.6" stroke-linejoin="round">
+  <g stroke="#07050a" stroke-width="1.6" stroke-linejoin="round">
     <path d="M203 226Q214 210 226 206Q218 220 206 230Z" fill="#3fb950"/>
     <path d="M204 230Q222 226 234 232Q220 236 205 234Z" fill="#2ea043"/>
     <path d="M140 205L202 224Q206 231 199 238Z" fill="url(#${id}c)"/>
@@ -72,13 +72,13 @@ export function umbra(size = 'medium', id = `u${++n}`) {
         const c = o.tones[Math.min(t + side, o.tones.length - 1)];
         return `<path d="${d(p)}" fill="${c}"${o.gap ? '' : ` stroke="${c}" stroke-width=".7" stroke-linejoin="round"`}/>`;
       })).join('') +
-      (o.gap ? FACETS.flatMap(([poly]) => pair(poly)).map((p) => `<path d="${d(p)}" fill="none" stroke="#05060a" stroke-width="${o.gap}" stroke-linejoin="round"/>`).join('') : '') +
+      (o.gap ? FACETS.flatMap(([poly]) => pair(poly)).map((p) => `<path d="${d(p)}" fill="none" stroke="#07050a" stroke-width="${o.gap}" stroke-linejoin="round"/>`).join('') : '') +
       pair(DIAMOND).map((p, i) => `<path d="${d(p)}" fill="${o.tones[i]}"/>`).join('') +
       pair(EAR_IN).map((p) => `<path d="${d(p)}" fill="${o.tones[4]}"/>`).join('')
-    : `<path d="${OUTLINE_D}" fill="${o.fill}"/>` + pair(EAR_IN).map((p) => `<path d="${d(p)}" fill="#11141b"/>`).join('');
+    : `<path d="${OUTLINE_D}" fill="${o.fill}"/>` + pair(EAR_IN).map((p) => `<path d="${d(p)}" fill="#161616"/>`).join('');
   const eyes = pair(EYE).map((e) => grow(e, o.eye));
   return `<defs>
-    <linearGradient id="${id}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfe4ee"/><stop offset=".55" stop-color="#8d97aa"/><stop offset="1" stop-color="#4a5266"/></linearGradient>
+    <linearGradient id="${id}r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e4dfee"/><stop offset=".55" stop-color="#9c9c9c"/><stop offset="1" stop-color="#585858"/></linearGradient>
     <filter id="${id}h" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
     <filter id="${id}g" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="${o.glow}"/></filter>
   </defs>
@@ -93,10 +93,10 @@ export function umbra(size = 'medium', id = `u${++n}`) {
 
 /** The icon's field: steel black under a cold spotlight, a blue light behind the head, darker at the bottom. */
 export function field(id = `f${++n}`) {
-  return `<defs><radialGradient id="${id}s" cx=".5" cy=".02" r=".85"><stop offset="0" stop-color="#9fb0cf" stop-opacity=".36"/><stop offset=".55" stop-color="#1b2130" stop-opacity=".45"/><stop offset="1" stop-color="#05060a" stop-opacity="0"/></radialGradient>
-    <radialGradient id="${id}r" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="${P.glow}" stop-opacity=".5"/><stop offset=".6" stop-color="${P.deep}" stop-opacity=".3"/><stop offset="1" stop-color="#05060a" stop-opacity="0"/></radialGradient>
+  return `<defs><radialGradient id="${id}s" cx=".5" cy=".02" r=".85"><stop offset="0" stop-color="#ae9fcf" stop-opacity=".36"/><stop offset=".55" stop-color="#262626" stop-opacity=".45"/><stop offset="1" stop-color="#07050a" stop-opacity="0"/></radialGradient>
+    <radialGradient id="${id}r" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="${P.glow}" stop-opacity=".5"/><stop offset=".6" stop-color="${P.deep}" stop-opacity=".3"/><stop offset="1" stop-color="#07050a" stop-opacity="0"/></radialGradient>
     <linearGradient id="${id}v" x1="0" y1="0" x2="0" y2="1"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".4"/></linearGradient></defs>
-    <rect width="240" height="240" fill="#05060a"/><rect width="240" height="240" fill="url(#${id}s)"/><circle cx="120" cy="132" r="112" fill="url(#${id}r)"/><rect width="240" height="240" fill="url(#${id}v)"/>`;
+    <rect width="240" height="240" fill="#07050a"/><rect width="240" height="240" fill="url(#${id}s)"/><circle cx="120" cy="132" r="112" fill="url(#${id}r)"/><rect width="240" height="240" fill="url(#${id}v)"/>`;
 }
 
 /** A whole SVG: the field (or none) and the head at `k` of the canvas, nudged down a little. */

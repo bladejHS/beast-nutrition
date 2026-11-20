@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#05060a">
+<meta name="theme-color" content="#050505">
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="Nutriție pentru performanță: ce mănânci azi, cum urmează antrenamentele și ajustări din datele tale.">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Beast Nutrition">
-<title>BEAST NUTRITION</title>
+<meta name="apple-mobile-web-app-title" content="NUTRIX">
+<title>NUTRIX</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="favicon.ico" sizes="32x32">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -34,34 +34,34 @@
 <style>
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-wdth-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-ext-wdth-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
-html,body{margin:0;background:#05060a;color:#f3f5fa}
+html,body{margin:0;background:#050505;color:#ffffff}
 /* THE ARENA, the Beast Nutrition cut, about 3.3 s (engine: splash/arena.js, shared with Inner Beast, here in blue).
    The wolf's eyes in the dark (in its chef's toque); the light rises over the kitchen: a cook at the stove, someone on
    the scale, someone with the weekly pen, a runner behind; at 2.0 s the big toss lands back in the pan (sizzle, steam,
    flash, slow motion) and BEAST NUTRITION is stamped under it.
    Then a blue slash opens the app. Reduced motion, the short intro and Data Saver get the same arena, frozen. */
-#splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#05070b;color:#f2f6fc;animation:sp-guard 0s linear 10s forwards;--w:min(88vw,40vh,520px)}
+#splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#07050b;color:#f5f2fc;animation:sp-guard 0s linear 10s forwards;--w:min(88vw,40vh,520px)}
 @keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
-.sp-bg{position:absolute;inset:0;opacity:0;pointer-events:none;background:radial-gradient(70% 34% at 50% 30%,rgba(22,119,255,.36),rgba(10,40,100,.16) 55%,transparent 78%),radial-gradient(110% 26% at 50% 72%,rgba(22,119,255,.2),transparent 70%),linear-gradient(180deg,#05070b,#06101e 52%,#05070b 80%)}
+.sp-bg{position:absolute;inset:0;opacity:0;pointer-events:none;background:radial-gradient(70% 34% at 50% 30%,rgba(104,45,232,.36),rgba(39,11,99,.16) 55%,transparent 78%),radial-gradient(110% 26% at 50% 72%,rgba(104,45,232,.2),transparent 70%),linear-gradient(180deg,#07050b,#0e061e 52%,#07050b 80%)}
 .sp-stage{position:absolute;left:50%;top:max(4vh,env(safe-area-inset-top));width:var(--w);margin-left:calc(var(--w) / -2);aspect-ratio:680/801;transform-origin:50% 50%;pointer-events:none}
 .sp-emb{position:absolute;inset:0;opacity:0}
-.sp-emb img{display:block;width:100%;height:100%;filter:brightness(.8) contrast(1.08) drop-shadow(0 0 2px rgba(72,207,255,.7)) drop-shadow(0 0 30px rgba(22,119,255,.45))}
-.sp-eye{position:absolute;width:19%;aspect-ratio:2.4;margin:-3.96% 0 0 -9.5%;border-radius:50%;transform:rotate(var(--r));opacity:0;pointer-events:none;mix-blend-mode:screen;background:radial-gradient(closest-side,#fff 0,#cdeeff 9%,#48cfff 22%,rgba(22,119,255,.32) 42%,transparent 70%)}
+.sp-emb img{display:block;width:100%;height:100%;filter:brightness(.8) contrast(1.08) drop-shadow(0 0 2px rgba(137,90,237,.7)) drop-shadow(0 0 30px rgba(104,45,232,.45))}
+.sp-eye{position:absolute;width:19%;aspect-ratio:2.4;margin:-3.96% 0 0 -9.5%;border-radius:50%;transform:rotate(var(--r));opacity:0;pointer-events:none;mix-blend-mode:screen;background:radial-gradient(closest-side,#fff 0,#dfd2fa 9%,#895aed 22%,rgba(104,45,232,.32) 42%,transparent 70%)}
 .sp-eye.l{left:36.6%;top:42%;--r:27deg}.sp-eye.r{left:63.4%;top:42%;--r:-27deg}
 .sp-flash,.sp-vig{position:absolute;inset:0;pointer-events:none}
 .sp-vig{background:radial-gradient(130% 95% at 50% 42%,transparent 45%,rgba(0,0,0,.8) 100%)}
 #sp-cv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
-.sp-flash{background:radial-gradient(circle at var(--ix,50%) var(--iy,55%),#fff 0,#fff 3%,rgba(205,232,255,.85) 10%,rgba(47,140,255,.38) 26%,rgba(5,7,11,0) 50%);opacity:0}
+.sp-flash{background:radial-gradient(circle at var(--ix,50%) var(--iy,55%),#fff 0,#fff 3%,rgba(223,210,250,.85) 10%,rgba(120,68,234,.38) 26%,rgba(7,5,11,0) 50%);opacity:0}
 .sp-id{position:absolute;left:0;right:0;bottom:max(7vh,calc(env(safe-area-inset-bottom) + 34px));display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px);pointer-events:none}
 .sp-name{margin:0;font:900 extra-condensed clamp(44px,13vw,84px)/.9 'Saira','Arial Narrow',sans-serif;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
-.sp-name i{display:inline-block;font-style:normal;opacity:0;color:#f2f6fc;text-shadow:0 0 0 transparent}
-.sp-name .b{color:#48cfff}
+.sp-name i{display:inline-block;font-style:normal;opacity:0;color:#f5f2fc;text-shadow:0 0 0 transparent}
+.sp-name .b{color:#a47aff}
 .sp-name .sp-gap{width:.28em}
-.sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#1677ff 22%,#48cfff 50%,#1677ff 78%,transparent);transform:scaleX(0);opacity:0}
-.sp-tag{margin:0;font:700 semi-condensed clamp(11px,3vw,13.5px)/1.2 'Saira',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#b9c3d0;white-space:nowrap;opacity:0}
-.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));padding:10px 12px;border:0;background:none;color:#b9c3d0;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
+.sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#682de8 22%,#895aed 50%,#682de8 78%,transparent);transform:scaleX(0);opacity:0}
+.sp-tag{margin:0;font:700 semi-condensed clamp(11px,3vw,13.5px)/1.2 'Saira',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#c4c4c4;white-space:nowrap;opacity:0}
+.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));padding:10px 12px;border:0;background:none;color:#c4c4c4;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
 .sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
-.sp-skip:focus-visible{outline:2px solid #48cfff;opacity:1}
+.sp-skip:focus-visible{outline:2px solid #895aed;opacity:1}
 /* the impact, keyed off .sp-hit (the engine calls the page when the kick lands) */
 .sp-hit .sp-flash{animation:sp-flash .55s cubic-bezier(.16,1,.3,1) both}
 .sp-hit .sp-name i{animation:sp-stamp .42s cubic-bezier(.2,1.4,.3,1) var(--d) forwards}
@@ -73,13 +73,13 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
 #splash.sp-fade{animation:none;opacity:0;transition:opacity .24s linear;pointer-events:none}
 /* the entry: a blue slash, and the splash wiped away behind it */
 #splash.sp-exit{animation:sp-wipe .46s cubic-bezier(.7,0,.2,1) forwards;pointer-events:none}
-#sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(22,119,255,.5) 34%,#1677ff 47%,#bfe6ff 50%,#1677ff 53%,rgba(22,119,255,.34) 68%,transparent)}
+#sp-slash{position:fixed;z-index:101;top:-12vh;bottom:-12vh;left:0;width:30vw;min-width:150px;pointer-events:none;opacity:0;transform:translateX(-65vw) skewX(-8deg);background:linear-gradient(90deg,transparent,rgba(104,45,232,.5) 34%,#682de8 47%,#d6c5f9 50%,#682de8 53%,rgba(104,45,232,.34) 68%,transparent)}
 #sp-slash.sp-exit{animation:sp-slash .46s cubic-bezier(.7,0,.2,1) forwards}
-.sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Saira',system-ui,sans-serif;color:#f2f6fc}
-.sp-fail a{color:#48cfff;font-weight:700}
-.sp-why{max-width:34ch;font:500 13px/1.4 ui-monospace,monospace;color:#9aa6b8;word-break:break-word}
+.sp-fail{min-height:100dvh;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center;font:600 16px/1.4 'Saira',system-ui,sans-serif;color:#f5f2fc}
+.sp-fail a{color:#895aed;font-weight:700}
+.sp-why{max-width:34ch;font:500 13px/1.4 ui-monospace,monospace;color:#a9a9a9;word-break:break-word}
 @keyframes sp-flash{0%{opacity:0}8%{opacity:1}100%{opacity:0}}
-@keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #48cfff,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #48cfff,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
+@keyframes sp-stamp{0%{opacity:0;transform:scale(1.7);text-shadow:-10px 0 0 #895aed,10px 0 0 #ff2944}25%{opacity:1}60%{text-shadow:-3px 0 0 #895aed,3px 0 0 #ff2944}100%{opacity:1;transform:none;text-shadow:0 0 0 transparent}}
 @keyframes sp-rule{to{opacity:1;transform:none}}
 @keyframes sp-flicker{0%{opacity:.8}12%{opacity:.1}24%{opacity:.9}36%{opacity:.25}52%,100%{opacity:1}}
 @keyframes sp-wipe{from{clip-path:polygon(calc(-50% + 7vh) 0,220% 0,220% 100%,calc(-50% - 7vh) 100%)}to{clip-path:polygon(calc(130% + 7vh) 0,220% 0,220% 100%,calc(130% - 7vh) 100%)}}
@@ -96,7 +96,7 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
   <canvas id="sp-cv" aria-hidden="true"></canvas>
   <div class="sp-vig" aria-hidden="true"></div>
   <div class="sp-id">
-    <p class="sp-name" aria-label="Beast Nutrition"><i style="--d:.16s">B</i><i style="--d:.2s">E</i><i style="--d:.24s">A</i><i style="--d:.28s">S</i><i style="--d:.32s">T</i><i class="sp-gap"></i><i class="b" style="--d:.4s">N</i><i class="b" style="--d:.43s">U</i><i class="b" style="--d:.46s">T</i><i class="b" style="--d:.49s">R</i><i class="b" style="--d:.52s">I</i><i class="b" style="--d:.55s">T</i><i class="b" style="--d:.58s">I</i><i class="b" style="--d:.61s">O</i><i class="b" style="--d:.64s">N</i></p>
+    <p class="sp-name" aria-label="NUTRIX"><i style="--d:.16s">N</i><i style="--d:.22s">U</i><i style="--d:.28s">T</i><i style="--d:.34s">R</i><i style="--d:.4s">I</i><i class="b" style="--d:.5s">X</i></p>
     <i class="sp-rule" aria-hidden="true"></i>
     <p class="sp-tag">ENERGIE. PERFORMANȚĂ. RECUPERARE.</p>
   </div>
@@ -167,7 +167,7 @@ html,body{margin:0;background:#05060a;color:#f3f5fa}
     setTimeout(leave, HOLD);
   }
   function arena(hit) {
-    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, scene: 'kitchen', color: [22, 119, 255], hot: [72, 207, 255], onImpact: hit });
+    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, scene: 'kitchen', color: [135, 89, 232], hot: [164, 122, 255], onImpact: hit });
   }
   function poster() { if (!window.BeastArena) return; try { forge = arena(null); forge.still(2.08); } catch (e) { /* the wolf and the name are enough */ } }
   // starts when the dashboard underneath is drawn, so that work does not stutter the sparks; after half a second anyway

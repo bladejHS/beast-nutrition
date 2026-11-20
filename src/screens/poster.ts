@@ -35,11 +35,11 @@ export async function posterBlob(d: PosterData): Promise<Blob | null> {
   const x = c.getContext('2d');
   if (!x) return null;
   try { await document.fonts.ready; } catch { /* the fallback font draws it */ }
-  const glow = css('--glow', '47, 140, 255'), glow2 = '11, 111, 214';
+  const glow = css('--glow', '120, 68, 234'), glow2 = '80, 23, 202';
   try { (x as unknown as { fontStretch: string }).fontStretch = 'extra-condensed'; } catch { /* not supported: normal width */ }
 
   // the arena: black, a pool of the emphasis' light at the top, a floor glow
-  x.fillStyle = '#05060a';
+  x.fillStyle = '#07050a';
   x.fillRect(0, 0, W, H);
   let g = x.createRadialGradient(W / 2, 380, 40, W / 2, 380, 1100);
   g.addColorStop(0, `rgba(${glow2}, .55)`);
@@ -110,7 +110,7 @@ export async function posterBlob(d: PosterData): Promise<Blob | null> {
   x.letterSpacing = '6px';
   x.fillText(d.by.toUpperCase(), W / 2, 1240);
   x.letterSpacing = '0px';
-  x.fillStyle = '#a9b2c2';
+  x.fillStyle = '#b5b5b5';
   fit(x, d.name, 40, 600, W - 160);
   x.fillText(d.name, W / 2, 1300);
 
@@ -119,24 +119,24 @@ export async function posterBlob(d: PosterData): Promise<Blob | null> {
   d.stats.forEach((s, i) => {
     const tx = 60 + i * (tw + gap);
     const tg2 = x.createLinearGradient(0, ty, 0, ty + th);
-    tg2.addColorStop(0, '#1c202b');
-    tg2.addColorStop(1, '#0d0f15');
+    tg2.addColorStop(0, '#242424');
+    tg2.addColorStop(1, '#111111');
     x.fillStyle = tg2;
     x.beginPath();
     x.roundRect(tx, ty, tw, th, 28);
     x.fill();
-    x.strokeStyle = '#272c39';
+    x.strokeStyle = '#303030';
     x.lineWidth = 3;
     x.stroke();
     x.fillStyle = `rgb(${glow})`;
     x.fillRect(tx + tw * 0.2, ty, tw * 0.6, 6);
-    x.fillStyle = '#f3f5fa';
+    x.fillStyle = '#f5f3fa';
     fit(x, String(s.v), 120, 900, tw - 30);
     x.fillText(String(s.v), tx + tw / 2, ty + 130);
-    x.fillStyle = '#a9b2c2';
+    x.fillStyle = '#b5b5b5';
     x.font = '800 30px Saira, sans-serif';
     if (s.unit) x.fillText(s.unit, tx + tw / 2, ty + 168);
-    x.fillStyle = '#8f99ab';
+    x.fillStyle = '#9d9d9d';
     x.letterSpacing = '2px';
     fit(x, s.label.toUpperCase(), 24, 700, tw - 24 - s.label.length * 2);
     x.fillText(s.label.toUpperCase(), tx + tw / 2, ty + 206);
@@ -144,12 +144,12 @@ export async function posterBlob(d: PosterData): Promise<Blob | null> {
   });
 
   // the signature
-  x.fillStyle = '#f3f5fa';
+  x.fillStyle = '#f5f3fa';
   x.font = '900 54px Saira, sans-serif';
   x.letterSpacing = '22px';
-  x.fillText('BEAST NUTRITION', W / 2 + 11, 1800);
+  x.fillText('NUTRIX', W / 2 + 11, 1800);
   x.letterSpacing = '0px';
-  x.fillStyle = '#7d879a';
+  x.fillStyle = '#8b8b8b';
   x.font = '700 30px Saira, sans-serif';
   x.fillText(d.date, W / 2, 1852);
 

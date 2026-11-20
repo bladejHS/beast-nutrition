@@ -1,14 +1,14 @@
 {
-  "name": "BEAST NUTRITION",
-  "short_name": "Beast Nutrition",
+  "name": "NUTRIX",
+  "short_name": "NUTRIX",
   "description": "Nutriție după Layne Norton: calorii, proteine, fibre, media săptămânii și ajustări din date.",
   "lang": "ro",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#05060a",
-  "theme_color": "#05060a",
+  "background_color": "#050505",
+  "theme_color": "#050505",
   "icons": [
     {
       "src": "icon-192.png",

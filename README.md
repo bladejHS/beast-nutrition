@@ -1,4 +1,6 @@
-# BEAST NUTRITION
+# NUTRIX
+
+(formerly BEAST NUTRITION; renamed 2026-11-20. Repo, URL and storage keys keep the old name so data stays.)
 
 Nutrition tracker built on the method of *Fat Loss Forever* (Layne Norton, Peter Baker). Runs in the browser, data in localStorage.
 

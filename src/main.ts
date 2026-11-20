@@ -93,7 +93,7 @@ function mountHero(root: HTMLElement) {
   root.querySelectorAll<HTMLCanvasElement>('canvas.hero-cv').forEach((cv) => {
     let journey: unknown = null;
     try { journey = cv.dataset['j'] ? JSON.parse(cv.dataset['j']) : null; } catch { journey = null; }
-    try { arena.hero(cv, { kind: cv.dataset['kind'], color: [22, 119, 255], hot: [72, 207, 255], still, journey }); } catch { /* the screen stands without it */ }
+    try { arena.hero(cv, { kind: cv.dataset['kind'], color: [135, 89, 232], hot: [164, 122, 255], still, journey }); } catch { /* the screen stands without it */ }
   });
 }
 

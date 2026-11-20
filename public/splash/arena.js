@@ -34,13 +34,13 @@
   function W(base, o) { var p = { x: base.x, y: base.y, t: base.t, a: base.a, l: base.l }; for (var k in o) p[k] = o[k]; return p; }
   var GA = G(0, 0);
   var JAB = W(G(2, 0), { a: [[88, 90], [15, 165]] });
-  var CROSS = W(G(4, 0, 163), { a: [[40, 150], [86, 92]] });
+  var CROSS = W(G(58, 16, 147), { a: [[40, 150], [86, 92]] });
   var SLIP = G(1, 2.5, 152);
   var CHAMBER = W(G(4, -1, 190), { l: [[6, 0], [100, 8]], a: [[48, 155], [-25, -15]] });
   var KICK = W(G(8, -1, 214), { l: [[8, 2], [118, 113]], a: [[58, 162], [-38, -28]] });
   var PARRY = W(G(-1, 0, 182), { a: [[70, 125], [15, 165]] });
   var BLOCK = W(G(-1, 1, 178), { a: [[25, 178], [12, 180]] });
-  var LATE = W(G(0, 0, 176), { a: [[35, 168], [20, 172]] });
+  var LATE = W(G(62, 18, 158), { a: [[35, 168], [20, 172]] });
   var HIT = W(G(-5, 1, 207), { a: [[64, 192], [8, 138]] });
   var STAG = G(-9, 1.5, 194);
   var REST = G(-4, 0);
@@ -143,7 +143,7 @@
     strokeAll(1.1, -0.65 * s);
     c.shadowBlur = 0;
     c.globalAlpha = o.body == null ? o.alpha : o.body;
-    c.strokeStyle = c.fillStyle = '#040508';
+    c.strokeStyle = c.fillStyle = '#050408';
     strokeAll(0, 0);
     c.globalAlpha = o.alpha;
     if (o.gloves) {
@@ -190,7 +190,7 @@
     c.save(); c.globalAlpha = o.alpha; c.lineCap = 'round'; c.lineJoin = 'round';
     c.strokeStyle = o.rim; c.shadowColor = o.glow; c.shadowBlur = o.blur;
     segs.forEach(function (g) { c.lineWidth = (g[2] + 1.1) * s; c.beginPath(); c.moveTo(g[0][0], g[0][1] - 0.65 * s); c.lineTo(g[1][0], g[1][1] - 0.65 * s); c.stroke(); });
-    c.shadowBlur = 0; c.strokeStyle = '#040508';
+    c.shadowBlur = 0; c.strokeStyle = '#050408';
     segs.forEach(function (g) { c.lineWidth = g[2] * s; c.beginPath(); c.moveTo(g[0][0], g[0][1]); c.lineTo(g[1][0], g[1][1]); c.stroke(); });
     c.restore();
   }
@@ -202,7 +202,7 @@
     c.save(); c.globalAlpha = o.alpha;
     c.fillStyle = o.rim; c.shadowColor = o.glow; c.shadowBlur = o.blur;
     c.fillRect(a0[0] - 1, a0[1] - 1.6, a1[0] - a0[0] + 2, a1[1] - a0[1] + 1.6);
-    c.shadowBlur = 0; c.fillStyle = '#040508'; c.globalAlpha = 1;
+    c.shadowBlur = 0; c.fillStyle = '#050408'; c.globalAlpha = 1;
     c.fillRect(a0[0], a0[1], a1[0] - a0[0], a1[1] - a0[1]);
     c.globalAlpha = o.alpha;
     var d0 = P([21, -2]);
@@ -251,7 +251,7 @@
     c.save(); c.globalAlpha = o.alpha;
     c.fillStyle = o.rim; c.shadowColor = o.glow; c.shadowBlur = o.blur;
     c.fillRect(x0 - 1, a0[1] - 1.2, w + 2, a1[1] - a0[1] + 1.2);
-    c.shadowBlur = 0; c.fillStyle = '#040508'; c.globalAlpha = 1; c.fillRect(x0, a0[1], w, a1[1] - a0[1]); c.globalAlpha = o.alpha;
+    c.shadowBlur = 0; c.fillStyle = '#050408'; c.globalAlpha = 1; c.fillRect(x0, a0[1], w, a1[1] - a0[1]); c.globalAlpha = o.alpha;
     var d = P([10, 29.6]);
     c.fillStyle = rgba(pale, 0.95); c.shadowColor = rgba(hot, 1); c.shadowBlur = 8;
     c.fillRect(d[0] - 2.2 * s, d[1], 4.4 * s, 1.1 * s);
@@ -298,7 +298,7 @@
   }
 
   /** The heavy bag: a boxer works it, jab, cross, hook; the bag swings on its chain. */
-  var HOOK = W(G(2, 0, 178), { a: [[100, 62], [15, 165]] });
+  var HOOK = W(G(63, 18, 160), { a: [[100, 62], [15, 165]] });
   var BAG_TRACK = [[0, GA], [0.1, JAB], [0.24, GA], [0.38, CROSS], [0.54, GA], [0.68, HOOK], [0.84, GA], [1.5, GA]];
   var BAG_HITS = [0.1, 0.38, 0.68];
 
@@ -428,7 +428,7 @@
       if (shake > 0.3) c.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
       // the floor: the arena ends in black under the fighters, where the name will stand
       var fl = c.createLinearGradient(0, L.gy - 4, 0, Ht);
-      fl.addColorStop(0, 'rgba(4,5,8,0)'); fl.addColorStop(0.12, 'rgba(4,5,8,.82)'); fl.addColorStop(1, 'rgba(4,5,8,.97)');
+      fl.addColorStop(0, 'rgba(5,4,8,0)'); fl.addColorStop(0.12, 'rgba(5,4,8,.82)'); fl.addColorStop(1, 'rgba(5,4,8,.97)');
       c.fillStyle = fl; c.fillRect(-20, L.gy - 4, Wd + 40, Ht - L.gy + 30);
 
       c.globalCompositeOperation = 'lighter';
@@ -466,7 +466,7 @@
       c.save(); c.globalAlpha = 0.85 * fa; c.lineCap = 'round';
       c.strokeStyle = rgba(hot, 0.8); c.shadowColor = rgba(hot, 0.9); c.shadowBlur = 6; c.lineWidth = 2.2 * L.sf;
       [[-17, 31, -17, -63], [17, 31, 17, -63], [-22, -60, 22, -60]].forEach(function (b) { c.beginPath(); c.moveTo(rx + b[0] * L.sf, byF + b[1] * L.sf - 1); c.lineTo(rx + b[2] * L.sf, byF + b[3] * L.sf - 1); c.stroke(); });
-      c.shadowBlur = 0; c.strokeStyle = '#040508'; c.lineWidth = 1.6 * L.sf;
+      c.shadowBlur = 0; c.strokeStyle = '#050408'; c.lineWidth = 1.6 * L.sf;
       [[-17, 31, -17, -63], [17, 31, 17, -63], [-22, -60, 22, -60]].forEach(function (b) { c.beginPath(); c.moveTo(rx + b[0] * L.sf, byF + b[1] * L.sf); c.lineTo(rx + b[2] * L.sf, byF + b[3] * L.sf); c.stroke(); });
       c.restore();
       figure(c, pullup(T), rx, byF, L.sf, 1, far);
@@ -720,7 +720,7 @@
           var by2 = nt[1] - Ht * 0.17 + Math.sin(t * 2.2) * 3, bs = Ht * 0.05;
           c.save(); c.translate(nt[0], by2); c.rotate(Math.sin(t * 1.3) * 0.08);
           c.beginPath(); c.moveTo(-bs, bs * 0.2); c.arc(-bs * 0.55, -bs * 0.25, bs * 0.55, Math.PI * 0.85, Math.PI * 1.6); c.arc(bs * 0.55, -bs * 0.25, bs * 0.55, Math.PI * 1.4, Math.PI * 0.15); c.lineTo(bs * 0.85, bs * 1.1); c.lineTo(-bs * 0.85, bs * 1.1); c.closePath();
-          c.fillStyle = '#040508'; c.strokeStyle = rgba(rimc, 1); c.lineWidth = 2; c.shadowColor = rgba(hot, 1); c.shadowBlur = 12; c.fill(); c.stroke();
+          c.fillStyle = '#050408'; c.strokeStyle = rgba(rimc, 1); c.lineWidth = 2; c.shadowColor = rgba(hot, 1); c.shadowBlur = 12; c.fill(); c.stroke();
           c.restore();
         }
         c.restore();
@@ -785,7 +785,7 @@
         c.save(); c.lineCap = 'round'; c.strokeStyle = rgba(hot, 0.85); c.shadowColor = rgba(hot, 0.9); c.shadowBlur = 8; c.lineWidth = 2.4 * s;
         var rig = [[-17, 31, -17, -63], [17, 31, 17, -63], [-22, -60, 22, -60]];
         rig.forEach(function (b) { c.beginPath(); c.moveTo(cx + b[0] * s, by + b[1] * s - 1); c.lineTo(cx + b[2] * s, by + b[3] * s - 1); c.stroke(); });
-        c.shadowBlur = 0; c.strokeStyle = '#040508'; c.lineWidth = 1.7 * s;
+        c.shadowBlur = 0; c.strokeStyle = '#050408'; c.lineWidth = 1.7 * s;
         rig.forEach(function (b) { c.beginPath(); c.moveTo(cx + b[0] * s, by + b[1] * s); c.lineTo(cx + b[2] * s, by + b[3] * s); c.stroke(); });
         c.restore();
         figure(c, pullup(t), cx, by, s, 1, o2);

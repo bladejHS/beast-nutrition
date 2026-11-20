@@ -82,7 +82,7 @@ function sparks(c: HTMLCanvasElement, host: HTMLElement, gold: boolean) {
   if (!x) return;
   const dpr = Math.min(2, devicePixelRatio || 1);
   const W = (c.width = Math.round(innerWidth * dpr)), H = (c.height = Math.round(innerHeight * dpr));
-  const COL = gold ? ['#f5d690', '#dcb35e', '#fff3d6', '#2f8cff', '#ffffff'] : ['#2f8cff', '#6cc0ff', '#ffffff', '#f5d690', '#0b6fd6'];
+  const COL = gold ? ['#f5d690', '#dcb35e', '#fff3d6', '#7844ea', '#ffffff'] : ['#7844ea', '#a07bf0', '#ffffff', '#f5d690', '#5017ca'];
   const ps = Array.from({ length: 130 }, () => {
     const a = Math.random() * Math.PI * 2, v = (220 + Math.random() * 760) * dpr;
     return { vx: Math.cos(a) * v, vy: Math.sin(a) * v - 260 * dpr, r: (1 + Math.random() * 2.6) * dpr, c: COL[Math.floor(Math.random() * COL.length)]!, life: 0.7 + Math.random() * 0.9 };
@@ -209,7 +209,7 @@ export function trophyShelf(): string {
 
 function trophyPoster(k: number): PosterData {
   const start = startKg()!, now = trendNow()!;
-  return { kicker: 'Trofeu', title: `-${k} kg`, by: 'Prin disciplină', name: 'Beast Nutrition', stats: [{ v: kg1(start), label: 'Start', unit: 'kg' }, { v: kg1(now), label: 'Acum', unit: 'kg' }, { v: kg1(start - now), label: 'Pierdute', unit: 'kg' }], date: new Date().toLocaleDateString('ro-RO', { day: 'numeric', month: 'long', year: 'numeric' }) };
+  return { kicker: 'Trofeu', title: `-${k} kg`, by: 'Prin disciplină', name: 'NUTRIX', stats: [{ v: kg1(start), label: 'Start', unit: 'kg' }, { v: kg1(now), label: 'Acum', unit: 'kg' }, { v: kg1(start - now), label: 'Pierdute', unit: 'kg' }], date: new Date().toLocaleDateString('ro-RO', { day: 'numeric', month: 'long', year: 'numeric' }) };
 }
 
 /** After a weighing: a ceremony for each trophy the trend has just passed. The first run only records them. */

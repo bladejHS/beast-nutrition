@@ -19,14 +19,11 @@ export interface DockLive { kcal: number; perfect: boolean; trend: -1 | 0 | 1 | 
 const TOP = 14, BAR = 62, H = TOP + BAR, R = 24;
 const ease = (u: number) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
 
-/** Each tab's light: [base, hot]. */
+/** Each tab's light: [base, hot]. NUTRIX (2026-11-20): one violet for every tab, the Carb tab in the carbs amber. */
+const VIOLET: [number[], number[]] = [[135, 89, 232], [193, 168, 255]];
 const COLOR: Record<string, [number[], number[]]> = {
-  azi: [[22, 119, 255], [150, 228, 255]],
-  mese: [[40, 170, 255], [160, 236, 255]],
-  cicl: [[255, 120, 30], [255, 205, 140]],
-  cook: [[230, 165, 50], [255, 228, 160]],
-  corp: [[20, 200, 185], [150, 255, 236]],
-  fuel: [[110, 120, 255], [205, 210, 255]],
+  azi: VIOLET, mese: VIOLET, cook: VIOLET, corp: VIOLET, fuel: VIOLET,
+  cicl: [[240, 173, 87], [255, 222, 170]],
 };
 const GOLD: [number[], number[]] = [[230, 165, 50], [255, 236, 180]];
 const mix = (a: number[], b: number[], k: number) => a.map((v, i) => Math.round(v + (b[i]! - v) * k));
@@ -92,7 +89,7 @@ export function makeDock(items: DockItem[]) {
     // the glass
     bar();
     const g = c.createLinearGradient(0, TOP, 0, H);
-    g.addColorStop(0, 'rgba(24, 33, 52, .97)'); g.addColorStop(1, 'rgba(5, 8, 14, .98)');
+    g.addColorStop(0, 'rgba(33, 24, 52, .97)'); g.addColorStop(1, 'rgba(8, 5, 14, .98)');
     c.fillStyle = g; c.shadowColor = 'rgba(0,0,0,.9)'; c.shadowBlur = 26; c.shadowOffsetY = 10; c.fill();
     c.shadowBlur = 0; c.shadowOffsetY = 0;
     c.save(); bar(); c.clip();
@@ -101,7 +98,7 @@ export function makeDock(items: DockItem[]) {
     if (tilt != null) {
       const sx = W / 2 + (tilt / 40) * (W / 2);
       const sh = c.createLinearGradient(sx - 90, 0, sx + 90, H);
-      sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.5, 'rgba(210,235,255,.10)'); sh.addColorStop(1, 'rgba(255,255,255,0)');
+      sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.5, 'rgba(226,214,251,.10)'); sh.addColorStop(1, 'rgba(255,255,255,0)');
       c.fillStyle = sh; c.fillRect(0, TOP, W, BAR);
     }
     // the beam: from a narrow slit in the edge, widening onto the open tab
@@ -177,7 +174,7 @@ export function makeDock(items: DockItem[]) {
           const start = W - 28, wx = start + (ax - start) * ease(wave);
           for (let j = 0; j < 22; j++) {
             const px = wx + (start > ax ? 1 : -1) * j * 4;
-            c.fillStyle = rgba([180, 240, 255], 0.9 * (1 - j / 22));
+            c.fillStyle = rgba([210, 190, 255], 0.9 * (1 - j / 22));
             c.beginPath(); c.arc(px, TOP - 1, 3 * (1 - j / 26), 0, Math.PI * 2); c.fill();
           }
         }

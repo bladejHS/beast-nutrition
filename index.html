@@ -27,19 +27,18 @@
 <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/start-828x1792.png">
 <link rel="apple-touch-startup-image" media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="splash/start-750x1334.png">
 <link rel="apple-touch-startup-image" media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="splash/start-1242x2208.png">
-<link rel="preload" href="splash/umbra.webp" as="image" type="image/webp">
 <script src="splash/arena.js"></script>
+<script src="splash/nutrix.js"></script>
 <link rel="preload" href="fonts/saira-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fonts/saira-latin-ext-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
 <style>
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-wdth-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
 @font-face{font-family:'Saira';font-style:normal;font-display:swap;font-weight:100 900;font-stretch:50% 125%;src:url(fonts/saira-latin-ext-wdth-normal.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 html,body{margin:0;background:#050505;color:#ffffff}
-/* THE ARENA, the Beast Nutrition cut, about 3.3 s (engine: splash/arena.js, shared with Inner Beast, here in blue).
-   The wolf's eyes in the dark (in its chef's toque); the light rises over the kitchen: a cook at the stove, someone on
-   the scale, someone with the weekly pen, a runner behind; at 2.0 s the big toss lands back in the pan (sizzle, steam,
-   flash, slow motion) and BEAST NUTRITION is stamped under it.
-   Then a blue slash opens the app. Reduced motion, the short intro and Data Saver get the same arena, frozen. */
+/* NUTRIX, the opening, about 3.3 s (engine: splash/nutrix.js). Nutrients stream in from the edges in the macro
+   colours, the macro ring draws itself, a fork and a knife fly in and cross into the X at 2.0 s (flash, shockwave,
+   claw marks, sparks) and NUTRIX is stamped under it. Then a violet slash opens the app.
+   Reduced motion, the short intro and Data Saver get the finished emblem, still. */
 #splash{position:fixed;inset:0;z-index:100;overflow:hidden;cursor:pointer;-webkit-tap-highlight-color:transparent;background:#07050b;color:#f5f2fc;animation:sp-guard 0s linear 10s forwards;--w:min(88vw,40vh,520px)}
 @keyframes sp-guard{to{visibility:hidden;pointer-events:none}}
 .sp-bg{position:absolute;inset:0;opacity:0;pointer-events:none;background:radial-gradient(70% 34% at 50% 30%,rgba(104,45,232,.36),rgba(39,11,99,.16) 55%,transparent 78%),radial-gradient(110% 26% at 50% 72%,rgba(104,45,232,.2),transparent 70%),linear-gradient(180deg,#07050b,#0e061e 52%,#07050b 80%)}
@@ -53,13 +52,13 @@ html,body{margin:0;background:#050505;color:#ffffff}
 #sp-cv{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .sp-flash{background:radial-gradient(circle at var(--ix,50%) var(--iy,55%),#fff 0,#fff 3%,rgba(223,210,250,.85) 10%,rgba(120,68,234,.38) 26%,rgba(7,5,11,0) 50%);opacity:0}
 .sp-id{position:absolute;left:0;right:0;bottom:max(7vh,calc(env(safe-area-inset-bottom) + 34px));display:grid;justify-items:center;gap:clamp(7px,1.3vh,12px);pointer-events:none}
-.sp-name{margin:0;font:900 extra-condensed clamp(44px,13vw,84px)/.9 'Saira','Arial Narrow',sans-serif;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
+.sp-name{margin:0;font-family:'Saira','Arial Narrow',sans-serif;font-weight:900;font-stretch:62.5%;font-size:clamp(44px,13vw,84px);line-height:.9;letter-spacing:.06em;margin-right:-.06em;text-transform:uppercase;white-space:nowrap}
 .sp-name i{display:inline-block;font-style:normal;opacity:0;color:#f5f2fc;text-shadow:0 0 0 transparent}
 .sp-name .b{color:#a47aff}
 .sp-name .sp-gap{width:.28em}
 .sp-rule{display:block;width:min(62vw,340px);height:2px;background:linear-gradient(90deg,transparent,#682de8 22%,#895aed 50%,#682de8 78%,transparent);transform:scaleX(0);opacity:0}
-.sp-tag{margin:0;font:700 semi-condensed clamp(11px,3vw,13.5px)/1.2 'Saira',system-ui,sans-serif;letter-spacing:.24em;margin-right:-.24em;color:#c4c4c4;white-space:nowrap;opacity:0}
-.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));padding:10px 12px;border:0;background:none;color:#c4c4c4;font:700 semi-condensed 12px/1 'Saira',system-ui,sans-serif;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
+.sp-tag{margin:0;font-family:'Saira',system-ui,sans-serif;font-weight:700;font-stretch:87.5%;font-size:clamp(11px,3vw,13.5px);line-height:1.2;letter-spacing:.24em;margin-right:-.24em;color:#c4c4c4;white-space:nowrap;opacity:0}
+.sp-skip{position:absolute;right:max(14px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));padding:10px 12px;border:0;background:none;color:#c4c4c4;font-family:'Saira',system-ui,sans-serif;font-weight:700;font-stretch:87.5%;font-size:12px;line-height:1;letter-spacing:.16em;min-width:48px;min-height:48px;cursor:pointer;opacity:0;transition:opacity .3s}
 .sp-go .sp-skip,.sp-calm .sp-skip{opacity:.8}
 .sp-skip:focus-visible{outline:2px solid #895aed;opacity:1}
 /* the impact, keyed off .sp-hit (the engine calls the page when the kick lands) */
@@ -89,10 +88,6 @@ html,body{margin:0;background:#050505;color:#ffffff}
 <body>
 <div id="splash">
   <div class="sp-bg" aria-hidden="true"></div>
-  <div class="sp-stage" aria-hidden="true">
-    <div class="sp-emb"><img src="splash/umbra.webp" alt="" width="680" height="801" decoding="sync"></div>
-    <i class="sp-eye l"></i><i class="sp-eye r"></i>
-  </div>
   <canvas id="sp-cv" aria-hidden="true"></canvas>
   <div class="sp-vig" aria-hidden="true"></div>
   <div class="sp-id">
@@ -111,7 +106,7 @@ html,body{margin:0;background:#050505;color:#ffffff}
 // Plays on the first launch of the day by default, never on a reload in the same session, and a tap skips it.
 // The session key is this app's own: both apps share an origin, and opening one must not silence the other.
 // main.ts builds the dashboard underneath at the same time, so the exit only waits if that is genuinely not ready.
-// The arena is drawn by splash/arena.js, shared with Inner Beast.
+// The opening is drawn by splash/nutrix.js (2026-11-20); splash/arena.js stays for the day pictures in the app.
 (function () {
   var sp = document.getElementById('splash'), slash = document.getElementById('sp-slash');
   if (!sp) return;
@@ -123,7 +118,7 @@ html,body{margin:0;background:#050505;color:#ffffff}
   function drop() { if (forge) forge.destroy(); sp.remove(); if (slash) slash.remove(); }
   if (seen || mode === 'off') { drop(); return; }
   var conn = navigator.connection;
-  var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches || !!(conn && conn.saveData) || !window.BeastArena;
+  var calm = mode === 'short' || matchMedia('(prefers-reduced-motion: reduce)').matches || !!(conn && conn.saveData) || !window.NutrixIntro;
   var HOLD = calm ? 1100 : 3300, LIMIT = 6500;
   var t0 = 0, started = false, leaving = false, broken = false, why = '';
   function ready() { var a = document.getElementById('app'); return !!a && a.children.length > 0; }
@@ -167,9 +162,9 @@ html,body{margin:0;background:#050505;color:#ffffff}
     setTimeout(leave, HOLD);
   }
   function arena(hit) {
-    return window.BeastArena.create({ canvas: document.getElementById('sp-cv'), stage: sp.querySelector('.sp-stage'), bg: sp.querySelector('.sp-bg'), root: sp, scene: 'kitchen', color: [135, 89, 232], hot: [164, 122, 255], onImpact: hit });
+    return window.NutrixIntro.create({ canvas: document.getElementById('sp-cv'), bg: sp.querySelector('.sp-bg'), root: sp, onImpact: hit });
   }
-  function poster() { if (!window.BeastArena) return; try { forge = arena(null); forge.still(2.08); } catch (e) { /* the wolf and the name are enough */ } }
+  function poster() { if (!window.NutrixIntro) return; try { forge = arena(null); forge.still(); } catch (e) { /* the name is enough */ } }
   // starts when the dashboard underneath is drawn, so that work does not stutter the sparks; after half a second anyway
   var boot = performance.now();
   (function arm() { if (started) return; if (ready() || performance.now() - boot > 500) { requestAnimationFrame(go); return; } setTimeout(arm, 25); })();

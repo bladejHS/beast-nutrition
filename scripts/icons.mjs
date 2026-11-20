@@ -5,24 +5,26 @@
 import sharp from 'sharp';
 import { writeFileSync } from 'node:fs';
 import { svg } from './mark.mjs';
+import { svg as nx } from './nutrix-mark.mjs';
 
 const png = (s) => sharp(Buffer.from(s));
 
 const icons = [
   // file, pixels, optical size, how much of the canvas the head takes
-  ['public/icon-512.png', 512, 'medium', 0.76],
-  ['public/icon-192.png', 192, 'medium', 0.76],
-  ['public/apple-touch-icon.png', 180, 'medium', 0.76],
-  ['public/icon-maskable-512.png', 512, 'medium', 0.56], // inside the 80 % circle Android may cut to
-  ['public/favicon-32.png', 32, 'small', 0.86],
+  // NUTRIX (2026-11-20): the app icons are the fork-and-knife X in the macro ring (scripts/nutrix-mark.mjs)
+  ['public/icon-512.png', 512, 0.92],
+  ['public/icon-192.png', 192, 0.92],
+  ['public/apple-touch-icon.png', 180, 0.92],
+  ['public/icon-maskable-512.png', 512, 0.74], // inside the 80 % circle Android may cut to
+  ['public/favicon-32.png', 32, 0.96],
 ];
-for (const [file, px, size, k] of icons) {
-  await png(svg({ px, size, k })).png().toFile(file);
+for (const [file, px, k] of icons) {
+  await png(nx({ px, k })).png().toFile(file);
   console.log('wrote', file);
 }
 
 // favicon.ico for the browsers that ask for it: one 32 px PNG inside an ICO header
-const p32 = await png(svg({ px: 32, size: 'small', k: 0.86 })).png().toBuffer();
+const p32 = await png(nx({ px: 32, k: 0.96 })).png().toBuffer();
 const ico = Buffer.alloc(22);
 ico.writeUInt16LE(0, 0); ico.writeUInt16LE(1, 2); ico.writeUInt16LE(1, 4);
 ico.writeUInt8(32, 6); ico.writeUInt8(32, 7); ico.writeUInt8(0, 8); ico.writeUInt8(0, 9);
@@ -31,13 +33,13 @@ writeFileSync('public/favicon.ico', Buffer.concat([ico, p32]));
 console.log('wrote public/favicon.ico');
 
 // the browser tab: the real vector, rounded like the app icon
-writeFileSync('public/icon.svg', svg({ px: 512, size: 'small', k: 0.84, rx: 52 }));
+writeFileSync('public/icon.svg', nx({ px: 512, k: 0.92, rx: 52, small: false }));
 console.log('wrote public/icon.svg');
 
 // the header (30 px) and the setup screen (72 px): the head alone, no field
-writeFileSync('public/ui/mark.svg', svg({ px: 60, size: 'small', bg: false, k: 0.98 }));
+writeFileSync('public/ui/mark.svg', nx({ px: 60, bg: false, k: 1.1, small: true }));
 console.log('wrote public/ui/mark.svg');
 
-// the opening: the large head on the 680 × 801 canvas the page reserves
+// the wolf stays in the day pictures (hero bands, poster, chapters): the large head on the 680 × 801 canvas the page reserves
 await png(svg({ px: 680, w: 680, h: 801, size: 'large', bg: false, k: 1.15 })).webp({ quality: 90, alphaQuality: 100 }).toFile('public/splash/umbra.webp');
 console.log('wrote public/splash/umbra.webp');

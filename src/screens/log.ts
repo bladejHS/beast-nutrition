@@ -1,6 +1,6 @@
 /* Logging food: search, amount, and back to the search for the next food, so a meal is one sheet, not four. */
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
-import { byBarcode, loadFoods, search, searchBranded, searchExact, searchOffRo, searchUsdaBrands, type Food } from '../logic/foods.ts';
+import { byBarcode, loadFoods, search, searchBranded, searchExact, searchOffDe, searchOffRo, searchUsdaBrands, type Food } from '../logic/foods.ts';
 import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.ts';
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
@@ -46,7 +46,7 @@ function showRecent() {
   shown.clear();
   const s = ctx.get();
   const list = [...s.custom, ...s.recent.filter((r) => !s.custom.some((c) => c.id === r.id))].slice(0, 15);
-  res.innerHTML = list.length ? `<h3>Recente · o atingere pe + adaugă porția de data trecută</h3>${list.map(recentRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România. Poți căuta în română.</p>';
+  res.innerHTML = list.length ? `<h3>Recente · o atingere pe + adaugă porția de data trecută</h3>${list.map(recentRow).join('')}` : '<p class="hint pad">Peste 13.000 de alimente și 400.000 de produse de marcă, cu rafturile din România și Germania. Poți căuta în română.</p>';
 }
 
 /** One search for everything: foods first (instant, from the app's files), then the Romanian shelf and USDA brands,
@@ -66,17 +66,17 @@ async function runSearch(q: string) {
   const foods = list('Alimente', plain);
   if (q.trim().length < 3) { res.innerHTML = foods || list('Poate te referi la', search(all, q)) || '<p class="hint pad">Nimic găsit.</p>'; return; }
   res.innerHTML = `${foods}<p class="hint pad">Caut și în produsele de marcă…</p>`;
-  const [ro, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
+  const [ro, de, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchOffDe(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
   if (run !== searchRun) return;
-  const close = [...(ro?.near ?? []), ...(usda?.near ?? [])].slice(0, 25);
-  const found = (ro?.total ?? 0) + (usda?.total ?? 0), brands = (ro?.foods.length ?? 0) + (usda?.foods.length ?? 0);
+  const close = [...(ro?.near ?? []), ...(de?.near ?? []), ...(usda?.near ?? [])].slice(0, 25);
+  const found = (ro?.total ?? 0) + (de?.total ?? 0) + (usda?.total ?? 0), brands = (ro?.foods.length ?? 0) + (de?.foods.length ?? 0) + (usda?.foods.length ?? 0);
   const more = found > brands ? `<p class="hint pad">${found.toLocaleString('ro-RO')} produse de marcă găsite. Adaugă marca sau tipul ca să restrângi.</p>` : '';
   const typo = plain.length || brands || close.length ? [] : search(all, q);
-  const local = `${foods}${list('Produse din România', ro?.foods)}${list('Produse USDA', usda?.foods)}${more}${list('Asemănătoare', close)}${list('Poate te referi la', typo)}`;
+  const local = `${foods}${list('Produse din România', ro?.foods)}${list('Produse din Germania (Lidl, Kaufland)', de?.foods)}${list('Produse USDA', usda?.foods)}${more}${list('Asemănătoare', close)}${list('Poate te referi la', typo)}`;
   res.innerHTML = `${local}<p class="hint pad">Caut și în Open Food Facts…</p>`;
   const off = await searchBranded(q).catch(() => null);
   if (run !== searchRun) return;
-  const seen = new Set([...(ro?.foods ?? []), ...close].map((f) => f.id));
+  const seen = new Set([...(ro?.foods ?? []), ...(de?.foods ?? []), ...close].map((f) => f.id));
   const extra = list('Open Food Facts, online', off?.filter((f) => !seen.has(f.id)));
   res.innerHTML = local + extra || '<p class="hint pad">Nimic găsit. Încearcă și în engleză, scanează codul sau introdu valorile manual.</p>';
 }
@@ -155,7 +155,7 @@ function openBarcode() {
     try { f = await byBarcode(code, ctx.get().custom); } catch { offline = true; }
     if (f) { openQuantity(f); return; }
     notFoundCode = code;
-    ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este nici pe rafturile din România, nici în USDA, nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
+    ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este nici pe rafturile din România sau Germania, nici în USDA, nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
       <button class="primary wide" data-manual-code>Adaugă-l de pe etichetă</button>
       <div class="btns"><button class="ghost" data-scan>Scanează din nou</button><button class="ghost" data-back-search>Înapoi la căutare</button></div>`, 'Produs negăsit');
   })());

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanCode, Confirm, expandUpcE, sameCode, validGtin } from './scan.ts';
-import { brandRowToFood, byBarcode, offRoBarcode, offToFood, searchOffRo, type BrandRow, type Food } from './foods.ts';
+import { brandRowToFood, byBarcode, offDeBarcode, offRoBarcode, offToFood, searchOffDe, searchOffRo, type BrandRow, type Food } from './foods.ts';
 
 test('the check digit accepts real codes and refuses a wrong digit', () => {
   assert.equal(validGtin('5449000000996'), true); // Coca-Cola, EAN-13
@@ -61,4 +61,8 @@ test('a Romanian shelf row carries its barcode, its serving and its pack, and is
   const fake = async (path: string) => ({ 'b/890.json': { '5941234567890': 0 }, 'p/0.json': [row] } as Record<string, unknown>)[path] ?? null;
   assert.equal((await offRoBarcode('05941234567890', fake))?.id, 'o5941234567890');
   assert.equal((await searchOffRo('iaurt', async (p) => ({ 'w/ia.json': { iaurt: '0' }, 'p/0.json': [row] } as Record<string, unknown>)[p] ?? null)).foods[0]?.id, 'o5941234567890');
+  // the German shelf reads the same layout and says where the product comes from
+  assert.equal((await offDeBarcode('05941234567890', fake))?.cat, 'Produs de marcă · Open Food Facts Germania');
+  assert.equal((await searchOffDe('iaurt', async (p) => ({ 'w/ia.json': { iaurt: '0' }, 'p/0.json': [row] } as Record<string, unknown>)[p] ?? null)).foods[0]?.cat, 'Produs de marcă · Open Food Facts Germania');
+  assert.equal(brandRowToFood(row).cat, 'Produs de marcă · Open Food Facts România');
 });

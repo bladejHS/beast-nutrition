@@ -1,6 +1,7 @@
 # Open Food Facts, the products sold in Romania, as static shards the app reads on demand (same layout as the USDA
 # pack from usda-branded.py, so src/logic/foods.ts reads both with one code path).
 # Usage: python -I -X utf8 scripts/off-ro.py <en.openfoodfacts.org.products.csv.gz> <output dir, e.g. public/branded/off-ro-2026-11-11>
+#   [--country germany] another country's shelf; [--skip romania] leaves out what that country also has (no duplicates)
 #   p/<n>.json   chunks of CHUNK products, sorted by brand
 #   w/<ab>.json  word -> product numbers (delta, base 36), keyed by the word's first two characters
 #   b/<nnn>.json barcode without leading zeros -> product number, keyed by its last three digits
@@ -26,6 +27,15 @@ sys.stdout.reconfigure(encoding='utf-8')
 src, out = sys.argv[1], sys.argv[2]
 # --partial: a truncated download, for a dry run of the script
 PARTIAL = '--partial' in sys.argv[3:]
+
+
+def opt(name, default):
+    a = sys.argv[3:]
+    return a[a.index(name) + 1] if name in a else default
+
+
+COUNTRY = 'en:' + opt('--country', 'romania')
+SKIP = 'en:' + opt('--skip', '') if opt('--skip', '') else None
 
 
 def fold(s):
@@ -102,14 +112,15 @@ try:
       print('coloane lipsă (ignorate):', missing, flush=True)
       for line in fh:
           lines += 1
-          if 'en:romania' not in line:
+          if COUNTRY not in line:
               continue
           row = next(csv.reader([line], delimiter='\t', quoting=csv.QUOTE_NONE))
           if len(row) != len(header):
               why['rând rupt'] += 1
               continue
           x = {n: row[col[n]] if n in col else '' for n in need}
-          if 'en:romania' not in x['countries_tags'].split(','):
+          tags = x['countries_tags'].split(',')
+          if COUNTRY not in tags or (SKIP and SKIP in tags):
               continue
           code = x['code'].strip().lstrip('0')
           if not re.fullmatch(r'\d{6,14}', code):
@@ -203,5 +214,5 @@ for key, shard in shards.items():
     save(f'w/{key}.json', shard)
 for key, shard in barcodes.items():
     save(f'b/{key}.json', shard)
-save('meta.json', {'products': len(items), 'chunk': CHUNK, 'source': 'Open Food Facts, ODbL', 'country': 'ro'})
+save('meta.json', {'products': len(items), 'chunk': CHUNK, 'source': 'Open Food Facts, ODbL', 'country': COUNTRY[3:]})
 print(f'{len(index):,} cuvinte, {len(shards)} fișiere de cuvinte, {len(barcodes)} fișiere de coduri, {sum(len(p["codes"]) for p in items):,} coduri')

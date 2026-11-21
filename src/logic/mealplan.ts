@@ -3,6 +3,7 @@
    apart, varied meals. */
 import type { Food } from './foods.ts';
 import { fold } from './foods.ts';
+import { NIGHT_PROTEIN, OILY_FISH, RED_MEAT, SLOW_PROTEIN, slotOf, type Focus, type Slot } from './coach.ts';
 
 export type Role = 'protein' | 'carb' | 'fat' | 'veg' | 'extra';
 export interface Item { foodId: string; role: Role; g: number }
@@ -16,28 +17,32 @@ export interface Prefs { meals: 3 | 4 | 5; exclude: string; allergies: string; m
 
 interface Template { name: string; sweet: boolean; steps: string; cook: number; protein: string[]; carb: string[]; fat: string[]; veg: string[];
   /** Slow to digest: not the meal before training. */
-  heavy?: boolean }
+  heavy?: boolean;
+  /** Light, low in fat and fibre: fit for the meal before training (coach.ts). */
+  light?: boolean;
+  /** Casein-rich dairy as the protein: the meal before sleep (coach.ts). */
+  night?: boolean }
 
 /** Names are Romanian names from the curated list, resolved against the database when generating. */
 const TEMPLATES: Template[] = [
   { name: 'Ovăz cu whey și fructe', sweet: true, cook: 5, steps: 'Fierbe ovăzul în apă, ia-l de pe foc, amestecă whey-ul, adaugă fructele și nucile.', protein: ['Whey (proteină din zer)'], carb: ['Ovăz fulgi, crud'], fat: ['Nuci', 'Migdale'], veg: ['Afine', 'Banană', 'Căpșuni'] },
-  { name: 'Iaurt grecesc cu fructe', sweet: true, cook: 3, steps: 'Pune iaurtul într-un bol, adaugă fructele, mierea și semințele.', protein: ['Iaurt grecesc degresat', 'Iaurt grecesc 2%'], carb: ['Miere', 'Banană'], fat: ['Semințe de chia', 'Migdale'], veg: ['Zmeură', 'Afine', 'Căpșuni'] },
+  { name: 'Iaurt grecesc cu fructe', night: true, sweet: true, cook: 3, steps: 'Pune iaurtul într-un bol, adaugă fructele, mierea și semințele.', protein: ['Iaurt grecesc degresat', 'Iaurt grecesc 2%'], carb: ['Miere', 'Banană'], fat: ['Semințe de chia', 'Migdale'], veg: ['Zmeură', 'Afine', 'Căpșuni'] },
   { name: 'Omletă cu pâine și legume', sweet: false, cook: 10, steps: 'Bate albușurile cu ouăle, gătește-le în tigaie cu uleiul, servește cu pâine și legume.', protein: ['Albuș de ou'], carb: ['Pâine integrală', 'Pâine de secară'], fat: ['Ou întreg, crud', 'Ulei de măsline'], veg: ['Roșii', 'Ardei gras roșu', 'Spanac crud'] },
-  { name: 'Pui cu orez și legume', sweet: false, cook: 25, steps: 'Fierbe orezul, gătește puiul la tigaie sau la cuptor, fierbe legumele, adaugă uleiul la final. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Piept de pui, crud'], carb: ['Orez alb crud', 'Orez brun crud'], fat: ['Ulei de măsline'], veg: ['Broccoli crud', 'Fasole verde'] },
+  { name: 'Pui cu orez și legume', light: true, sweet: false, cook: 25, steps: 'Fierbe orezul, gătește puiul la tigaie sau la cuptor, fierbe legumele, adaugă uleiul la final. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Piept de pui, crud'], carb: ['Orez alb crud', 'Orez brun crud'], fat: ['Ulei de măsline'], veg: ['Broccoli crud', 'Fasole verde'] },
   { name: 'Curcan cu cartofi și salată', sweet: false, cook: 30, steps: 'Coace curcanul și cartofii, amestecă salata cu uleiul. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Piept de curcan, crud'], carb: ['Cartofi cruzi', 'Cartofi dulci cruzi'], fat: ['Ulei de măsline'], veg: ['Salată verde', 'Castraveți', 'Roșii'] },
   { name: 'Vită cu paste și legume', sweet: false, cook: 20, heavy: true, steps: 'Fierbe pastele, rumenește carnea, adaugă legumele și amestecă.', protein: ['Carne tocată de vită 90%, crudă'], carb: ['Paste crude'], fat: ['Parmezan', 'Ulei de măsline'], veg: ['Dovlecei', 'Ardei gras roșu', 'Ciuperci'] },
   { name: 'Somon cu garnitură și legume', sweet: false, cook: 25, heavy: true, steps: 'Coace somonul, pregătește garnitura, fierbe legumele la abur.', protein: ['Somon crud'], carb: ['Cartofi cruzi', 'Cuscus crud'], fat: [], veg: ['Broccoli crud', 'Conopidă', 'Morcovi'] },
-  { name: 'Ton cu garnitură și legume', sweet: false, cook: 15, steps: 'Fierbe garnitura, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa crudă', 'Orez alb crud'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
-  { name: 'Brânză de vaci cu pâine și legume', sweet: false, cook: 5, steps: 'Pune brânza pe farfurie, servește cu pâine și legume proaspete.', protein: ['Brânză de vaci'], carb: ['Pâine integrală'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Roșii', 'Castraveți'] },
+  { name: 'Ton cu garnitură și legume', light: true, sweet: false, cook: 15, steps: 'Fierbe garnitura, amestec-o cu tonul scurs, legumele și uleiul.', protein: ['Ton la conservă în apă'], carb: ['Quinoa crudă', 'Orez alb crud'], fat: ['Ulei de măsline'], veg: ['Roșii', 'Castraveți', 'Ardei gras roșu'] },
+  { name: 'Brânză de vaci cu pâine și legume', night: true, sweet: false, cook: 5, steps: 'Pune brânza pe farfurie, servește cu pâine și legume proaspete.', protein: ['Brânză de vaci'], carb: ['Pâine integrală'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Roșii', 'Castraveți'] },
   { name: 'Pui cu leguminoase', sweet: false, cook: 25, heavy: true, steps: 'Fierbe leguminoasele, gătește puiul, amestecă-le cu legumele.', protein: ['Piept de pui, crud'], carb: ['Linte uscată', 'Năut uscat'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă'] },
   // 2026-11-11, the user asked for more ways to replace a meal: Romanian classics and quick ones, the same rules
   { name: 'Pulpe de pui cu mămăligă și salată', sweet: false, cook: 30, heavy: true, steps: 'Fierbe mămăliga din mălai, coace pulpele dezosate, servește cu salată. Totul e cântărit crud.', protein: ['Pulpă de pui, crudă, fără piele'], carb: ['Mălai crud'], fat: [], veg: ['Varză', 'Roșii', 'Castraveți'] },
   { name: 'Vită cu cartofi și legume', sweet: false, cook: 30, heavy: true, steps: 'Rumenește mușchiul de vită, coace cartofii, gătește legumele, adaugă uleiul la final. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Mușchi de vită, crud'], carb: ['Cartofi cruzi'], fat: ['Ulei de măsline'], veg: ['Fasole verde', 'Ardei gras roșu', 'Ciuperci'] },
-  { name: 'Porc cu orez și varză', sweet: false, cook: 25, steps: 'Gătește mușchiul de porc la tigaie, fierbe orezul, călește varza cu ardeiul. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Mușchi de porc, crud'], carb: ['Orez brun crud', 'Orez alb crud'], fat: ['Ulei de măsline'], veg: ['Varză', 'Ardei gras roșu', 'Dovlecei'] },
-  { name: 'Wrap cu pui și legume', sweet: false, cook: 15, steps: 'Gătește puiul, taie legumele, pune totul în lipie cu avocado sau un fir de ulei și rulează.', protein: ['Piept de pui, crud', 'Piept de curcan, crud'], carb: ['Lipie tortilla'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Salată verde', 'Roșii', 'Ardei gras roșu'] },
+  { name: 'Porc cu orez și varză', light: true, sweet: false, cook: 25, steps: 'Gătește mușchiul de porc la tigaie, fierbe orezul, călește varza cu ardeiul. Cantitățile sunt pentru alimentele crude, cântărite înainte de gătit.', protein: ['Mușchi de porc, crud'], carb: ['Orez brun crud', 'Orez alb crud'], fat: ['Ulei de măsline'], veg: ['Varză', 'Ardei gras roșu', 'Dovlecei'] },
+  { name: 'Wrap cu pui și legume', light: true, sweet: false, cook: 15, steps: 'Gătește puiul, taie legumele, pune totul în lipie cu avocado sau un fir de ulei și rulează.', protein: ['Piept de pui, crud', 'Piept de curcan, crud'], carb: ['Lipie tortilla'], fat: ['Avocado', 'Ulei de măsline'], veg: ['Salată verde', 'Roșii', 'Ardei gras roșu'] },
   { name: 'Cod cu cartofi și legume', sweet: false, cook: 20, steps: 'Coace codul cu lămâie, fierbe cartofii și legumele, adaugă uleiul la final.', protein: ['Cod, crud'], carb: ['Cartofi cruzi', 'Cartofi dulci cruzi'], fat: ['Ulei de măsline'], veg: ['Broccoli crud', 'Morcovi', 'Spanac crud'] },
-  { name: 'Creveți cu paste și legume', sweet: false, cook: 20, steps: 'Fierbe pastele, călește creveții cu legumele în ulei, amestecă și presară parmezan.', protein: ['Creveți cruzi'], carb: ['Paste crude'], fat: ['Ulei de măsline', 'Parmezan'], veg: ['Dovlecei', 'Roșii', 'Spanac crud'] },
-  { name: 'Tofu cu orez și legume', sweet: false, cook: 20, steps: 'Rumenește tofu-ul la tigaie, fierbe orezul, gătește legumele cu puțin sos de soia.', protein: ['Tofu'], carb: ['Orez alb crud', 'Quinoa crudă'], fat: [], veg: ['Broccoli crud', 'Ardei gras roșu', 'Ciuperci'] },
+  { name: 'Creveți cu paste și legume', light: true, sweet: false, cook: 20, steps: 'Fierbe pastele, călește creveții cu legumele în ulei, amestecă și presară parmezan.', protein: ['Creveți cruzi'], carb: ['Paste crude'], fat: ['Ulei de măsline', 'Parmezan'], veg: ['Dovlecei', 'Roșii', 'Spanac crud'] },
+  { name: 'Tofu cu orez și legume', light: true, sweet: false, cook: 20, steps: 'Rumenește tofu-ul la tigaie, fierbe orezul, gătește legumele cu puțin sos de soia.', protein: ['Tofu'], carb: ['Orez alb crud', 'Quinoa crudă'], fat: [], veg: ['Broccoli crud', 'Ardei gras roșu', 'Ciuperci'] },
   { name: 'Ouă cu cartofi și salată', sweet: false, cook: 20, steps: 'Fierbe ouăle și cartofii, servește cu salată. Albușurile în plus le fierbi separat sau le faci omletă.', protein: ['Albuș de ou'], carb: ['Cartofi cruzi'], fat: ['Ou întreg, crud'], veg: ['Salată verde', 'Roșii', 'Castraveți'] },
   { name: 'Bol mexican cu pui', sweet: false, cook: 20, heavy: true, steps: 'Fierbe fasolea neagră (o noapte la înmuiat), gătește puiul, încălzește porumbul, adaugă roșiile, ardeiul și avocado. Totul e cântărit crud.', protein: ['Piept de pui, crud'], carb: ['Fasole neagră uscată', 'Porumb dulce'], fat: ['Avocado'], veg: ['Roșii', 'Ardei gras roșu', 'Ceapă'] },
   { name: 'Pâine cu unt de arahide, banană și whey', sweet: true, cook: 3, steps: 'Unge pâinea cu unt de arahide, pune banana feliată; whey-ul îl bei cu apă sau lapte.', protein: ['Whey (proteină din zer)'], carb: ['Pâine integrală'], fat: ['Unt de arahide'], veg: ['Banană'] },
@@ -46,11 +51,13 @@ const TEMPLATES: Template[] = [
   { name: 'Păstrăv cu cartofi noi și salată', sweet: false, cook: 25, steps: 'Coace păstrăvul cu lămâie, fierbe cartofii noi, amestecă salata cu uleiul. Totul e cântărit crud.', protein: ['Păstrăv, crud', 'Șalău, crud', 'Tilapia, crudă'], carb: ['Cartofi noi', 'Cartofi cruzi'], fat: ['Ulei de măsline'], veg: ['Salată verde', 'Rucola', 'Roșii'] },
   { name: 'Vită cu hrișcă și legume', sweet: false, cook: 25, heavy: true, steps: 'Fierbe hrișca, rumenește carnea de vită, călește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Pulpă de vită, crudă', 'Carne tocată de vită 95%, crudă'], carb: ['Hrișcă crudă', 'Bulgur crud'], fat: ['Ulei de măsline'], veg: ['Ardei gras roșu', 'Ciuperci', 'Dovlecei'] },
   { name: 'Curcan cu bulgur și legume', sweet: false, cook: 25, steps: 'Fierbe bulgurul, gătește curcanul la tigaie, călește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Pulpă de curcan, crudă', 'Piept de curcan, crud'], carb: ['Bulgur crud', 'Orz perlat crud'], fat: ['Ulei de măsline'], veg: ['Varză roșie', 'Morcovi', 'Fasole verde'] },
-  { name: 'Ton proaspăt cu orez basmati și legume', sweet: false, cook: 20, steps: 'Fierbe orezul, frige tonul 1–2 minute pe fiecare parte, gătește legumele la abur, adaugă susanul. Totul e cântărit crud.', protein: ['Ton proaspăt, crud', 'Somon crud'], carb: ['Orez basmati crud', 'Orez brun crud'], fat: ['Semințe de susan', 'Ulei de măsline'], veg: ['Broccoli crud', 'Sparanghel', 'Morcovi'] },
+  { name: 'Ton proaspăt cu orez basmati și legume', light: true, sweet: false, cook: 20, steps: 'Fierbe orezul, frige tonul 1–2 minute pe fiecare parte, gătește legumele la abur, adaugă susanul. Totul e cântărit crud.', protein: ['Ton proaspăt, crud', 'Somon crud'], carb: ['Orez basmati crud', 'Orez brun crud'], fat: ['Semințe de susan', 'Ulei de măsline'], veg: ['Broccoli crud', 'Sparanghel', 'Morcovi'] },
   { name: 'Porc cu cartofi noi și varză', sweet: false, cook: 30, steps: 'Coace pulpa de porc și cartofii, călește varza cu ceapă. Totul e cântărit crud.', protein: ['Pulpă de porc, crudă', 'Cotlet de porc, crud', 'Mușchi de porc, crud'], carb: ['Cartofi noi', 'Cartofi cruzi'], fat: ['Ulei de măsline'], veg: ['Varză', 'Varză roșie', 'Ceapă'] },
   { name: 'Vițel cu mei și legume', sweet: false, cook: 25, steps: 'Fierbe meiul, rumenește vițelul, gătește legumele, adaugă uleiul la final. Totul e cântărit crud.', protein: ['Carne de vițel, crudă', 'Pulpă de vită, crudă'], carb: ['Mei crud', 'Hrișcă crudă'], fat: ['Ulei de măsline'], veg: ['Sfeclă roșie', 'Fasole verde', 'Dovlecei'] },
   { name: 'Pui cu paste integrale și legume', sweet: false, cook: 20, steps: 'Fierbe pastele, gătește puiul cu legumele în tigaie, adaugă uleiul și parmezanul. Totul e cântărit crud.', protein: ['Piept de pui, crud'], carb: ['Paste integrale crude'], fat: ['Ulei de măsline', 'Parmezan'], veg: ['Spanac crud', 'Roșii', 'Kale'] },
-  { name: 'Skyr cu fructe și nuci', sweet: true, cook: 3, steps: 'Pune skyr-ul într-un bol, adaugă fructele, mierea și nucile.', protein: ['Skyr natur', 'Brânză cottage 1%'], carb: ['Miere', 'Banană', 'Mango'], fat: ['Nuci', 'Fistic', 'Migdale'], veg: ['Mure', 'Cireșe', 'Zmeură'] },
+  { name: 'Skyr cu fructe și nuci', night: true, sweet: true, cook: 3, steps: 'Pune skyr-ul într-un bol, adaugă fructele, mierea și nucile.', protein: ['Skyr natur', 'Brânză cottage 1%'], carb: ['Miere', 'Banană', 'Mango'], fat: ['Nuci', 'Fistic', 'Migdale'], veg: ['Mure', 'Cireșe', 'Zmeură'] },
+  // 2026-11-21, the coach: one more oily fish, so the week reaches two (omega-3)
+  { name: 'Macrou cu cartofi și salată', sweet: false, cook: 25, heavy: true, steps: 'Coace macroul cu lămâie, fierbe cartofii, amestecă salata. Grăsimea vine din pește, așa că uleiul lipsește. Totul e cântărit crud.', protein: ['Macrou, crud', 'Hering, crud'], carb: ['Cartofi cruzi', 'Cartofi noi'], fat: [], veg: ['Salată verde', 'Varză', 'Roșii'] },
   { name: 'Linte roșie cu pui și legume', sweet: false, cook: 25, heavy: true, steps: 'Fierbe lintea roșie cu morcovii și ceapa, adaugă puiul gătit în tigaie și uleiul. Totul e cântărit crud.', protein: ['Piept de pui, crud', 'Pulpă de pui, crudă, fără piele'], carb: ['Linte roșie uscată', 'Fasole albă uscată'], fat: ['Ulei de măsline'], veg: ['Morcovi', 'Ceapă', 'Țelină apio'] },
 ];
 
@@ -103,17 +110,34 @@ export function solve(items: Item[], target: { p: number; c: number; f: number }
 
 export const MEAL_TAGS = ['', 'Înainte de antrenament', 'După antrenament'];
 
-export function buildMeal(tpl: Template, target: { p: number; c: number; f: number }, byName: Map<string, Food>, db: Map<string, Food>, words: string[], seed: number, time: string, tag: string): Meal | null {
-  const pick = (list: string[]) => {
-    const ok = list.map((n) => byName.get(n)).filter((f): f is Food => !!f && allowed(f, words));
-    return ok.length ? ok[seed % ok.length]! : undefined;
+/**
+ * `how.slot` (coach.ts): before training the carb with the least fibre and one small portion of vegetables; at night
+ * only slowly digested dairy as the protein; at the other savoury meals two vegetables, for fibre and fullness.
+ * `how.prefer`: foods the week still needs (oily fish, red meat), taken when the template offers them.
+ */
+export function buildMeal(tpl: Template, target: { p: number; c: number; f: number }, byName: Map<string, Food>, db: Map<string, Food>, words: string[], seed: number, time: string, tag: string, how: { slot?: Slot; prefer?: string[] } = {}): Meal | null {
+  const okOf = (list: string[]) => list.map((n) => byName.get(n)).filter((f): f is Food => !!f && allowed(f, words));
+  const pick = (list: string[], off = 0) => {
+    const ok = okOf(list);
+    return ok.length ? ok[(seed + off) % ok.length]! : undefined;
   };
-  const p = pick(tpl.protein), c = pick(tpl.carb), f = pick(tpl.fat);
+  const slot = how.slot ?? 'main';
+  const liked = how.prefer ? okOf(tpl.protein).filter((f) => how.prefer!.includes(f.name)) : [];
+  const slow = slot === 'night' ? okOf(tpl.protein).filter((f) => SLOW_PROTEIN.includes(f.name)) : [];
+  const p = slow[seed % Math.max(1, slow.length)] ?? liked[seed % Math.max(1, liked.length)] ?? pick(tpl.protein);
+  // fibre: the least before training, the most at the meals far from it (14 g per 1000 kcal over the day)
+  const carbs = okOf(tpl.carb).sort((a, b) => a.fiber - b.fiber);
+  const c = slot === 'pre' ? carbs[0] : carbs.at(-1), f = pick(tpl.fat);
   if (!p || !c) return null;
-  const vegs = [pick(tpl.veg)].filter((x): x is Food => !!x);
+  // away from training the vegetables with the most fibre lead; before it, the gentlest
+  const greens = okOf(tpl.veg).sort((a, b) => (slot === 'pre' ? a.fiber - b.fiber : b.fiber - a.fiber));
+  const v1 = slot === 'pre' ? greens[0] : greens[seed % Math.min(2, greens.length || 1)], v2 = greens.find((g) => g.id !== v1?.id);
+  const two = !tpl.sweet && slot !== 'pre' && v2 && v2.id !== v1?.id;
+  const vegs = [v1, two ? v2 : undefined].filter((x): x is Food => !!x);
+  const vegG = tpl.sweet ? 150 : slot === 'pre' ? 80 : 150;
   const items: Item[] = [{ foodId: p.id, role: 'protein', g: 0 }, { foodId: c.id, role: 'carb', g: 0 }];
   if (f) items.push({ foodId: f.id, role: 'fat', g: 0 });
-  for (const v of vegs) items.push({ foodId: v.id, role: 'veg', g: tpl.sweet ? 80 : 150 });
+  for (const v of vegs) items.push({ foodId: v.id, role: 'veg', g: vegG });
   return { id: crypto.randomUUID(), name: tpl.name, steps: tpl.steps, time, tag, done: false, items: solve(items, target, db) };
 }
 
@@ -123,7 +147,7 @@ const bulk = (items: Item[]) => items.reduce((s, i) => s + Math.max(0, i.g - CAP
 export const PRE_TAG = 'Înainte de antrenament';
 
 /** `recent`: meals of the nearby days. They stay possible, but the day prefers others. */
-type GenOpts = { avoid?: string[]; firstSweet?: boolean; fatShares?: number[]; recent?: string[] };
+type GenOpts = { avoid?: string[]; firstSweet?: boolean; fatShares?: number[]; recent?: string[]; focus?: Focus };
 
 /**
  * Eight tries, scored by how far the day lands from its macros, in kcal, plus any portion nobody would eat.
@@ -170,7 +194,11 @@ export function polish(meals: Meal[], day: { p: number; c: number; f: number }, 
   return out;
 }
 
-/** Targets per meal: protein evenly, fat by its share, carbs by training share. */
+/**
+ * Targets per meal: protein evenly (the night meal ~35 g of slow dairy protein, the rest shared by the others), fat by its
+ * share, carbs by training share. Before training only light templates; at night only the dairy ones; on a day the
+ * week needs oily fish or red meat, the first ordinary meal that can, has it (coach.ts).
+ */
 function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, opts: GenOpts): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
@@ -186,17 +214,31 @@ function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], 
   const left = { ...day };
   const avoid = opts.avoid ?? [];
   const firstSweet = opts.firstSweet ?? true;
+  const slots = Array.from({ length: n }, (_, i) => slotOf(i, n, tags));
+  const nightAt = slots.indexOf('night');
+  const nightP = Math.min(NIGHT_PROTEIN, day.p / n);
+  let focus: Focus = opts.focus ?? null;
+  const wants = (t: Template) => (focus === 'fish' ? t.protein.some((x) => OILY_FISH.includes(x)) : focus === 'red' ? t.protein.some((x) => RED_MEAT.includes(x)) : false);
   for (let i = 0; i < n; i++) {
-    const pool = (i === 0 && firstSweet && sweet.length ? sweet : savory.length ? savory : list).filter((t) => !(t.heavy && tags[i] === PRE_TAG));
+    const slot = slots[i]!;
+    const first = i === 0 && firstSweet && sweet.length && slot !== 'night';
+    let pool = (first ? sweet : savory.length ? savory : list).filter((t) => !(t.heavy && tags[i] === PRE_TAG));
+    if (slot === 'pre') { const light = list.filter((t) => t.light); if (light.length) pool = light; }
+    if (slot === 'night') { const night = list.filter((t) => t.night && t.protein.some((x) => SLOW_PROTEIN.includes(x) && byName.has(x) && allowed(byName.get(x)!, words))); if (night.length) pool = night; }
+    if (focus && !first && (slot === 'main' || slot === 'post')) { const need = pool.filter(wants); if (need.length) pool = need; }
+    // calcium every day: with no dairy meal at night (training late), the breakfast is the dairy one
+    if (first && nightAt < 0) { const dairy = pool.filter((t) => t.protein.some((x) => SLOW_PROTEIN.includes(x))); if (dairy.length) pool = dairy; }
     let meal: Meal | null = null;
     let best = Infinity;
     const shareLeft = carbShares.slice(i).reduce((x, y) => x + y, 0) || 1;
     const fatLeft = fatShares.slice(i).reduce((x, y) => x + y, 0) || 1;
-    const goal = { p: left.p / (n - i), c: (left.c * carbShares[i]!) / shareLeft, f: (Math.max(0, left.f) * fatShares[i]!) / fatLeft };
+    const later = nightAt > i;
+    const pGoal = slot === 'night' ? Math.min(nightP, left.p) : (left.p - (later ? nightP : 0)) / (n - i - (later ? 1 : 0));
+    const goal = { p: pGoal, c: (left.c * carbShares[i]!) / shareLeft, f: (Math.max(0, left.f) * fatShares[i]!) / fatLeft };
     for (let k = 0; k < pool.length; k++) {
       const tpl = pool[(seed + i + k) % pool.length]!;
       if (avoid.includes(tpl.name) || meals.some((m) => m.name === tpl.name)) continue;
-      const option = buildMeal(tpl, goal, byName, db, words, seed + i, times[i] ?? '', tags[i] ?? '');
+      const option = buildMeal(tpl, goal, byName, db, words, seed + i, times[i] ?? '', tags[i] ?? '', { slot, ...(focus ? { prefer: focus === 'fish' ? OILY_FISH : RED_MEAT } : {}) });
       if (!option) continue;
       const got = macros(option.items, db);
       // Variety first: a later template wins only if it clearly fits better.
@@ -205,6 +247,7 @@ function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], 
     }
     if (meal) {
       meals.push(meal);
+      if (focus && meal.items.some((it) => (focus === 'fish' ? OILY_FISH : RED_MEAT).includes(db.get(it.foodId)?.name ?? ''))) focus = null;
       // What a food brings beyond its share (the fat in salmon) is taken back from the next meals.
       const got = macros(meal.items, db);
       left.p -= got.p; left.c -= got.c; left.f -= got.f;
@@ -214,7 +257,7 @@ function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], 
 }
 
 /** Rebuilds a day around what was already eaten: logged meals stay exactly as they are, the rest share what is left. */
-export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, fatShares?: number[], recent?: string[]): Meal[] {
+export function regenerate(existing: Meal[], day: { p: number; c: number; f: number }, carbShares: number[], times: string[], tags: string[], foods: Food[], prefs: Prefs, seed: number, fatShares?: number[], recent?: string[], focus?: Focus): Meal[] {
   const db = new Map(foods.map((f) => [f.id, f]));
   const kept = existing.filter((m) => m.done || m.snack || m.keep);
   const full = kept.filter((m) => !m.snack);
@@ -223,7 +266,7 @@ export function regenerate(existing: Meal[], day: { p: number; c: number; f: num
   const open = free.slice(-Math.max(0, times.length - full.length));
   if (!open.length) return kept;
   const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
-  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}) });
+  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}), ...(focus ? { focus } : {}) });
   return [...kept, ...fresh].sort((a, b) => a.time.localeCompare(b.time));
 }
 
@@ -232,10 +275,12 @@ export function mealOptions(goal: { p: number; c: number; f: number }, foods: Fo
   const db = new Map(foods.map((f) => [f.id, f]));
   const byName = new Map(foods.filter((f) => f.name !== f.en).map((f) => [f.name, f]));
   const words = banned(prefs);
+  const light = new Set(TEMPLATES.filter((t) => t.light).map((t) => t.name));
   return TEMPLATES.filter((t) => t.cook <= prefs.maxCook && t.name !== current && !(t.heavy && tag === PRE_TAG))
-    .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag))
+    .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag, { slot: tag === PRE_TAG ? 'pre' : 'main' }))
     .filter((m): m is Meal => !!m)
-    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 }; })
+    // before training the light meals come first (coach.ts)
+    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 + (tag === PRE_TAG && !light.has(m.name) ? 400 : 0) }; })
     .sort((a, b) => a.miss - b.miss).slice(0, 6).map((x) => x.m);
 }
 

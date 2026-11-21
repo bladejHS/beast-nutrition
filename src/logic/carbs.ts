@@ -144,10 +144,16 @@ export function mealCarbShares(meals: number, trainingMeal: number | null, deman
   return out.map((x) => x / total);
 }
 
-/** Fat slows digestion, so the meal before training on a demanding day carries half a share; the day's total stays. */
+/**
+ * Fat slows digestion, so it moves away from training (2026-11-21, the coach: ISSN nutrient timing 2017): on a demanding
+ * day the meal before carries 0.4 of a share and the one after 0.7, the others take the rest; the day's total stays.
+ */
 export function mealFatShares(meals: number, trainingMeal: number | null, demand: Demand): number[] {
   const out = Array.from({ length: meals }, () => 1);
-  if (trainingMeal != null && trainingMeal >= 0 && (demand === 'high' || demand === 'moderate')) out[trainingMeal] = 0.5;
+  if (trainingMeal != null && trainingMeal >= 0 && (demand === 'high' || demand === 'moderate')) {
+    out[trainingMeal] = 0.4;
+    if (trainingMeal + 1 < meals) out[trainingMeal + 1] = 0.7;
+  }
   const total = out.reduce((a, b) => a + b, 0);
   return out.map((x) => x / total);
 }

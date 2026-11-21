@@ -1318,3 +1318,6 @@ html, body { background: var(--bg); }
 .pick-row > span { font-weight: 650; min-width: 74px; }
 .pick-row .seg { margin: 0; flex: 1; max-width: 260px; }
 .pick-row .seg button { min-height: 38px; font-size: 12.5px; }
+/* the coach's line on each planned meal (2026-11-21) */
+.mealc .why { margin: 4px 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--violet-bg); color: var(--t2); font-size: 13.5px; line-height: 1.4; }
+.mealc .why b { margin-right: 4px; color: var(--sky); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }

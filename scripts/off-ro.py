@@ -34,8 +34,12 @@ def opt(name, default):
     return a[a.index(name) + 1] if name in a else default
 
 
-COUNTRY = 'en:' + opt('--country', 'romania')
-SKIP = 'en:' + opt('--skip', '') if opt('--skip', '') else None
+# several countries, comma-separated (2026-11-21: the Europe shelf); --skip too
+COUNTRIES = ['en:' + c for c in opt('--country', 'romania').split(',')]
+SKIPS = ['en:' + c for c in opt('--skip', '').split(',') if c]
+COUNTRY = COUNTRIES[0]
+# --since <unix time>: only products edited after it (a big shelf keeps the products still on sale)
+SINCE = int(opt('--since', '0'))
 
 
 def fold(s):
@@ -112,7 +116,7 @@ try:
       print('coloane lipsă (ignorate):', missing, flush=True)
       for line in fh:
           lines += 1
-          if COUNTRY not in line:
+          if not any(c in line for c in COUNTRIES):
               continue
           row = next(csv.reader([line], delimiter='\t', quoting=csv.QUOTE_NONE))
           if len(row) != len(header):
@@ -120,7 +124,10 @@ try:
               continue
           x = {n: row[col[n]] if n in col else '' for n in need}
           tags = x['countries_tags'].split(',')
-          if COUNTRY not in tags or (SKIP and SKIP in tags):
+          if not any(c in tags for c in COUNTRIES) or any(c in tags for c in SKIPS):
+              continue
+          if SINCE and int(x['last_modified_t'] or 0) < SINCE:
+              why['nemodificat recent'] += 1
               continue
           code = x['code'].strip().lstrip('0')
           if not re.fullmatch(r'\d{6,14}', code):
@@ -214,5 +221,5 @@ for key, shard in shards.items():
     save(f'w/{key}.json', shard)
 for key, shard in barcodes.items():
     save(f'b/{key}.json', shard)
-save('meta.json', {'products': len(items), 'chunk': CHUNK, 'source': 'Open Food Facts, ODbL', 'country': COUNTRY[3:]})
+save('meta.json', {'products': len(items), 'chunk': CHUNK, 'source': 'Open Food Facts, ODbL', 'country': ','.join(c[3:] for c in COUNTRIES)})
 print(f'{len(index):,} cuvinte, {len(shards)} fișiere de cuvinte, {len(barcodes)} fișiere de coduri, {sum(len(p["codes"]) for p in items):,} coduri')

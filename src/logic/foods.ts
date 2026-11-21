@@ -180,6 +180,10 @@ const BRANDED = 'branded/2026-10-29';
 const OFF_RO = 'branded/off-ro-2026-11-11';
 /** Sold in Germany and not tagged for Romania: Lidl and Kaufland bring many of them here (same script, --country germany --skip romania). */
 const OFF_DE = 'branded/off-de-2026-11-11';
+/** 2026-11-21, the user: "aș mai mări baza de date la alimente". The rest of Europe that fills Romanian shelves
+ *  (Carrefour and Auchan from France, Mega Image from Belgium, Italy, Poland, Hungary, Bulgaria…), without what the
+ *  Romanian and German shelves already have. */
+const OFF_EU = 'branded/off-eu-2026-11-11';
 const CHUNK = 256;
 /** How many product files one search may open; the brand sort keeps a brand inside few of them. */
 const MAX_CHUNKS = 10;
@@ -199,6 +203,7 @@ const fromPack = (folder: string): Loader => async (path) => {
 const fromSite = fromPack(BRANDED);
 const fromOffRo = fromPack(OFF_RO);
 const fromOffDe = fromPack(OFF_DE);
+const fromOffEu = fromPack(OFF_EU);
 
 const tokens = (q: string) => fold(q).split(/[^a-z0-9]+/).filter((w) => w.length >= 2 && !STOP.has(w));
 
@@ -239,6 +244,8 @@ async function matches(word: string, load: Loader, fuzzy = false): Promise<Set<n
 export const searchUsdaBrands = (query: string, load: Loader = fromSite, limit = 40) => searchPack(query, load, limit);
 /** The products sold in Germany (and not tagged for Romania), from the app's own files. */
 export const searchOffDe = (query: string, load: Loader = fromOffDe, limit = 40) => searchPack(query, load, limit, 'Germania');
+/** The rest of Europe (OFF_EU). */
+export const searchOffEu = (query: string, load: Loader = fromOffEu, limit = 40) => searchPack(query, load, limit, 'Europa');
 /** The products sold in Romania, from the app's own files. */
 export const searchOffRo = (query: string, load: Loader = fromOffRo, limit = 40) => searchPack(query, load, limit);
 
@@ -284,6 +291,7 @@ async function andSearch(words: string[], load: Loader, limit: number, shelf?: s
 export const usdaBarcode = (code: string, load: Loader = fromSite) => packBarcode(code, load);
 export const offRoBarcode = (code: string, load: Loader = fromOffRo) => packBarcode(code, load);
 export const offDeBarcode = (code: string, load: Loader = fromOffDe) => packBarcode(code, load, 'Germania');
+export const offEuBarcode = (code: string, load: Loader = fromOffEu) => packBarcode(code, load, 'Europa');
 
 async function packBarcode(code: string, load: Loader, shelf?: string): Promise<Food | null> {
   const key = code.replace(/^0+/, '');
@@ -332,7 +340,7 @@ export async function searchBranded(query: string): Promise<Food[]> {
   return (json.products ?? []).map(offToFood).filter((f): f is Food => !!f);
 }
 
-/** The user's own products first, then the Romanian and German shelves (offline), then USDA, then Open Food Facts online. */
+/** The user's own products first, then the Romanian, German and European shelves (offline), then USDA, then Open Food Facts online. */
 export async function byBarcode(code: string, mine: Food[] = []): Promise<Food | null> {
   const own = mine.find((f) => f.code && sameCode(f.code, code));
   if (own) return own;
@@ -340,6 +348,8 @@ export async function byBarcode(code: string, mine: Food[] = []): Promise<Food |
   if (ro) return ro;
   const de = await offDeBarcode(code).catch(() => null);
   if (de) return de;
+  const eu = await offEuBarcode(code).catch(() => null);
+  if (eu) return eu;
   const usda = await usdaBarcode(code).catch(() => null);
   if (usda) return usda;
   const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=${FIELDS}`);

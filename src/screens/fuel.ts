@@ -79,7 +79,7 @@ function home() {
     ${tile('water', go('water'), 'Hidratare', `${n1(water / 1000)}<small> / ${n1(waterT / 1000)} L</small>`, water >= waterT ? 'Ținta e atinsă' : `Mai ai ${n1(Math.max(0, waterT - water) / 1000)} L`, water / waterT)}
     ${tile('carbs', go('carbs'), 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[demand] : 'Oprit', s.fuel.cycling ? `${n0(target.c)} g carbohidrați azi` : 'Carbohidrații după antrenament')}
     ${tile('supp', go('supp'), 'Suplimente', s.supps.length ? `${taken}<small> / ${s.supps.length}</small>` : '<small>Niciunul</small>', s.supps.length ? (taken >= s.supps.length ? 'Toate luate azi' : 'luate azi') : 'Ce merită luat', s.supps.length ? taken / s.supps.length : undefined)}
-    ${tile('recovery', go('recovery'), 'Recuperare', sleep == null ? '<small>Fără date</small>' : `${n1(sleep)}<small> h</small>`, sleep == null ? 'Somnul din Inner Beast' : 'somn, media pe 7 nopți', sleep == null ? undefined : sleep / 8)}
+    ${tile('recovery', go('recovery'), 'Recuperare', sleep == null ? '<small>Fără date</small>' : `${n1(sleep)}<small> h</small>`, sleep == null ? 'Somnul din HYBRID FORGE' : 'somn, media pe 7 nopți', sleep == null ? undefined : sleep / 8)}
     ${tile('advanced', 'data-tab="post"', 'Post', w ? esc(w.ratio) : 'Oprit', w ? `${fast?.eating ? 'Fereastra e deschisă' : 'În post'} · ${esc(w.start)}–${esc(w.end)}` : '12:12, 14:10 sau 16:8')}
     ${tile('analytics', go('report'), 'Raport', 'Săptămâna', 'în cifre, din ce ai notat')}
   </div>
@@ -93,7 +93,7 @@ function home() {
     ${listRow('data-tab="minte"', 'Mentalitate', 'Cele 12 principii din Fat Loss Forever')}
     ${listRow('data-dock-tilt', 'Bara de jos: lumină la înclinare', (() => { try { return localStorage.getItem('bn:tilt') === '1'; } catch { return false; } })() ? 'Pornită · atinge ca s-o oprești' : 'Oprită · lumina de pe bară urmează telefonul')}
   </div>
-  ${t.linked ? '' : '<p class="hint more-note">Inner Beast nu a fost deschis pe acest telefon, așa că folosesc săptămâna lui standard de antrenament.</p>'}`;
+  ${t.linked ? '' : '<p class="hint more-note">HYBRID FORGE nu a fost deschis pe acest telefon, așa că folosesc săptămâna standard Hybrid365.</p>'}`;
 }
 
 function recovery() {
@@ -104,17 +104,17 @@ function recovery() {
   const avg = sleepAvg();
   const { days } = fuelWeek(mondayOf(today), t);
   const load = dates.reduce((a, d) => a + dayRating(d, t).rating.load, 0);
-  return `${back()}${head('recovery', 'Recuperare', 'Somnul și încărcarea, din ce ai notat în Inner Beast.')}
+  return `${back()}${head('recovery', 'Recuperare', 'Somnul și încărcarea, din ce ai notat în HYBRID FORGE.')}
   <section class="card"><h2>Somn, ultimele 7 nopți</h2>
-    ${avg == null ? '<p class="hint">Niciun somn notat. Îl notezi pe ecranul Azi din Inner Beast.</p>' : `<p class="big"><b>${n1(avg)}</b> ore în medie</p>
+    ${avg == null ? '<p class="hint">Niciun somn notat. Îl notezi pe ecranul Azi din HYBRID FORGE.</p>' : `<p class="big"><b>${n1(avg)}</b> ore în medie</p>
     <div class="sl">${dates.map((d) => { const h = t.sleep[d]; return `<div><b>${h == null ? '–' : n1(h)}</b><i><u data-bar="sl-${d}" data-axis="y" data-to="${Math.min(1, (h ?? 0) / 10)}"></u></i><span>${esc(dayShort(d))}</span></div>`; }).join('')}</div>`}
-    <p class="hint">Cartea Inner Beast cere minimum 7 ore pe noapte.</p></section>
+    <p class="hint">Pentru refacere țintește minimum 7 ore pe noapte.</p></section>
   <section class="card"><h2>Încărcare</h2>
     <div class="line"><span>Ultimele 7 zile</span><b>${n0(load)}</b></div>
     <div class="line"><span>Zile de recuperare săptămâna asta</span><b>${days.filter((d) => d.demand === 'rest').length}</b></div>
     ${isBreakWeek(s.plan!, today) ? '<div class="line"><span>Dietă</span><b>Săptămână de pauză la mențineri</b></div>' : ''}
     <p class="hint">Încărcarea e o estimare din tipul și durata sesiunilor.</p></section>
-  <a class="ghost wide linkbtn" href="../inner-beast/">Deschide Inner Beast</a>`;
+  <a class="ghost wide linkbtn" href="../inner-beast/">Deschide HYBRID FORGE</a>`;
 }
 
 function genDay(date: string, seed: number): Meal[] {

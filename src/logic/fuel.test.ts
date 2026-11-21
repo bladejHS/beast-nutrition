@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildPlan, type Plan, type Profile } from './calc.ts';
-import { classify, dayPlan, FALLBACK_WEEK, readTraining, type Training } from './training.ts';
+import { classify, dayPlan, readTraining, type Training } from './training.ts';
+import { OLD_WEEK as FALLBACK_WEEK } from './oldweek.testdata.ts';
 import { DEFAULT_FACTORS, mealCarbShares, reconcile, weekFuel } from './carbs.ts';
 import { activate, adherence, advice, assessmentDue, currentRatio, dayInPhase, daysLeft, decide, freshFasting, pause, PHASES, programPct, resume, status, windowFor, type Progressive } from './fasting.ts';
 import { analyseStack, fatMass, microTotals, monthly, movingAverage, sweatLoss, sweatRate, waterTarget, MICROS } from './wellness.ts';

@@ -7,7 +7,8 @@ import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Feed
 import { macros, mealOptions, PRE_TAG, regenerate, snackOptions, generateDay, type Prefs } from './mealplan.ts';
 import { parseBackup } from './store.ts';
 import { intraAdvice, mealTimes, sportRows, timing, waterBefore, type TimingIn } from './timing.ts';
-import { classify, DEFAULT_RULES, DEFAULT_WEIGHTS, FALLBACK_WEEK, readTraining, sessionStatus, weightKey, type Session, type Training } from './training.ts';
+import { classify, DEFAULT_RULES, DEFAULT_WEIGHTS, readTraining, sessionStatus, weightKey, type Session, type Training } from './training.ts';
+import { OLD_WEEK as FALLBACK_WEEK } from './oldweek.testdata.ts';
 
 const man: Profile = { sex: 'm', age: 30, heightCm: 180, weightKg: 100, bf: 20, activity: 1.55, lifts: true };
 const plan = buildPlan(man, { phase: 'cut', startDate: '2026-11-02', ratePct: 0.6, carbShare: 0.7, maintenance: 2800, highDays: [], breaks: null, pace: 'c' });

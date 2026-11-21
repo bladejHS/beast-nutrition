@@ -137,7 +137,7 @@ export function dayDetail(date: string) {
     ${p.planned.length ? `<ul class="sess">${p.planned.map((x) => sessionRow(x, p, date, today, next, off)).join('')}</ul>` : '<p class="hint">Fără antrenament planificat.</p>'}
     ${alts.length ? `<p class="hint">Alegeri: ${esc(alts.join('; '))}.</p>` : ''}
     ${date >= today && p.planned.length ? '<p class="hint">× anulează o sesiune: cererea și zilele rămase se recalculează.</p>' : ''}
-    ${t.linked ? '' : '<p class="warn">Inner Beast nu a fost deschis în acest browser, așa că folosesc săptămâna standard Inner Beast, ca estimare.</p>'}
+    ${t.linked ? '' : '<p class="warn">HYBRID FORGE nu a fost deschis în acest browser, așa că folosesc săptămâna standard Hybrid365, ca estimare.</p>'}
     <div class="line"><span>Planificat</span><b>${CARB_LABEL[planned]}</b></div>
     <div class="line"><span>Realizat</span><b>${hasActual ? `${CARB_LABEL[p.rating.demand]}, încărcare ${p.rating.load}` : date < today ? 'Nimic notat' : 'Încă nu'}</b></div>
     ${date < today ? '<p class="hint">Ce ai făcut nu rescrie ținta unei zile trecute și nu adaugă calorii.</p>' : ''}</section>

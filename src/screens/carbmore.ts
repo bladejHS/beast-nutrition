@@ -6,7 +6,7 @@ import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Rate
 import { addDays, mondayOf } from '../logic/review.ts';
 import { dayMeals, totals } from '../logic/store.ts';
 import { TOLERANCE_LABEL, waterBefore, type Timing, type Tolerance } from '../logic/timing.ts';
-import { CARB_LABEL, DEFAULT_RULES, DEMAND_LABEL, WEIGHT_LABEL, type WeightKey } from '../logic/training.ts';
+import { CARB_LABEL, DEFAULT_RULES, DEFAULT_WEIGHTS, DEMAND_LABEL, HYBRID_KEYS, WEIGHT_LABEL } from '../logic/training.ts';
 import { cv } from './carbs.ts';
 import { weekCheck } from './carbweek.ts';
 import { comma, demandTag, LEVELS, longDay, shortDate } from './parts.ts';
@@ -122,12 +122,12 @@ export function configView() {
   return `<section class="card">${sw('cyc', f.cycling, 'Folosește distribuția în ținta zilnică', `Pornit, caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal și se mută doar carbohidrații. Nu e o metodă Layne Norton, e un calcul al aplicației peste metoda lui.`)}</section>
   <section class="card"><h2>Clasificare</h2><div class="seg"><button data-f="cmode" data-v="auto" class="${f.mode === 'auto' ? 'on' : ''}">Automată</button><button data-f="cmode" data-v="manual" class="${f.mode === 'manual' ? 'on' : ''}">Manuală</button></div>
     <p class="hint">${f.mode === 'auto' ? 'Din antrenamentele reale. O zi o poți schimba oricând din detaliile ei.' : 'Doar clasele alese de tine. O zi neclasificată rămâne pe MODERATE.'}</p>
-    <div class="gap">${sw('csync', f.sync, 'Sincronizare automată cu antrenamentele', 'Oprită, rămâne ultimul plan citit din Inner Beast.')}</div>
+    <div class="gap">${sw('csync', f.sync, 'Sincronizare automată cu antrenamentele', 'Oprită, rămâne ultimul plan citit din HYBRID FORGE.')}</div>
     <h3>Sensibilitate</h3><div class="seg small">${[[0.85, 'Scăzută'], [1, 'Normală'], [1.15, 'Ridicată']].map(([v, l]) => `<button data-f="sens" data-v="${v}" class="${f.sensitivity === v ? 'on' : ''}">${l}</button>`).join('')}</div>
     <div class="grid2"><label class="field">HIGH de la<input type="text" inputmode="numeric" data-limit="high" value="${f.limits.high}"></label><label class="field">MODERATE de la<input type="text" inputmode="numeric" data-limit="moderate" value="${f.limits.moderate}"></label></div>
-    <div class="gap">${sw('cbox', f.boxStrength, 'Box și forță în aceeași zi înseamnă HIGH')}</div></section>
+    <p class="hint">Planul Hybrid365: alergarea threshold, cea lungă și Engine Builder cântăresc mai mult decât alergarea ușoară din Zona 2; ziua de Lower Body e HIGH singură.</p></section>
   <details class="card"><summary><b>Intensități pe tip de sesiune</b></summary><p class="hint">Încărcarea = minute × intensitate. Valorile sunt ale aplicației.</p>
-    <div class="grid2">${(Object.keys(WEIGHT_LABEL) as WeightKey[]).map((k) => `<label class="field">${WEIGHT_LABEL[k]}<input type="text" inputmode="decimal" data-weight="${k}" value="${String(f.weights[k]).replace('.', ',')}"></label>`).join('')}</div></details>
+    <div class="grid2">${HYBRID_KEYS.map((k) => `<label class="field">${WEIGHT_LABEL[k]}<input type="text" inputmode="decimal" data-weight="${k}" value="${String(f.weights[k] ?? DEFAULT_WEIGHTS[k]).replace('.', ',')}"></label>`).join('')}</div></details>
   <section class="card"><h2>Distribuție</h2>${sw('cpre', f.prefuel, 'Pre-fuel: ziua dinaintea unei zile HIGH', 'O zi LOW sau RECOVERY dinaintea unei zile HIGH urcă la jumătatea drumului spre MODERATE, ca sesiunea grea să nu înceapă cu rezerve mici, dar ziua rămâne mai ușoară decât una MODERATE.')}<p class="hint">Cât primește fiecare tip de zi, înainte de reechilibrarea săptămânii. Nicio zi nu iese din intervalul ${comma(band.lo)}–${comma(band.hi)} × carbohidrații din plan.</p>
     <div class="grid2">${LEVELS.map((k) => `<label class="field">${DEMAND_LABEL[k]}<input type="text" inputmode="decimal" data-factor="${k}" value="${String(f.factors[k]).replace('.', ',')}"></label>`).join('')}</div></section>
   <section class="card"><h2>Timing</h2>

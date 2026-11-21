@@ -1,4 +1,4 @@
-/* Reads the real training plan and log of Inner Beast (same origin, so same localStorage) and rates each day.
+/* Reads the real training plan and log of HYBRID FORGE (ex Inner Beast) (same origin, so same localStorage) and rates each day.
    The classes and thresholds below are this app's own rule, not Layne Norton's. */
 
 export type Demand = 'high' | 'moderate' | 'low' | 'rest';
@@ -22,11 +22,11 @@ export interface Training {
 export interface Limits { high: number; moderate: number }
 export const DEFAULT_LIMITS: Limits = { high: 55, moderate: 25 };
 
-export type WeightKey = 'boxHard' | 'boxTech' | 'boxEasy' | 'footwork' | 'legs' | 'amrap' | 'workout' | 'row' | 'run' | 'race' | 'coach' | 'routine' | 'walk';
+export type WeightKey = 'boxHard' | 'boxTech' | 'boxEasy' | 'footwork' | 'legs' | 'amrap' | 'workout' | 'row' | 'run' | 'thr' | 'long' | 'race' | 'coach' | 'routine' | 'walk';
 export type Weights = Record<WeightKey, number>;
 /** Effort per minute by session type. An estimate of this app, not a validated measure of carbohydrate needs. */
-export const DEFAULT_WEIGHTS: Weights = { boxHard: 1, boxTech: 0.8, boxEasy: 0.3, footwork: 0.8, legs: 0.8, amrap: 1, workout: 0.7, row: 0.9, run: 0.6, race: 1, coach: 0.6, routine: 0.2, walk: 0.2 };
-export const WEIGHT_LABEL: Record<WeightKey, string> = { boxHard: 'Sac, pads: putere, mișcare', boxTech: 'Kickbox tehnic, combinații', boxEasy: 'Kickbox lent, distanță', footwork: 'Coardă, scară', legs: 'Intervale picioare', amrap: 'AMRAP', workout: 'Forță, calistenie', row: 'Machine Row', run: 'Alergare', race: 'Simulare de concurs', coach: 'Antrenor cu cameră', routine: 'Mobilitate, stretching', walk: 'Mers' };
+export const DEFAULT_WEIGHTS: Weights = { boxHard: 1, boxTech: 0.8, boxEasy: 0.3, footwork: 0.8, legs: 0.8, amrap: 1, workout: 0.7, row: 0.9, run: 0.6, thr: 1, long: 0.8, race: 1, coach: 0.6, routine: 0.2, walk: 0.2 };
+export const WEIGHT_LABEL: Record<WeightKey, string> = { boxHard: 'Sac, pads: putere, mișcare', boxTech: 'Kickbox tehnic, combinații', boxEasy: 'Kickbox lent, distanță', footwork: 'Coardă, scară', legs: 'Intervale picioare', amrap: 'AMRAP', workout: 'Forță, calistenie', row: 'Ski / Row, Engine Builder', run: 'Alergare ușoară (Zona 2)', thr: 'Threshold, intervale', long: 'Alergare lungă',  race: 'Simulare de concurs', coach: 'Antrenor cu cameră', routine: 'Mobilitate, stretching', walk: 'Mers' };
 
 export interface Rules { limits: Limits; weights: Weights; boxStrength: boolean }
 export const DEFAULT_RULES: Rules = { limits: DEFAULT_LIMITS, weights: DEFAULT_WEIGHTS, boxStrength: true };
@@ -34,24 +34,35 @@ export const DEFAULT_RULES: Rules = { limits: DEFAULT_LIMITS, weights: DEFAULT_W
 /** What each kickboxing block trains, in the words of the plan (Inner Beast's FOCUS_LINE). */
 export const FOCUS_LABEL: Record<string, string> = { jab: 'Jab, Teep & Footwork', move: 'Strikes & Movement', combo: 'Combinations', power: 'Dutch Combinations & Power', slow: 'Slow, Clean Technique', distance: 'Distance Work', pads: 'Thai Pads' };
 
-/** Same weekly plan as Inner Beast, as its bridge publishes it with the default choices (updated 2026-11-08:
- *  kickboxing, the reworked push/pull/legs days, Knee and Kick Armor). Used when Inner Beast has not been opened in
- *  this browser, which is always the case for two separate home-screen apps on an iPhone. */
+/** The same weekly plan as HYBRID FORGE (ex Inner Beast), as its bridge publishes it with the default choices:
+ *  Hybrid365 since 2026-11-20 (run + strength split). Used when HYBRID FORGE has not been opened in this browser,
+ *  which is always the case for two separate home-screen apps on an iPhone. */
 export const FALLBACK_WEEK: Session[][] = [
-  [{ id: 'mon-shadow', name: 'Shadow Kickboxing', kind: 'rounds', min: 26, focus: 'jab' }, { id: 'mon-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 19, focus: 'move' }, { id: 'mon-bw', name: 'Bodyweight Workout', kind: 'amrap', min: 10 }],
-  [{ id: 'tue-stretch', name: 'Dynamic Warm-up', kind: 'routine', min: 10 }, { id: 'tue-cal', name: 'Calisthenics: Chest, Shoulders, Triceps', kind: 'workout', min: 45 }, { id: 'knee-tue', name: 'Knee Armor', kind: 'workout', min: 8 }, { id: 'tue-easy', name: 'Easy Shadow Kickboxing', kind: 'rounds', min: 10, focus: 'slow' }, { id: 'tue-row', name: 'Easy Row', kind: 'run', min: 20 }, { id: 'tue-cool', name: 'Cool-down Stretch', kind: 'routine', min: 5 }],
-  [{ id: 'wed-walk', name: 'Walk (10K Steps)', kind: 'walk', min: 75 }, { id: 'wed-shower', name: 'Cold & Warm Showers', kind: 'shower', min: 10 }, { id: 'wed-med', name: 'Meditation', kind: 'wimhof', min: 12 }],
-  [{ id: 'thu-rope', name: 'Jumping Rope', kind: 'rounds', min: 18, focus: 'rope', alt: { other: 'Agility Ladder' } }, { id: 'thu-shadow', name: 'Shadow Kickboxing', kind: 'rounds', min: 15, focus: 'combo', alt: { other: 'Technical Sparring / Pads' } }, { id: 'thu-power', name: 'Punch-out', kind: 'rounds', min: 11, focus: 'power' }, { id: 'thu-bag', name: 'Heavy Bag Training', kind: 'rounds', min: 23, focus: 'power', alt: { other: 'Machine Row' } }],
-  [{ id: 'fri-stretch', name: 'Dynamic Warm-up', kind: 'routine', min: 10 }, { id: 'fri-cal', name: 'Calisthenics: Back, Biceps, Shoulders', kind: 'workout', min: 54 }, { id: 'kick-fri', name: 'Kick Armor', kind: 'workout', min: 10 }, { id: 'fri-easy', name: 'Easy Shadow Kickboxing', kind: 'rounds', min: 10, focus: 'distance' }],
-  [{ id: 'sun-legs', name: 'Leg Day Warm-up', kind: 'routine', min: 10 }, { id: 'sun-lunges', name: 'Speed, Power & Leg Strength', kind: 'workout', min: 66 }, { id: 'knee-sat', name: 'Knee Armor', kind: 'workout', min: 8 }],
-  [{ id: 'sun-jog', name: 'Easy Row', kind: 'run', min: 20, alt: { other: 'Jogging' } }, { id: 'sat-mob', name: 'Mobility Training', kind: 'routine', min: 30 }, { id: 'sat-med', name: 'Meditation', kind: 'wimhof', min: 10 }, { id: 'sat-breath', name: 'Breathing Exercises', kind: 'breath', min: 10 }],
+  [{ id: 'mon-run', name: 'Easy Run (Zone 2)', kind: 'run', min: 30, alt: { other: 'Easy Row (Zone 2)' } }, { id: 'mon-upper', name: 'Upper Body (Strength)', kind: 'workout', min: 55 }, { id: 'mon-core', name: 'Core (Circuits)', kind: 'workout', min: 9 }],
+  [{ id: 'tue-wu', name: 'Warm Up: Easy Run + Drills', kind: 'run', min: 12 }, { id: 'tue-thr', name: 'Threshold Run', kind: 'run', min: 29 }, { id: 'tue-cd', name: 'Cool Down: Easy Run', kind: 'run', min: 10 }],
+  [{ id: 'wed-upper', name: 'Upper Body (Strength)', kind: 'workout', min: 60 }, { id: 'wed-cond', name: 'Engine Builder (Ski/Row)', kind: 'row', min: 14, alt: { other: 'Hybrid Circuit (10 Min AMRAP)', detail: '8 × 250 m' } }],
+  [{ id: 'thu-run', name: 'Easy Run (Zone 2)', kind: 'run', min: 30, alt: { other: 'Easy Row (Zone 2)' } }, { id: 'thu-lower', name: 'Lower Body (Strength)', kind: 'workout', min: 55 }],
+  [{ id: 'fri-upper', name: 'Upper Body (Strength + Power)', kind: 'workout', min: 65 }, { id: 'fri-emom', name: 'Power Finisher', kind: 'routine', min: 10 }, { id: 'fri-core', name: 'Core (Circuits)', kind: 'workout', min: 9 }],
+  [{ id: 'sat-long', name: 'Long Run (Endurance)', kind: 'run', min: 60, alt: { other: 'Long Row (Endurance)' } }],
+  [{ id: 'sun-walk', name: 'Light Walk / Easy Bike', kind: 'run', min: 8 }, { id: 'sun-flow', name: 'Mobility Flow (Full Body)', kind: 'routine', min: 12 }, { id: 'sun-stretch', name: 'Stretching', kind: 'routine', min: 12 }, { id: 'sun-foam', name: 'Foam Roll / Trigger Point', kind: 'routine', min: 6 }, { id: 'sun-breath', name: 'Deep Breathing / Mindset Reset', kind: 'breath', min: 5 }],
 ];
 
 /** Knee Armor and Kick Armor: a few minutes of isometrics and balance, prehab rather than a strength session. */
 const prehab = (s: { kind: string; id?: string; name?: string }) => s.kind === 'workout' && (/^(knee|kick)-/.test(s.id ?? '') || /\bArmor\b/.test(s.name ?? ''));
 
+/** The keys that the Hybrid365 week uses, in the order the settings show them. */
+export const HYBRID_KEYS: WeightKey[] = ['workout', 'amrap', 'thr', 'long', 'run', 'row', 'walk', 'routine'];
+
 export function weightKey(s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?: string }): WeightKey | null {
   if (prehab(s)) return 'routine';
+  const label = `${s.id ?? ''} ${s.name ?? ''}`;
+  // Hybrid365 (2026-11-20): runs differ a lot in effort, and the Power Finisher is an EMOM, not mobility
+  if (s.kind === 'run') {
+    if (/threshold|-thr\b|interval|tempo/i.test(label)) return 'thr';
+    if (/long run|long row|-long\b/i.test(label)) return 'long';
+    if (/walk|bike/i.test(label)) return 'walk';
+  }
+  if (s.kind === 'routine' && /emom|power finisher/i.test(label)) return 'amrap';
   if (s.kind === 'rounds') {
     if (s.focus === 'slow' || s.focus === 'distance') return 'boxEasy';
     if (s.focus === 'power' || s.focus === 'move' || s.focus === 'pads') return 'boxHard';
@@ -61,12 +72,12 @@ export function weightKey(s: Pick<Session, 'kind' | 'focus'> & { id?: string; na
   return (['amrap', 'workout', 'row', 'run', 'routine', 'walk', 'race', 'coach'] as const).find((k) => k === s.kind) ?? null;
 }
 
-export const weight = (s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?: string }, w: Weights = DEFAULT_WEIGHTS): number => { const k = weightKey(s); return k ? w[k] : 0; };
+export const weight = (s: Pick<Session, 'kind' | 'focus'> & { id?: string; name?: string }, w: Weights = DEFAULT_WEIGHTS): number => { const k = weightKey(s); return k ? w[k] ?? DEFAULT_WEIGHTS[k] : 0; };
 
 /** Hard boxing rounds. Rope, ladder and leg intervals use the same timer but are not boxing. */
 const combat = (s: Pick<Session, 'kind' | 'focus'>) => { const k = weightKey(s); return k === 'boxHard' || k === 'boxTech'; };
 const strength = (s: Pick<Session, 'kind'> & { id?: string; name?: string }) => (s.kind === 'workout' || s.kind === 'amrap') && !prehab(s);
-const legDay = (s: { id?: string; name?: string }) => /leg|picioare|lunge/i.test(`${s.id ?? ''} ${s.name ?? ''}`);
+const legDay = (s: { id?: string; name?: string }) => /\bleg|lower|picioare|lunge/i.test(`${s.id ?? ''} ${s.name ?? ''}`);
 /** Under this load, with nothing at moderate intensity for 10 minutes, the day is recovery (2026-11-15 review). */
 export const RECOVERY_LOAD = 20;
 

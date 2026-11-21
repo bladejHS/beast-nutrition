@@ -176,7 +176,7 @@ function perfHtml() {
     breaks: `<button class="ghost" data-perf="breaks">Programează ${BREAKS.on} + ${BREAKS.off}</button>`,
   };
   return `<section class="card perf"><h2>Planul de performanță</h2>
-    <p class="hint">Ce cer pozițiile de consens din nutriția sportivă pentru o slăbire care păstrează forța și alimentează kickboxing-ul, pe cifrele tale. Auriu: aplicat. Albastru: de făcut. Nimic nu se schimbă până nu apeși.</p>
+    <p class="hint">Ce cer pozițiile de consens din nutriția sportivă pentru o slăbire care păstrează forța și alimentează antrenamentul Hybrid365 (alergare și forță), pe cifrele tale. Auriu: aplicat. Albastru: de făcut. Nimic nu se schimbă până nu apeși.</p>
     ${items.map((x, i) => `<div class="pf ${mark(x.ok)}"><i class="pf-s" aria-hidden="true"></i><b><span>${i + 1}</span>${esc(x.title)}</b><p>${esc(x.body)}</p><small>${esc(x.src)}</small>${x.act ? `<div class="btns">${btn[x.act]}</div>` : ''}</div>`).join('')}
     ${todo > 1 ? '<button class="primary wide" data-perf="all">Aplică tot ce lipsește</button>' : ''}
   </section>`;

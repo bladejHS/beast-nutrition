@@ -84,7 +84,7 @@ export function cycleTabHtml(): string {
     <p class="hint">În fiecare zi: ${n0(days[0]!.p)} g proteine, ${n0(days[0]!.f)} g grăsimi. Media carbohidraților: ${avg} g pe zi. Fiecare săptămână, de luni până duminică, are exact carbohidrații și caloriile planului. ${count.map(([k, n]) => `${n} ${k === 'high' ? 'HIGH' : k === 'moderate' ? 'MODERATE' : k === 'low' ? 'LOWER' : 'RECOVERY'}`).join(', ')}.</p>
   </section>
   <section class="card"><h2>Cum se face corect</h2>
-    <p><b>Carbohidrații după efort.</b> Cele mai multe în zilele cu sesiuni grele (box cu forță, zi de picioare), mai puține în zilele cu efort mediu, cele mai puține în zilele de recuperare (mers, mobilitate). Principiul „fuel for the work required”: mănânci carbohidrați pentru munca pe care o ai de făcut.</p>
+    <p><b>Carbohidrații după efort.</b> Cele mai multe în zilele cu sesiuni grele (Lower Body, Upper + Power, alergarea lungă), mai puține în zilele cu efort mediu, cele mai puține în zilele de recuperare (mers, mobilitate). Principiul „fuel for the work required”: mănânci carbohidrați pentru munca pe care o ai de făcut.</p>
     <p><b>Săptămâna rămâne aceeași.</b> Carb cycling-ul doar mută carbohidrații între zile. Slăbitul vine din deficitul săptămânii, nu din ciclare.</p>
     <p><b>Proteinele la fel, zilnic.</b> Țin masa musculară în deficit; nu se ciclează.</p>
     <p><b>Ziua dinaintea unei zile HIGH urcă puțin</b>, ca să intri în antrenamentul greu cu glicogenul refăcut.</p>

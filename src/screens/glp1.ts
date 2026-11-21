@@ -103,7 +103,7 @@ function setup(g: Glp1): string {
     <p>Doar cu rețetă și cu produsul din farmacie. Aplicația ține evidența și îți spune ce arată cântarul; doza o stabilește medicul.</p>
     <label class="field">Prima injecție<input id="glp-start" type="date" value="${esc(g.start || onOrAfter(today, g.day))}"></label>
     <p class="field">Ziua injecției</p><div class="chips seven">${DAYS.map((d, i) => `<button data-g="day" data-v="${i}" aria-pressed="${g.day === i}">${d.slice(0, 2)}</button>`).join('')}</div>
-    <p class="hint">Miercurea e zi de recuperare în Inner Beast: greața din primele 1–2 zile nu cade pe zilele de sac și de forță.</p>
+    <p class="hint">În Hybrid365 duminica e zi de recuperare: dacă alegi sâmbătă seara, după alergarea lungă, greața din prima zi cade pe ziua liniștită.</p>
     <button class="primary wide" data-g="on" style="margin-top:16px">Pornește cu ${mg(LADDER[0])}</button></section>`;
 }
 
@@ -114,7 +114,7 @@ function ladder(g: Glp1): string {
 
 const RULES = [
   ['Proteina întâi', 'La fiecare masă începi cu proteina. Pofta scade, iar ce lași în farfurie să nu fie proteina.'],
-  ['Forță de 2–3 ori pe săptămână', 'Fără ea, până la 40% din kilogramele pierdute pot fi mușchi. Inner Beast o are deja.'],
+  ['Forță de 2–3 ori pe săptămână', 'Fără ea, până la 40% din kilogramele pierdute pot fi mușchi. HYBRID FORGE o are deja.'],
   ['Mic înainte de antrenament', 'Ceva ușor, cu 60–90 de minute înainte. Mesele mari și grase agravează greața.'],
   ['Apă 3–4 litri și fibre', 'Constipația și deshidratarea sunt cele mai frecvente efecte.'],
   ['Mănânci încet, te oprești la sătul', 'Semnalul de sațietate vine mai devreme. Porțiile mici, de mai multe ori, merg mai bine.'],

@@ -8,9 +8,10 @@ export type Shift = 'morning' | 'afternoon' | 'night' | 'off';
 export interface ShiftDef { wake: string; train: string }
 
 export const SHIFTS: Shift[] = ['morning', 'afternoon', 'night', 'off'];
-export const SHIFT_LABEL: Record<Shift, string> = { morning: 'Dimineață', afternoon: 'După-amiază', night: 'Noapte', off: 'Liber' };
-export const SHIFT_SHORT: Record<Shift, string> = { morning: 'D', afternoon: 'DA', night: 'N', off: 'L' };
-export const SHIFT_HOURS: Record<Shift, string> = { morning: '06–14', afternoon: '14–22', night: '22–06', off: 'zi liberă' };
+// the user, 2026-11-21: schimbul 1 = 06:00–14:00, schimbul 2 = 14:00–22:00, schimbul 3 = 22:00–06:00
+export const SHIFT_LABEL: Record<Shift, string> = { morning: 'Schimbul 1', afternoon: 'Schimbul 2', night: 'Schimbul 3', off: 'Liber' };
+export const SHIFT_SHORT: Record<Shift, string> = { morning: 'S1', afternoon: 'S2', night: 'S3', off: 'L' };
+export const SHIFT_HOURS: Record<Shift, string> = { morning: '06:00–14:00', afternoon: '14:00–22:00', night: '22:00–06:00', off: 'zi liberă' };
 
 /** Starting points; the user changes them under "Orele turelor". */
 export const DEFAULT_SHIFTS: Record<Shift, ShiftDef> = {

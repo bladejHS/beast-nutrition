@@ -1321,3 +1321,6 @@ html, body { background: var(--bg); }
 /* the coach's line on each planned meal (2026-11-21) */
 .mealc .why { margin: 4px 0 10px; padding: 8px 10px; border-radius: 10px; background: var(--violet-bg); color: var(--t2); font-size: 13.5px; line-height: 1.4; }
 .mealc .why b { margin-right: 4px; color: var(--sky); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+
+/* Tura card (2026-11-21): the shift hours under each name */
+.shiftc .seg button small{display:block;font-size:10px;font-weight:500;opacity:.7;margin-top:2px;letter-spacing:0}

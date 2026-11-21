@@ -189,7 +189,7 @@ function shiftCard(date: string, past: boolean) {
       : `Te trezești la ${on.def.wake}, prima masă la ${firstMealAt(on.def.wake)}, antrenament la ${on.def.train}.`
     : 'Fără tură aleasă: mesele pornesc la 08:00 și antrenamentul e la ora obișnuită.';
   return `<section class="card shiftc"><div class="ch"><h2>Tura</h2>${on ? `<span class="hint">${SHIFT_HOURS[on.kind]}</span>` : ''}</div>
-    ${past ? '' : `<div class="seg small">${SHIFTS.map((k) => `<button data-f="shift" data-d="${date}" data-v="${k}" class="${on?.kind === k ? 'on' : ''}" aria-pressed="${on?.kind === k}">${SHIFT_LABEL[k]}</button>`).join('')}</div>`}
+    ${past ? '' : `<div class="seg small">${SHIFTS.map((k) => `<button data-f="shift" data-d="${date}" data-v="${k}" class="${on?.kind === k ? 'on' : ''}" aria-pressed="${on?.kind === k}">${SHIFT_LABEL[k]}${k === 'off' ? '' : `<small>${SHIFT_HOURS[k]}</small>`}</button>`).join('')}</div>`}
     <p class="hint">${line}</p>
     ${past ? '' : `<details class="sub"><summary>Toată săptămâna și orele turelor</summary>
       <p class="hint">Pune tura pe toată săptămâna, apoi marchează zilele libere. Mesele deja generate se refac pe noile ore.</p>

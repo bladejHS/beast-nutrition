@@ -1,5 +1,6 @@
 import type { Plan, Profile } from './calc.ts';
 import { freshGlp1, type Glp1 } from './glp1.ts';
+import type { Rx } from './rx.ts';
 import type { Goal } from './goal.ts';
 import type { LabResult } from './labs.ts';
 import type { CheckIn } from './review.ts';
@@ -98,6 +99,8 @@ export interface State {
   goal: Goal | null;
   /** Blood test results (logic/labs.ts). */
   labs: LabResult[];
+  /** Other prescribed treatments under Peptide (logic/rx.ts). */
+  rx: Rx[];
 }
 
 const KEY = 'beast-nutrition:v2';
@@ -106,7 +109,7 @@ export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, 
   fast: freshFasting(),
   fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [], packs: {},
     mode: 'auto', pattern: [null, null, null, null, null, null, null], sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, shifts: {}, shiftDefs: structuredClone(DEFAULT_SHIFTS), preGap: 0, tolerance: 'normal', intra: true, dextrin: true, dextrinDays: {}, prefuel: true, cancelled: {}, feedback: {} },
-  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '', glp1: freshGlp1(), goal: null, labs: [] });
+  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '', glp1: freshGlp1(), goal: null, labs: [], rx: [] });
 
 /** Saved states from older versions get the fields added since. */
 function withDefaults(d: Partial<State>): State {

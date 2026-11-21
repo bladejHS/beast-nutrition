@@ -11,7 +11,7 @@ import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './screens/fuel.ts';
 import { glp1Action, glp1Html } from './screens/glp1.ts';
-import { peptidesHtml } from './screens/peptides.ts';
+import { peptidesAction, peptidesHtml } from './screens/peptides.ts';
 import { goalAction, goalBind, labsAction, labsBind, stackAction } from './screens/extra.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
@@ -178,7 +178,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (photosAction(el) || cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (photosAction(el) || cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || peptidesAction(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 

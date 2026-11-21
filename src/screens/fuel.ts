@@ -86,7 +86,7 @@ function home() {
   <h2 class="more-sec">Plan și sănătate</h2>
   <div class="list">
     ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
-    ${listRow('data-tab="glp1"', 'Semaglutidă', s.glp1.on ? `${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Wegovy cu medicul: doze, zile, ritm')}
+    ${listRow('data-tab="pept"', 'Peptide', s.glp1.on ? `Semaglutidă ${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Semaglutidă și tratamentele cu medicul')}
     ${listRow('data-mine="list"', 'Alimentele mele', s.custom.length ? `${s.custom.length} salvate` : 'Adaugi tu valorile de pe etichetă')}
     ${listRow('data-f="sub" data-v="labs"', 'Analize', s.labs.length ? `${new Set(s.labs.map((r) => r.marker)).size} analize · ultima pe ${dayLong(s.labs.map((r) => r.date).sort().at(-1)!).toLowerCase()}` : 'HbA1c, feritină, vitamina D, testosteron')}
     ${listRow('data-f="sub" data-v="micro"', 'Micronutrienți', 'Vitamine și minerale din ce ai notat')}

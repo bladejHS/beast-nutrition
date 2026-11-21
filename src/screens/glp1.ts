@@ -126,7 +126,7 @@ export function glp1Html(): string {
   const g = s.glp1;
   const today = ctx.today();
   if (!g.on) {
-    return `${back()}${head('supp', 'Semaglutidă', 'Wegovy, o injecție pe săptămână, cu medicul.')}
+    return `${back('Peptide', 'data-tab="pept"')}${head('supp', 'Semaglutidă', 'Wegovy, o injecție pe săptămână, cu medicul.')}
     ${heroBand('inject')}
     ${setup(g)}
     <section class="card"><h2>Protocolul din prospect</h2>${ladder({ ...g, mg: -1 })}<p class="hint">Fiecare treaptă cel puțin 4 săptămâni. Nu urci dacă slăbești deja 0,5–1% pe săptămână sau dacă greața e puternică.</p></section>
@@ -135,7 +135,7 @@ export function glp1Html(): string {
   const t = dueText(g, today);
   const weeks = weeksAtDose(g);
   const last = g.shots.at(-1);
-  return `${back()}${head('supp', 'Semaglutidă', `${String(g.mg).replace('.', ',')} mg pe săptămână, ${DAYS[g.day]!.toLowerCase()}`)}
+  return `${back('Peptide', 'data-tab="pept"')}${head('supp', 'Semaglutidă', `${String(g.mg).replace('.', ',')} mg pe săptămână, ${DAYS[g.day]!.toLowerCase()}`)}
   ${heroBand('inject')}
   <section class="card glp"><h2>${t.title}</h2><p>${t.text}</p>${t.act ? '<button class="primary wide" data-g="shot">Am făcut injecția</button>' : ''}
     ${last ? `<p class="hint">Ultima: ${esc(shortDay(last.date))}, ${mg(last.mg)}, ${SITES[last.site]}.${last.nausea != null ? ` Greață: ${NAUSEA[last.nausea]!.toLowerCase()}.` : ''}</p>` : ''}</section>

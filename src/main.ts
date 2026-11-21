@@ -11,6 +11,7 @@ import { bodyAction, bodyBind, bodyHtml } from './screens/body.ts';
 import { fastAction, fastBind, fastHtml } from './screens/fast.ts';
 import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './screens/fuel.ts';
 import { glp1Action, glp1Html } from './screens/glp1.ts';
+import { peptidesHtml } from './screens/peptides.ts';
 import { goalAction, goalBind, labsAction, labsBind, stackAction } from './screens/extra.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
@@ -83,7 +84,7 @@ const ICONS = {
 type Main = keyof typeof ICONS;
 // 2026-11-12, fewer places: Azi, the meal plan, the body, and everything else under "Mai mult" (Fuel's tools and the plan)
 const TAB_NAME: Record<Main, string> = { azi: 'Azi', mese: 'Mese', cicl: 'Carb', cook: 'Cookbook', corp: 'Corp', fuel: 'Mai mult' };
-const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' || t === 'glp1' ? 'fuel' : t);
+const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' || t === 'glp1' || t === 'pept' ? 'fuel' : t);
 
 /** The living pictures (heroBand in parts.ts), drawn by the arena engine the opening loads. */
 function mountHero(root: HTMLElement) {
@@ -147,7 +148,7 @@ function render() {
   syncFuel();
   kitchen();
   if (tab === 'cicl' && !s.fuel.cycling) tab = 'azi';
-  const views: Record<Tab, () => string> = { cicl: cycleTabHtml, cook: cookHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html };
+  const views: Record<Tab, () => string> = { cicl: cycleTabHtml, cook: cookHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html, pept: peptidesHtml };
   // the light of the hour on the living pictures: cold in the morning, warm in the evening, darker at night
   const hr = new Date().getHours();
   document.documentElement.dataset.tod = hr >= 5 && hr < 10 ? 'morning' : hr >= 10 && hr < 17 ? 'day' : hr >= 17 && hr < 22 ? 'evening' : 'night';

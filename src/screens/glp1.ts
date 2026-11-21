@@ -1,7 +1,7 @@
 /* Semaglutide (Wegovy): the screen under "Mai mult" and the card on Azi. See logic/glp1.ts for the rules and sources. */
 import { ctx, dayLong, esc, n1 } from '../app.ts';
 import { addDays } from '../logic/review.ts';
-import { doseMl, due, LADDER, nextSite, onOrAfter, SITES, titration, units, vialAge, vialLeft, weeklyRate, weeksAtDose, type Glp1 } from '../logic/glp1.ts';
+import { doseMl, due, glucoseFeedback, glucoseLevel, LADDER, nextSite, onOrAfter, SITES, titration, units, vialAge, vialLeft, weeklyRate, weeksAtDose, type Glp1, type GlucoseWhen } from '../logic/glp1.ts';
 import { back, head, heroBand } from './parts.ts';
 
 const DAYS = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă', 'Duminică'];
@@ -89,6 +89,7 @@ function stepText(g: Glp1, weights: Record<string, number>): string {
   switch (st.kind) {
     case 'wait': return `Mai rămâi ${st.weeks} ${st.weeks === 1 ? 'săptămână' : 'săptămâni'} pe doza asta: fiecare treaptă ține cel puțin 4 săptămâni.`;
     case 'data': return 'Ai 4 săptămâni pe doza asta, dar prea puține cântăriri ca să știm ritmul. Cântărește-te zilnic, dimineața.';
+    case 'lowsugar': return 'Ai avut o glicemie sub 70 mg/dL în ultimele 2 săptămâni: nu urca doza până nu vorbești cu medicul, și nu sări mesele din plan.';
     case 'nausea': return 'Greața a fost deranjantă după ultimele doze: rămâi pe doza asta încă 4 săptămâni. Urci doar când stomacul s-a liniștit.';
     case 'fast': return `Slăbești ${n1(st.rate)}% pe săptămână, prea repede: crește riscul de mușchi pierdut și de calculi biliari. Nu urca doza, mănâncă toată proteina și discută cu medicul dacă doza trebuie scăzută.`;
     case 'hold': return `Slăbești ${n1(st.rate)}% pe săptămână, exact în țintă. Nu e nevoie să urci doza: rămâi aici cât timp ritmul se ține.`;
@@ -130,6 +131,7 @@ export function glp1Html(): string {
     ${heroBand('inject')}
     ${setup(g)}
     <section class="card"><h2>Protocolul din prospect</h2>${ladder({ ...g, mg: -1 })}<p class="hint">Fiecare treaptă cel puțin 4 săptămâni. Nu urci dacă slăbești deja 0,5–1% pe săptămână sau dacă greața e puternică.</p></section>
+    ${glucoseCard(g)}
     ${redFlags()}`;
   }
   const t = dueText(g, today);
@@ -145,6 +147,7 @@ export function glp1Html(): string {
     <p class="coach">${stepText(g, s.weights)}</p>
     <p class="field">Doza prescrisă acum de medic</p><div class="chips five">${LADDER.map((x) => `<button data-g="mg" data-v="${x}" aria-pressed="${g.mg === x}">${String(x).replace('.', ',')}</button>`).join('')}</div>
     <p class="hint">Aplicația doar propune. Schimbi doza aici după ce ai vorbit cu medicul.</p></section>
+  ${glucoseCard(g)}
   ${vialCard(g)}
   <section class="card"><h2>Cum mănânci pe semaglutidă</h2>${RULES.map(([a, b]) => `<div class="line"><span><b>${a}</b><br><small>${b}</small></span></div>`).join('')}</section>
   ${redFlags()}
@@ -153,6 +156,24 @@ export function glp1Html(): string {
     <p class="hint">Între două doze trebuie să treacă cel puțin 3 zile; aplicația ține cont când muți ziua.</p>
     <button class="ghost wide" data-g="off" style="margin-top:14px">Opresc tratamentul</button>
     <p class="hint">La oprire, o parte mare din greutate revine de obicei în primul an. Hotărăște oprirea cu medicul și păstrează obiceiurile din aplicație.</p></section>`;
+}
+
+const WHEN: Record<GlucoseWhen, string> = { fasting: 'Pe nemâncate', post: 'La 2 h după masă', other: 'Altă oră' };
+const LEVEL_TAG = { low: 'warn', ok: 'ok', raised: 'coach', high: 'warn' } as const;
+let gWhen: GlucoseWhen = 'fasting';
+
+/** Blood sugar from the user's meter, with the feedback (logic/glp1.ts glucoseFeedback). */
+function glucoseCard(g: Glp1): string {
+  const list = g.glucose ?? [];
+  const fb = glucoseFeedback(list, ctx.today(), g.start);
+  const cls = fb.level === 'urgent' || fb.level === 'doctor' ? 'warn' : fb.level === 'watch' ? 'coach' : '';
+  return `<section class="card gluc"><h2>Glicemie</h2>
+    <div class="ins ${cls}"><p><b>${esc(fb.title)}</b></p><p>${esc(fb.text)}</p></div>
+    <div class="chips three">${(Object.keys(WHEN) as GlucoseWhen[]).map((k) => `<button data-g="gwhen" data-v="${k}" aria-pressed="${gWhen === k}">${WHEN[k]}</button>`).join('')}</div>
+    <div class="row-in"><input id="glp-gl" type="text" inputmode="numeric" placeholder="mg/dL" aria-label="Glicemia, în mg/dL" style="width:110px"><button class="primary" data-g="gadd">Notează</button></div>
+    <p class="hint">Pe nemâncate: 70–99 normal, 100–125 puțin crescută. La 2 ore după masă: sub 140. Glucometrul e un ghid; diagnosticul îl pune medicul, din laborator.</p>
+    ${list.length ? `<h3>Ultimele</h3>${[...list].reverse().slice(0, 8).map((x) => `<div class="line"><span>${esc(shortDay(x.date))} ${x.time} · ${WHEN[x.when]}</span><b class="${LEVEL_TAG[glucoseLevel(x)]}">${x.mg}</b><button class="link" data-g="gdel" data-v="${x.id}" aria-label="Șterge">×</button></div>`).join('')}` : ''}
+  </section>`;
 }
 
 function redFlags(): string {
@@ -182,6 +203,18 @@ export function glp1Action(el: HTMLElement): boolean {
     return true;
   } else if (a === 'nausea') { const last = g.shots.at(-1); if (last) last.nausea = Number(v); }
   else if (a === 'del') { g.shots.splice(Number(v), 1); }
+  else if (a === 'gwhen') { gWhen = v as GlucoseWhen; }
+  else if (a === 'gadd') {
+    const mgdl = Number((document.querySelector<HTMLInputElement>('#glp-gl')?.value ?? '').replace(',', '.'));
+    if (!(mgdl >= 20 && mgdl <= 600)) { ctx.toast('Scrie glicemia în mg/dL, de exemplu 92.'); return true; }
+    const now = new Date();
+    const x = { id: `g${Date.now().toString(36)}`, date: today, time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, mg: Math.round(mgdl), when: gWhen };
+    (g.glucose ??= []).push(x);
+    ctx.commit(); ctx.render();
+    ctx.toast(`Notat: ${x.mg} mg/dL, ${WHEN[x.when].toLowerCase()}.`, () => { g.glucose = (g.glucose ?? []).filter((y) => y !== x); ctx.commit(); ctx.render(); });
+    return true;
+  }
+  else if (a === 'gdel') { g.glucose = (g.glucose ?? []).filter((x) => x.id !== v); }
   else if (a === 'vial-on') { g.vial = { mg: 10, ml: 2, mixed: today }; }
   else if (a === 'vial-off') { g.vial = null; }
   else if (a === 'vial-save') {

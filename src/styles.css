@@ -1337,3 +1337,13 @@ html, body { background: var(--bg); }
 .dxsw-b.on i::after { transform: translateX(18px); background: #fff; }
 .dxsw-b.on b { color: var(--act-hot); }
 .dxsw .hint { margin: 6px 2px 0; }
+
+/* Semaglutide: blood sugar (2026-11-21) */
+.gluc .ins { margin: 4px 0 12px; padding: 12px 14px; border-radius: 14px; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
+.gluc .ins p { margin: 0 0 4px; }
+.gluc .ins.warn { box-shadow: inset 0 0 0 1px var(--bad); }
+.gluc .ins.coach { box-shadow: inset 0 0 0 1px var(--warn); }
+.gluc .chips.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.gluc .row-in { display: flex; gap: 10px; align-items: center; margin: 10px 0 4px; }
+.gluc .row-in .primary { flex: 1; }
+.gluc .line b.ok { color: var(--ok); } .gluc .line b.warn { color: var(--bad); } .gluc .line b.coach { color: var(--warn); }

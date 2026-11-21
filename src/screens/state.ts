@@ -8,7 +8,7 @@ import { windowFor } from '../logic/fasting.ts';
 import { loadFoods, type Food } from '../logic/foods.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
 import { dayBase, DEFAULT_SHIFTS, firstMealAt, onClock, type Shift, type ShiftDef } from '../logic/shift.ts';
-import { aroundSession, mealTimes, timing, type Timing } from '../logic/timing.ts';
+import { aroundSession, dextrinFor, mealTimes, timing, type Dextrin, type Timing } from '../logic/timing.ts';
 import { readTraining, weight, type DayPlan, type Demand, type Rules, type Session, type Training } from '../logic/training.ts';
 import { trainingFluid } from '../logic/wellness.ts';
 
@@ -114,6 +114,19 @@ export function mealSlots(date: string) {
   const trainingMeal = easy ? null : before;
   const tags = times.map((_, i) => (trainingMeal == null ? '' : i === trainingMeal ? 'Înainte de antrenament' : i === trainingMeal + 1 ? 'După antrenament' : ''));
   return { times, tags, demand, trainingMeal, shares: mealCarbShares(n, trainingMeal, demand), fatShares: mealFatShares(n, trainingMeal, demand), outside: !!w && placed.moved != null && times.some((x) => onClock(x, base) > onClock(w.end, base)) };
+}
+
+/**
+ * The day's intra-workout dextrin and whether it is on. On: its carbs come out of the meals, so meals + drink make the
+ * day's target. A day the user switched keeps their choice; otherwise it is on when the setting is on and the session
+ * really asks for carbs during it. `dx` null: the day has nothing to take it for.
+ */
+export function dextrinDay(date: string): { on: boolean; dx: Dextrin | null; chosen: boolean } {
+  const f = ctx.get().fuel;
+  const dx = dextrinFor(timingFor(date).intra);
+  if (!dx) return { on: false, dx: null, chosen: false };
+  const pick = f.dextrinDays?.[date];
+  return { on: pick ?? (f.dextrin && f.intra && dx.needed), dx, chosen: pick != null };
 }
 
 export function timingFor(date: string): Timing {

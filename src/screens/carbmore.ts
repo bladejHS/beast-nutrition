@@ -10,7 +10,7 @@ import { CARB_LABEL, DEFAULT_RULES, DEFAULT_WEIGHTS, DEMAND_LABEL, HYBRID_KEYS, 
 import { cv } from './carbs.ts';
 import { weekCheck } from './carbweek.ts';
 import { comma, demandTag, LEVELS, longDay, shortDate } from './parts.ts';
-import { fuelWeek, latestKg, mealSlots, timingFor, training, trainingTime } from './state.ts';
+import { dextrinDay, fuelWeek, latestKg, mealSlots, timingFor, training, trainingTime } from './state.ts';
 
 const macroLine = (x: { p: number; c: number; f: number }) => `${nb(x.c, 'g')} carbo, ${nb(x.p, 'g')} proteine, ${nb(x.f, 'g')} grăsimi`;
 
@@ -24,14 +24,26 @@ function preCard(t: Timing, date: string) {
     <div class="btns"><button class="ghost" data-f="topt" data-d="${date}" data-v="pre">Variante de masă</button><button class="ghost" data-f="topt" data-d="${date}" data-v="snack">Variantă ușoară</button></div></li>`;
 }
 
+/** The ON/OFF of the day's intra-workout dextrin (2026-11-21, the user: "un buton de ON/OFF la dextrina intra-workout
+ *  iar macronutrienții să fie stabiliți în funcție de asta"). Empty when the day has no session for it. */
+export function dextrinSwitch(date: string) {
+  const { on, dx } = dextrinDay(date);
+  if (!dx) return '';
+  const c = Math.round(dx.g * 0.95);
+  return `<div class="dxsw"><button class="dxsw-b ${on ? 'on' : ''}" role="switch" aria-checked="${on}" data-f="dxon" data-d="${date}" data-v="${on ? '0' : '1'}"><i aria-hidden="true"></i><span>Dextrină intra-workout${dx.needed ? '' : ' · opțională'}</span><b>${on ? 'ON' : 'OFF'}</b></button>
+    <p class="hint">${on ? `${dx.g} g în ${dx.ml} ml apă = ${c} g carbo. Mesele primesc cu ${c} g carbohidrați mai puțin, ca ziua să rămână pe țintă.` : `Toți carbohidrații zilei sunt în mese. Pornită, ${c} g trec în băutura din antrenament.`}</p></div>`;
+}
+
 /** The cyclic dextrin drink for this session, with one tap to log it in the day (it counts in the day's carbs). */
 export function dextrinHtml(t: Timing, date: string, compact = false) {
   const d = dextrinFor(t.intra);
   if (!d) return '';
+  if (!dextrinDay(date).on) return dextrinSwitch(date);
   const logged = dayMeals(ctx.get(), date).flat().some((e) => e.name.startsWith('Dextrină ciclică'));
   return `<div class="dx${d.needed ? '' : ' opt'}"><p class="dx-k">Dextrină ciclică${d.needed ? '' : ' · opțional'}</p>
     <p class="dx-n"><b>${d.g} g</b><span>în ${d.ml} ml apă · ${Math.round(d.g * 0.95)} g carbo</span></p>
     ${compact ? '' : `<p class="dx-t">${esc(d.text)}</p>`}
+    ${dextrinSwitch(date)}
     ${logged ? '<p class="hint">Notată azi.</p>' : `<button class="ghost wide" data-dx="${d.g}" data-d="${date}">Adaugă ${d.g} g dextrină în ziua ${date === ctx.today() ? 'de azi' : 'aceea'}</button>`}</div>`;
 }
 
@@ -136,7 +148,7 @@ export function configView() {
     <h3>Toleranță digestivă</h3><div class="seg small">${(['low', 'normal', 'high'] as Tolerance[]).map((v) => `<button data-f="tol" data-v="${v}" class="${f.tolerance === v ? 'on' : ''}">${TOLERANCE_LABEL[v]}</button>`).join('')}</div>
     <label class="field">Minute între masă și antrenament (0 = după toleranță)<input type="text" inputmode="numeric" id="pregap" value="${f.preGap}"></label>
     <div class="gap">${sw('cintra', f.intra, 'Arată recomandările din timpul efortului')}</div>
-    <div class="gap">${sw('cdex', f.dextrin, 'Folosesc dextrină ciclică în antrenament: planul de mese îi lasă loc din carbohidrați')}</div>
+    <div class="gap">${sw('cdex', f.dextrin, 'Dextrină ciclică pornită implicit în zilele cu efort lung', 'Fiecare zi are și butonul ei ON/OFF, la Mese și la antrenament. Pornită, mesele primesc mai puțini carbohidrați, cât are băutura.')}</div>
     <button class="ghost wide" data-f="sub" data-v="meals">Preferințe în planul de mese</button></section>
   <section class="card"><h2>Zile schimbate manual</h2>${active.length ? active.map(([d, v]) => `<div class="line"><span class="cap">${esc(longDay(d))}</span><b>${CARB_LABEL[v]}</b><button class="xs" data-f="ov" data-d="${d}" data-v="" aria-label="Revino la automat">×</button></div>`).join('') : '<p class="hint">Niciuna. O zi se schimbă din detaliile ei, în calendar.</p>'}</section>
   <section class="card"><h2>Verificare</h2>

@@ -1,6 +1,5 @@
 import { ctx, dayLong, dayShort, esc, n0, n1, nb, nowMinutes, nowTime, parseNum } from '../app.ts';
 import { foodArt } from './foodart.ts';
-import { dextrinFor } from '../logic/timing.ts';
 import { prepFor } from '../logic/prep.ts';
 import { weekFocus, why } from '../logic/coach.ts';
 import { DEFAULT_SHIFTS, firstMealAt, SHIFT_HOURS, SHIFT_LABEL, SHIFT_SHORT, SHIFTS, type Shift } from '../logic/shift.ts';
@@ -18,9 +17,10 @@ import { toTime, type Tolerance } from '../logic/timing.ts';
 import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../logic/training.ts';
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
+import { dextrinSwitch } from './carbmore.ts';
 import { back, demandTag, head, heroBand, icon, listRow } from './parts.ts';
 import { labsHtml, stackCard } from './extra.ts';
-import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, shiftOn, timingFor, training } from './state.ts';
+import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, shiftOn, timingFor, training, dextrinDay } from './state.ts';
 
 type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery' | 'labs';
 let sub: Sub = 'home';
@@ -127,10 +127,9 @@ function genDay(date: string, seed: number): Meal[] {
 /** The day's target for the meals: with cyclic dextrin in a hard session, its carbs are kept out of the meals
  *  (2026-11-16), so the dextrin and the meals together make the day's carbs. */
 export function mealTarget(date: string) {
-  const s = ctx.get();
   const t = dayFuel(date);
-  const dx = s.fuel.dextrin && s.fuel.intra ? dextrinFor(timingFor(date).intra) : null;
-  if (!dx?.needed) return t;
+  const { on, dx } = dextrinDay(date);
+  if (!on || !dx) return t;
   const c = Math.round(dx.g * 0.95);
   return { ...t, c: Math.max(0, t.c - c), kcal: t.kcal - Math.round(dx.g * 3.8) };
 }
@@ -219,7 +218,8 @@ function meals() {
   const { days: shopDays, list: shop } = shopNow();
   const p = s.fuel.prefs;
   const past = isPast(mealDay);
-  const stale = !past && list.length > 0 && Math.abs(sum.kcal - t.kcal) > t.kcal * 0.06 && list.some((m) => !m.done);
+  const mt = mealTarget(mealDay);
+  const stale = !past && list.length > 0 && Math.abs(sum.kcal - mt.kcal) > mt.kcal * 0.06 && list.some((m) => !m.done);
   const { days } = fuelWeek(monday);
   const dem = (d: string) => days.find((x) => x.date === d)!.demand;
   return `${bk}${head('meals', 'Mese', 'Pe ținta zilei, cu înlocuiri și lista de cumpărături.')}
@@ -230,7 +230,8 @@ function meals() {
   ${shiftCard(mealDay, past)}
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}
   <section class="card"><div class="ch"><h2 class="cap">${esc(dayLong(mealDay))}</h2>${demandTag(dem(mealDay))}</div>
-    <table class="tbl"><thead><tr><td></td><th scope="col">kcal</th><th scope="col">P</th><th scope="col">C</th><th scope="col">G</th></tr></thead><tbody>${tableRow('Țintă', t)}${list.length ? tableRow('Planificat', sum) : ''}${tableRow('Mâncat', ate)}</tbody></table>
+    <table class="tbl"><thead><tr><td></td><th scope="col">kcal</th><th scope="col">P</th><th scope="col">C</th><th scope="col">G</th></tr></thead><tbody>${tableRow('Țintă', t)}${mt.c !== t.c ? tableRow('Din mese', mt) : ''}${list.length ? tableRow('Planificat', sum) : ''}${tableRow('Mâncat', ate)}</tbody></table>
+    ${past ? '' : dextrinSwitch(mealDay)}
     ${past ? '<p class="hint">Zi încheiată, doar pentru citit.</p>' : `<div class="btns"><button class="primary" data-f="gen">Generează ziua</button><button class="ghost" data-f="genw">Toată săptămâna</button></div><p class="hint">Mesele notate în jurnal și cele alese de tine rămân.</p>`}</section>
   ${list.map(mealCard).join('') || '<p class="hint pad">Nicio masă pentru această zi. Generează ziua și ajustezi apoi ce vrei.</p>'}
   <details class="card"><summary><b>Preferințe</b></summary><form id="pf">
@@ -549,6 +550,7 @@ export function fuelAction(el: HTMLElement): boolean {
   if (a === 'tplace') { placeMeal(d['d']!, pending[Number(v)]!); ctx.close(); ctx.toast('Masa e în planul de mese.'); }
   if (a === 'retry') { pantry.failed = false; }
   if (a === 'mday') mealDay = v;
+  if (a === 'dxon') { const date = d['d']!; s.fuel.dextrinDays[date] = v === '1'; replan([date]); ctx.toast(v === '1' ? 'Dextrina e pornită: mesele lasă loc carbohidraților ei.' : 'Dextrina e oprită: carbohidrații ei trec în mese.'); }
   if (a === 'shift' || a === 'shiftw') {
     const date = d['d']!;
     const week = a === 'shift' ? [date] : Array.from({ length: 7 }, (_, i) => addDays(mondayOf(date), i));

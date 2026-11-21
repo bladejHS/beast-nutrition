@@ -9,6 +9,37 @@ import { fuelWeek } from './state.ts';
 
 
 const ORDER: Demand[] = ['high', 'moderate', 'low', 'rest'];
+/** What the user picks from (2026-11-21: "tu doar dă-mi macronutrienții pentru low, medium, high"). */
+const PICK: [Demand, string][] = [['low', 'LOW'], ['moderate', 'MEDIUM'], ['high', 'HIGH']];
+const WEEK = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă', 'Duminică'];
+
+/** Macros of each kind of day this week. A kind the week does not use is shown at the rate the week pays the others. */
+function levels(days: { demand: Demand; c: number; p: number; f: number; planC: number; fixed: boolean }[]) {
+  const f = ctx.get().fuel.factors;
+  const open = days.filter((d) => !d.fixed);
+  const ref = open.length ? open : days;
+  const k = ref.reduce((a, d) => a + d.c, 0) / Math.max(1, ref.reduce((a, d) => a + d.planC * f[d.demand], 0));
+  const p = days[0]!.p, fat = days[0]!.f, planC = Math.round(ref.reduce((a, d) => a + d.planC, 0) / ref.length);
+  return PICK.map(([lv, name]) => {
+    const real = open.filter((d) => d.demand === lv);
+    const c = real.length ? Math.round(real.reduce((a, d) => a + d.c, 0) / real.length) : Math.round(planC * f[lv] * k);
+    return { lv, name, c, p, f: fat, kcal: p * 4 + c * 4 + fat * 9, used: days.some((d) => d.demand === lv) };
+  });
+}
+
+/** Manual from the first pick: the other days start from what the app had given them this week. */
+export function pickDay(i: number, v: Demand) {
+  const s = ctx.get();
+  if (s.fuel.mode !== 'manual') {
+    const { days } = fuelWeek(mondayOf(ctx.today()));
+    s.fuel.pattern = days.map((d) => (d.demand === 'rest' ? 'low' : d.demand));
+    s.fuel.mode = 'manual';
+  }
+  s.fuel.pattern = [...(s.fuel.pattern ?? Array(7).fill(null))];
+  s.fuel.pattern[i] = v;
+  s.fuel.sig = '';
+  ctx.commit(); ctx.render();
+}
 
 /** The columns grow once per visit; later redraws show them standing. */
 let ran = false;
@@ -31,7 +62,20 @@ export function cycleTabHtml(): string {
       <td>${demandTag(d.demand)}${d.prefuel ? '<small class="pre">urcat: mâine e HIGH</small>' : ''}<small>${esc(what(d.date))}</small></td>
       <td class="n"><b>${n0(d.c)}</b><small>g carbo</small></td>
       <td class="n"><b>${n0(d.kcal)}</b><small>kcal</small></td></tr>`).join('');
-  const html = `${head('cycle', 'Carb cycling', 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
+  const s = ctx.get(), manual = s.fuel.mode === 'manual';
+  const week = fuelWeek(mondayOf(today));
+  const lv = levels(week.days);
+  const mine = (i: number) => (manual ? s.fuel.pattern?.[i] ?? 'moderate' : week.days[i]!.demand === 'rest' ? 'low' : week.days[i]!.demand);
+  const html = `${head('cycle', 'Carb cycling', manual ? 'Tu alegi zilele. Aplicația îți dă macronutrienții fiecărui tip de zi.' : 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
+  <section class="card"><h2>Macronutrienți pe tip de zi</h2>
+    <div class="lv-grid">${lv.map((x) => `<div class="lv lv-${x.lv}"><b>${x.name}</b><span class="lv-k">${n0(x.kcal)}<small>kcal</small></span><span class="lv-m"><i class="mp">P ${n0(x.p)} g</i><i class="mc">C ${n0(x.c)} g</i><i class="mf">G ${n0(x.f)} g</i></span>${x.used ? '' : '<small class="lv-n">nefolosită săptămâna asta</small>'}</div>`).join('')}</div>
+    <p class="hint">Proteinele și grăsimile sunt aceleași în fiecare zi; se mută doar carbohidrații. Săptămâna are exact caloriile planului, așa că valorile se reechilibrează după câte zile HIGH, MEDIUM și LOW alegi.</p>
+  </section>
+  <section class="card"><h2>Săptămâna ta</h2>
+    ${WEEK.map((name, i) => `<div class="pick-row"><span>${name}</span><div class="seg small">${PICK.map(([v, l]) => `<button data-cyc="day" data-i="${i}" data-v="${v}" class="${mine(i) === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`).join('')}
+    <p class="hint">${manual ? 'Se aplică în fiecare săptămână, de azi înainte. Zilele trecute rămân cum au fost.' : 'Acum alege aplicația, după antrenamente. Cum atingi o zi, treci pe alegerea ta.'}</p>
+    ${manual ? '<button class="ghost wide" data-cyc="auto">Lasă aplicația să aleagă după antrenamente</button>' : ''}
+  </section>
   <div class="hero-stage" aria-hidden="true"><canvas class="hero-cv" data-kind="carbs" data-j="${esc(JSON.stringify({ c: days.map((d) => d.c), d: days.map((d) => (d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase())), t: days.map((d) => d.demand), now: 0, intro: !ran }))}"></canvas></div>
   <h2 class="more-sec">Următoarele 7 zile</h2>
   <section class="card cyc-card"><table class="cyc-t">
@@ -52,5 +96,9 @@ export function cycleTabHtml(): string {
 }
 
 export function cycleAction(el: HTMLElement): boolean {
-  return el.dataset['cyc'] != null;
+  const a = el.dataset['cyc'];
+  if (a == null) return false;
+  if (a === 'day') pickDay(Number(el.dataset['i']), el.dataset['v'] as Demand);
+  if (a === 'auto') { const s = ctx.get(); s.fuel.mode = 'auto'; s.fuel.sig = ''; ctx.commit(); ctx.render(); }
+  return true;
 }

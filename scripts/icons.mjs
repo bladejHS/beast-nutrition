@@ -40,6 +40,8 @@ console.log('wrote public/icon.svg');
 writeFileSync('public/ui/mark.svg', nx({ px: 60, bg: false, k: 1.1, small: true }));
 console.log('wrote public/ui/mark.svg');
 
-// the wolf stays in the day pictures (hero bands, poster, chapters): the large head on the 680 × 801 canvas the page reserves
-await png(svg({ px: 680, w: 680, h: 801, size: 'large', bg: false, k: 1.15 })).webp({ quality: 90, alphaQuality: 100 }).toFile('public/splash/umbra.webp');
+// the day pictures (hero bands, poster, chapters): on the 680 × 801 canvas the page reserves
+// 2026-11-21, the user: the wolf still showed on the chapter card (deficit / reverse / bulk) and in the day pictures.
+// The same file now holds the NUTRIX mark, centred on the 680 × 801 canvas those places reserve.
+await png(nx({ px: 680, bg: false, k: 0.9, small: false })).extend({ top: 60, bottom: 61, left: 0, right: 0, background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 90, alphaQuality: 100 }).toFile('public/splash/umbra.webp');
 console.log('wrote public/splash/umbra.webp');

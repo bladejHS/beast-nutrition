@@ -32,7 +32,7 @@ export function rules(): Rules {
 
 export function cycleIn(t = training()): CycleIn {
   const s = ctx.get();
-  return { plan: s.plan!, sex: s.profile!.sex, cycling: s.fuel.cycling, factors: s.fuel.factors, rules: rules(), overrides: s.fuel.overrides, snap: s.fuel.snap, today: ctx.today(), training: t, cancelled: s.fuel.cancelled, manual: s.fuel.mode === 'manual', prefuel: s.fuel.prefuel };
+  return { plan: s.plan!, sex: s.profile!.sex, cycling: s.fuel.cycling, factors: s.fuel.factors, rules: rules(), overrides: s.fuel.overrides, snap: s.fuel.snap, today: ctx.today(), training: t, cancelled: s.fuel.cancelled, manual: s.fuel.mode === 'manual', pattern: s.fuel.pattern, prefuel: s.fuel.mode === 'manual' ? false : s.fuel.prefuel };
 }
 
 export function fuelWeek(monday: string, t = training()): { days: FuelDay[]; plans: Record<string, DayPlan> } {

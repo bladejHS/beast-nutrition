@@ -13,16 +13,23 @@ export interface CycleIn {
   cancelled?: Record<string, string[]>;
   /** Only the user's own classes count; a day without one stays neutral. */
   manual?: boolean;
+  /** In manual mode, the class the user gave each weekday (Monday first); a dated override still wins. */
+  pattern?: (Demand | null)[];
   /** An easy day before a HIGH day gets a moderate share. On unless turned off. */
   prefuel?: boolean;
 }
 
 /** The class of one day, by the rules in force. */
 export function rateDay(x: CycleIn, d: string, weekdayIdx: number): DayPlan {
-  const own = x.overrides[d];
+  const picked = x.manual ? x.pattern?.[weekdayIdx] ?? null : null;
+  const own = x.overrides[d] ?? picked ?? undefined;
   const p = dayPlan(x.training, d, x.today, weekdayIdx, own ?? (x.manual ? 'moderate' : undefined), x.rules, x.cancelled?.[d]);
-  return x.manual && !own ? { ...p, rating: { ...p.rating, reason: 'Mod manual: zi neclasificată, rămâne pe MODERATE.' } } : p;
+  if (!x.manual || x.overrides[d]) return p;
+  return { ...p, rating: { ...p.rating, reason: picked ? 'Ales de tine în săptămâna-tip.' : 'Mod manual: zi neclasificată, rămâne pe MODERATE.' } };
 }
+
+/** Monday 0 … Sunday 6. */
+const weekdayOf = (d: string) => (new Date(`${d}T12:00:00`).getDay() + 6) % 7;
 
 export function plansFor(x: CycleIn, monday: string): Record<string, DayPlan> {
   const out: Record<string, DayPlan> = {};
@@ -46,7 +53,7 @@ export function cycleWeek(x: CycleIn, monday: string): { days: FuelDay[]; plans:
   const nextHigh = (d: string) => {
     if (x.prefuel === false) return false;
     const next = addDays(d, 1);
-    return (plans[next] ?? rateDay(x, next, 0)).rating.demand === 'high';
+    return (plans[next] ?? rateDay(x, next, weekdayOf(next))).rating.demand === 'high';
   };
   return { plans, days: weekFuel(x.plan, monday, demand, x.factors, x.sex, locked, nextHigh) };
 }

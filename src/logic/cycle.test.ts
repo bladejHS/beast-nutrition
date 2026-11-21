@@ -273,3 +273,16 @@ test('overrides changing every day, with the plan edited on the way, never give 
     }
   }
 });
+
+test('manual week: the user picks LOW / MEDIUM / HIGH per weekday, the week keeps its carbs (the user, 2026-11-21)', () => {
+  const pattern = ['high', 'low', 'moderate', 'high', 'low', 'moderate', 'low'] as const;
+  const x = input({ manual: true, pattern: [...pattern], prefuel: false });
+  const { days, plans } = cycleWeek(x, MONDAY);
+  assert.deepEqual(days.map((d) => d.demand), [...pattern]);
+  assert.match(plans[MONDAY]!.rating.reason, /Ales de tine/);
+  const hi = days.filter((d) => d.demand === 'high').map((d) => d.c), lo = days.filter((d) => d.demand === 'low').map((d) => d.c);
+  assert.ok(Math.min(...hi) > Math.max(...lo));
+  assert.equal(days.reduce((a, d) => a + d.c, 0), days.reduce((a, d) => a + d.planC, 0));
+  // a dated change still wins over the weekly pick
+  assert.equal(cycleWeek(input({ manual: true, pattern: [...pattern], overrides: { [MONDAY]: 'low' } }), MONDAY).days[0]!.demand, 'low');
+});

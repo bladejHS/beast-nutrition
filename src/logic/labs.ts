@@ -42,6 +42,7 @@ export const LABS: LabDef[] = [
   { id: 'e2', name: 'Estradiol', unit: 'pg/mL', lo: 10, hi: 40, group: 'hormones', why: 'Țesutul gras transformă testosteronul în estradiol; de obicei scade când slăbești.' },
   { id: 'shbg', name: 'SHBG', unit: 'nmol/L', lo: 18, hi: 54, group: 'hormones', why: 'Proteina care leagă testosteronul. Obezitatea și insulina mare o scad.' },
   { id: 'prl', name: 'Prolactină', unit: 'ng/mL', lo: 4, hi: 15.2, group: 'hormones', why: 'Mare, poate scădea testosteronul și libidoul; se ia dimineața, după odihnă.' },
+  { id: 'igf1', name: 'IGF-1', unit: 'ng/mL', lo: 115, hi: 355, group: 'hormones', why: 'Arată cât hormon de creștere produce corpul. De urmărit la orice tratament care îl influențează; intervalul depinde mult de vârstă și de laborator.' },
   { id: 'tsh', name: 'TSH', unit: 'mUI/L', lo: 0.4, hi: 4, group: 'hormones', why: 'Tiroida: un metabolism lent poate avea aici o cauză.' },
   { id: 'alt', name: 'ALT (TGP)', unit: 'U/L', lo: null, hi: 41, group: 'organs', why: 'Ficatul. Ficatul gras îl urcă; scade cu slăbitul.' },
   { id: 'ast', name: 'AST (TGO)', unit: 'U/L', lo: null, hi: 40, group: 'organs', why: 'Ficat și mușchi: crește și după un antrenament greu, așa că nu-l face a doua zi după Leg Day.' },

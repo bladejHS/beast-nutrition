@@ -3,7 +3,7 @@
    the questions and the labs for the endocrinologist. The app proposes no dose for anything here. */
 import { ctx, esc } from '../app.ts';
 import { labDef } from '../logic/labs.ts';
-import { RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
+import { CJC_NAME, CJC_SCHEMA, cjcCycle, cjcNextSite, dosesLast7, isCjc, RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
 import { back, head, listRow } from './parts.ts';
 import { daysLeft } from './glp1.ts';
 import { countdownRing, peptideHero, pepIn, siteMap } from './pepviz.ts';
@@ -30,6 +30,30 @@ function doctorCard(): string {
     <button class="ghost wide" data-f="sub" data-v="labs">Adaugă rezultate în Analize</button></details>`;
 }
 
+const nextSite = (r: Rx) => (isCjc(r) ? cjcNextSite(r) : rxNextSite(r));
+
+/** The CJC-1295 no DAC + Ipamorelin schema the user chose (2026-11-21), with where they are in it. */
+function cjcCard(): string {
+  const s = ctx.get();
+  const today = ctx.today();
+  const r = (s.rx ?? []).find(isCjc);
+  const rows = `<dl class="sch">${CJC_SCHEMA.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
+  let status = '';
+  if (r) {
+    const c = cjcCycle(r.start, today);
+    const n = dosesLast7(r, today);
+    const doneToday = r.log.some((x) => x.date === today);
+    status = c.phase === 'pause'
+      ? `<p><b>Pauză:</b> mai sunt ${c.pauseLeft} zile până la un ciclu nou. Fără injecții acum.</p>`
+      : `<p><b>Săptămâna ${c.week} din 8–12.</b> ${c.phase === 'can-stop' ? 'Poți încheia ciclul oricând de acum; după săptămâna 12 urmează obligatoriu 4 săptămâni pauză.' : ''}</p>
+        <p>${n} ${n === 1 ? 'noapte' : 'nopți'} din ultimele 7 (ținta: 5–7). ${doneToday ? 'Azi e făcută.' : n >= 7 ? 'Azi e zi de pauză.' : 'Diseară, înainte de culcare, pe stomacul gol.'}</p>
+        ${c.week <= 2 ? '<p class="hint">Primele 2 săptămâni rămâi la 100 + 100 mcg. Crești doar după, dacă e tolerat.</p>' : ''}`;
+  }
+  return `<section class="card"><h2>Schema ta: ${esc(CJC_NAME)}</h2>${rows}${status}
+    ${r ? '' : `<button class="primary wide" data-rx="cjc">Pornesc schema de azi</button>`}
+    <p class="hint">Schema e aleasă de tine, nu prescrisă. Nu e un medicament aprobat și e pe lista interzisă WADA. Fă IGF-1 și glicemia (cu HbA1c) înainte și la 6–8 săptămâni: la greutatea ta, poate scădea sensibilitatea la insulină. Ipamorelinul poate crește foamea, ceea ce lucrează contra deficitului.</p></section>`;
+}
+
 function rxForm(r: Rx | null): string {
   return `<section class="card"><h2>${r ? 'Schimbă tratamentul' : 'Tratament prescris'}</h2>
     <p class="hint">Scrii exact ce a scris medicul. Aplicația nu propune doze și nu le ajustează.</p>
@@ -48,8 +72,8 @@ function rxCard(r: Rx): string {
   const last = r.log.at(-1);
   return `<section class="card rx"><div class="ch"><h2>${esc(r.name)}</h2>${r.on ? '' : '<span class="hint">oprit</span>'}</div>
     <p><b>${num(r.amount)} ${r.unit}</b> · ${esc(r.how)}${r.doctor ? ` · ${esc(r.doctor)}` : ''}</p>
-    ${siteMap(RX_SITES, rxNextSite(r), r.log.map((x) => x.site))}
-    <p class="hint">${last ? `Ultima: ${since === 0 ? 'azi' : since === 1 ? 'ieri' : `acum ${since} zile`}, ${last.time}, ${RX_SITES[last.site]}.` : 'Nicio administrare notată.'} Locul următor: ${RX_SITES[rxNextSite(r)]}.</p>
+    ${siteMap(RX_SITES, nextSite(r), r.log.map((x) => x.site))}
+    <p class="hint">${last ? `Ultima: ${since === 0 ? 'azi' : since === 1 ? 'ieri' : `acum ${since} zile`}, ${last.time}, ${RX_SITES[last.site]}.` : 'Nicio administrare notată.'} Locul următor: ${RX_SITES[nextSite(r)]}.</p>
     ${r.on ? `<button class="primary wide" data-rx="dose" data-v="${r.id}">Am făcut-o acum</button>` : ''}
     ${r.log.length ? `<details class="sub"><summary>Istoric (${r.log.length})</summary>${[...r.log].reverse().slice(0, 20).map((x) => `<div class="line"><span>${esc(x.date)} ${x.time} · ${RX_SITES[x.site]}</span><b>${num(x.amount)} ${r.unit}</b><button class="link" data-rx="ddel" data-v="${r.id}" data-d="${x.id}" aria-label="Șterge">×</button></div>`).join('')}</details>` : ''}
     <div class="btns"><button class="ghost" data-rx="edit" data-v="${r.id}">Schimbă după rețetă</button><button class="ghost" data-rx="toggle" data-v="${r.id}">${r.on ? 'Opresc' : 'Repornesc'}</button><button class="ghost" data-rx="del" data-v="${r.id}">Șterge</button></div>
@@ -75,10 +99,11 @@ export function peptidesHtml(): string {
   <div class="list">
     ${listRow('data-f="sub" data-v="labs"', 'Analize', 'Hormoni, glicemie, ficat: urmărite în timp')}
   </div>
+  ${cjcCard()}
   ${list.map((r) => (r.id === editing ? rxForm(r) : rxCard(r))).join('')}
   ${editing === 'new' ? rxForm(null) : !open ? '<button class="ghost wide" data-rx="new">Adaugă un tratament prescris</button>' : ''}
   ${doctorCard()}
-  <p class="hint pad">Doar tratamente prescrise. Doza, pornirea și oprirea le stabilește medicul.</p></div>`;
+  <p class="hint pad">Tratamentele prescrise le notezi exact cum a scris medicul.</p></div>`;
 }
 
 export function peptidesAction(el: HTMLElement): boolean {
@@ -88,7 +113,9 @@ export function peptidesAction(el: HTMLElement): boolean {
   s.rx ??= [];
   const v = el.dataset['v'] ?? '';
   const r = s.rx.find((x) => x.id === v);
-  if (a === 'new') editing = 'new';
+  if (a === 'cjc') {
+    if (!s.rx.some(isCjc)) s.rx.push({ id: `rx${Date.now().toString(36)}`, name: CJC_NAME, amount: 100, unit: 'µg', how: 'fiecare (CJC + Ipamorelin), seara la culcare, pe stomacul gol, 5 zile da / 2 pauză', doctor: '', start: ctx.today(), on: true, log: [] });
+  } else if (a === 'new') editing = 'new';
   else if (a === 'cancel') editing = null;
   else if (a === 'edit') editing = v;
   else if (a === 'toggle' && r) r.on = !r.on;
@@ -109,7 +136,7 @@ export function peptidesAction(el: HTMLElement): boolean {
     editing = null;
   } else if (a === 'dose' && r) {
     const now = new Date();
-    const dose = { id: `d${Date.now().toString(36)}`, date: ctx.today(), time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, amount: r.amount, site: rxNextSite(r) };
+    const dose = { id: `d${Date.now().toString(36)}`, date: ctx.today(), time: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, amount: r.amount, site: nextSite(r) };
     r.log.push(dose);
     ctx.commit(); ctx.render();
     ctx.toast(`Notat: ${num(dose.amount)} ${r.unit}, ${RX_SITES[dose.site]}.`, () => { r.log = r.log.filter((y) => y !== dose); ctx.commit(); ctx.render(); });

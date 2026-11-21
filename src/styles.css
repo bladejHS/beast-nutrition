@@ -1,4 +1,4 @@
-/* BEAST NUTRITION, "Broadcast" (2026-11-08): the design of Inner Beast, in the family's nutrition colour.
+﻿/* BEAST NUTRITION, "Broadcast" (2026-11-08): the design of Inner Beast, in the family's nutrition colour.
    Built for a phone in a gym: sweaty hands, poor light, little time. Fight night on television: a steel-black arena
    under a cold spotlight, electric ice blue for actions and the live state, gold for what is done, white for the
    numbers. One typeface, Saira, in three widths: extra-condensed for titles and numbers, condensed for headings and
@@ -884,7 +884,7 @@ body:has(#sheet.on) .fab { display: none; }
 .road-set b { font-size: 16px; }
 .road-set span { font-size: 13.5px; color: var(--dim, #a9a9a9); }
 
-/* ---------- the tab bar, 2026-11-15 (the user: "fă bara de jos mult mai spectaculoasă") ----------
+/* ---------- the tab bar, 2026-11-15 (the user: "fÄ bara de jos mult mai spectaculoasÄ") ----------
    A glass capsule with a ring of light running round its edge; the open tab rises into a glowing blue orb that
    floats above the bar, ringed by a pulse; changing tab, the orb slides over from the tab you left. */
 @property --tab-a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
@@ -1348,7 +1348,7 @@ html, body { background: var(--bg); }
 .gluc .row-in .primary { flex: 1; }
 .gluc .line b.ok { color: var(--ok); } .gluc .line b.warn { color: var(--bad); } .gluc .line b.coach { color: var(--warn); }
 
-/* ---------- Peptide & Semaglutidă, animated (2026-11-21, the user: "mai animată și mult mai interesantă") ----------
+/* ---------- Peptide & SemaglutidÄ, animated (2026-11-21, the user: "mai animatÄ Č™i mult mai interesantÄ") ----------
    A floating peptide chain with a scan line, the countdown ring to the next injection (ripples on the day), the body with
    the injection sites, the dose ladder as a staircase filling week by week, the weight-loss pace on a dial, the blood
    sugar as a line drawn through its zones, the eating rules as numbered tiles. The entrance plays once, when the screen
@@ -1526,3 +1526,26 @@ html, body { background: var(--bg); }
 @keyframes gc-pop { from { opacity: 0; transform: scale(0); } }
 @keyframes fade-in { from { opacity: 0; } }
 .gc-p, .sm-d { transform-box: fill-box; transform-origin: center; }
+
+/* Peptide: the user's CJC-1295 + Ipamorelin schema, label above value */
+.sch { margin: 0.4rem 0 0.8rem; }
+.sch dt { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; margin-top: 0.7rem; }
+.sch dd { margin: 0.15rem 0 0; font-weight: 600; padding-bottom: 0.6rem; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.sch dd:last-child { border-bottom: 0; }
+
+/* ---- Semaglutide protocol, phases (2026-11-21). Sits on the .perf/.pf item look and only groups them. */
+.proto .ph { margin-top: 18px; }
+.proto .ph:first-of-type { margin-top: 10px; }
+.proto .ph > h3 { display: flex; align-items: center; gap: 9px; margin: 0 0 2px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--line); font: 800 condensed 15px/1 var(--font); letter-spacing: .07em; text-transform: uppercase; color: var(--t2); }
+.proto .ph > h3 small { font: 600 condensed 12.5px/1 var(--font); letter-spacing: .03em; text-transform: none; color: var(--t3); }
+.proto .ph > h3 i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--line); }
+.proto .ph.done > h3 { color: var(--t3); }
+.proto .ph.done > h3 i { background: var(--gold); box-shadow: none; }
+.proto .ph.now > h3 { color: var(--t1); border-bottom-color: var(--act-hot); }
+.proto .ph.now > h3 i { background: var(--act-hot); box-shadow: 0 0 10px 1px rgba(var(--glow), .6); }
+.proto .ph > h3 .tag { margin-left: auto; padding: 3px 8px; border-radius: 999px; background: rgba(var(--glow), .16);
+  font: 800 condensed 11px/1 var(--font); letter-spacing: .09em; text-transform: uppercase; color: var(--act-hot); }
+.proto .ph.next .pf { opacity: .62; }
+.proto .ph .pf:first-of-type { border-top: 0; }
+

@@ -1,7 +1,7 @@
 /* What the screens share: state access, number formats, and the one motion applied after each render. */
 import type { State } from './logic/store.ts';
 
-export type Tab = 'azi' | 'mese' | 'cicl' | 'cook' | 'fuel' | 'corp' | 'plan' | 'post' | 'minte' | 'glp1' | 'pept';
+export type Tab = 'azi' | 'mese' | 'cicl' | 'cook' | 'fuel' | 'corp' | 'plan' | 'post' | 'minte' | 'glp1' | 'pept' | 'cjc';
 
 export const ctx = {
   get: (): State => { throw new Error('not ready'); },

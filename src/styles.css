@@ -1571,3 +1571,9 @@ html, body { background: var(--bg); }
 .trk i.pause { background: repeating-linear-gradient(135deg, var(--s2) 0 4px, var(--s3) 4px 8px); }
 .trk-key { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 .trk-key i { display: inline-block; width: 14px; height: 14px; vertical-align: middle; }
+.trk i.rest { background: var(--s3); box-shadow: inset 0 0 0 1px var(--n5); }
+.trk-off { display: grid; gap: 4px; }
+.trk-off span { color: var(--t2); }
+.trk-auto { padding: 8px 10px; background: rgba(var(--glow), .12); box-shadow: inset 2px 0 0 var(--act-hot); font-size: .9rem; }
+.glp-tile.static { cursor: default; }
+.trk-done { margin-top: 0; }

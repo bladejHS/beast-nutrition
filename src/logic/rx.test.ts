@@ -39,3 +39,50 @@ test('CJC doses in 7 days and abdomen rotation', () => {
   assert.equal(dosesLast7(r as never, '2026-11-17'), 1);
   assert.equal(cjcNextSite(r as never), 0);
 });
+
+import { cycleGrid, cjcAdherence, recentFx, avgSleep, cjcRaise, fastHours, cycleStart } from './rx.ts';
+const mk = (dates: Array<[string, number]>, checks = {}) => ({ id: 'c', name: 'x', amount: dates.at(-1)?.[1] ?? 100, unit: 'µg', how: 'x', doctor: '', start: '2026-11-01', on: true,
+  log: dates.map(([date, amount], i) => ({ id: String(i), date, time: '23:00', amount, site: i % 2 })), checks }) as never as Rx;
+test('CJC tracking: grid, adherence, check-ins, step-up, fasting', () => {
+  const r = mk([['2026-11-01', 100], ['2026-11-02', 100], ['2026-11-04', 100]]);
+  const g = cycleGrid(r, '2026-11-05');
+  assert.equal(g.length, 8);
+  assert.deepEqual(g[0]!.slice(0, 5).map((c) => c.state), ['done', 'done', 'miss', 'done', 'today']);
+  assert.equal(g[0]![5]!.state, 'future');
+  assert.deepEqual(cjcAdherence(r, '2026-11-05'), { done: 3, target: 3, pct: 100 });
+  assert.equal(cycleStart('2026-11-01', '2027-02-25'), '2027-02-21');
+  const c = mk([['2026-11-01', 100]], { '2026-11-02': { sleep: 4, fx: [0] }, '2026-11-03': { sleep: 2, fx: [0, 3] } });
+  assert.equal(recentFx(c, '2026-11-03').get(0), 2);
+  assert.equal(avgSleep(c, '2026-11-03'), 3);
+  assert.equal(cjcRaise(mk([['2026-11-01', 100]]), '2026-11-10').ok, false);
+  const ok = cjcRaise(mk([['2026-11-01', 100], ['2026-11-15', 100]]), '2026-11-15');
+  assert.equal(ok.ok, true); assert.equal(ok.next, 150);
+  assert.equal(cjcRaise(c, '2026-11-15').ok, true); // the effects are older than 7 days by then
+  assert.equal(cjcRaise(c, '2026-11-05').ok, false);
+  assert.equal(cjcRaise(mk([['2026-11-01', 300]]), '2026-12-01').ok, false);
+  assert.equal(fastHours('20:30', '23:00'), 2.5);
+  assert.equal(fastHours('23:30', '00:30'), 1);
+});
+
+import { cjcDay, cjcTonight, cjcNextIn } from './rx.ts';
+test('CJC rules applied automatically: 5/2, cycle pause, step-up, step-back', () => {
+  const five = mk([['2026-11-01', 100], ['2026-11-02', 100], ['2026-11-03', 100], ['2026-11-04', 100], ['2026-11-05', 100]]);
+  assert.equal(cjcDay(five, '2026-11-06'), 'rest');
+  assert.equal(cjcDay(five, '2026-11-07'), 'rest');
+  assert.equal(cjcDay(five, '2026-11-08'), 'on');
+  assert.equal(cjcTonight(five, '2026-11-06').state, 'rest');
+  assert.equal(cjcNextIn(five, '2026-11-06'), 2);
+  assert.equal(cjcNextIn(five, '2026-11-05'), 3);
+  assert.equal(cjcDay(five, '2027-01-25'), 'pause');
+  assert.equal(cjcTonight(five, '2026-11-05').state, 'done');
+  // 14 days at 100, no effects → tonight 150
+  const two = mk([['2026-11-01', 100], ['2026-11-10', 100]]);
+  assert.equal(cjcTonight(two, '2026-11-15').amount, 150);
+  // at 200 the automatic step-up stops
+  assert.equal(cjcTonight(mk([['2026-11-01', 200]]), '2026-11-20').amount, 200);
+  // effects after an increase → back 50, capped
+  const fx = mk([['2026-11-01', 100], ['2026-11-15', 150]], { '2026-11-17': { fx: [1] } });
+  const t = cjcTonight(fx, '2026-11-17');
+  assert.equal(t.amount, 100); assert.equal(t.cap, 100);
+  assert.equal(cjcTonight({ ...fx, amount: 100, cap: 100, checks: {} } as Rx, '2026-12-10').amount, 100);
+});

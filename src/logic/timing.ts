@@ -1,6 +1,7 @@
 /* Nutrient timing around training. The grams never add to the day: they come out of its target, which stays what
    the plan and the carb distribution set. General guidance of this app, not Layne Norton's. In-session carbohydrate
    follows Thomas, Erdman & Burke 2016 (ACSM, Academy of Nutrition and Dietetics, Dietitians of Canada). */
+import { onClock } from './shift.ts';
 import { weight, type Demand, type Session, type Weights } from './training.ts';
 
 export type Tolerance = 'low' | 'normal' | 'high';
@@ -23,14 +24,16 @@ const MEAL_SPACING = 90;
  * A meal that would fall during training moves to just after it, and the meals behind it keep their order.
  * `moved`: the first meal that had to move, null when none did.
  */
-export function aroundSession(times: string[], start: string, minutes: number): { times: string[]; moved: number | null } {
-  const from = toMin(start), to = from + minutes;
+export function aroundSession(times: string[], start: string, minutes: number, base = 0): { times: string[]; moved: number | null } {
+  // `base`: where the day's clock starts (logic/shift.ts dayBase), so a night-shift day keeps its order past midnight
+  const at = (t: string) => onClock(t, base);
+  const from = at(start), to = from + minutes;
   const out = [...times];
   let moved: number | null = null;
   for (let i = 0; i < out.length; i++) {
-    const at = toMin(out[i]!);
-    if (at > from && at < to + 15) { out[i] = toTime(Math.ceil((to + 20) / 5) * 5); moved ??= i; }
-    else if (moved != null && at < toMin(out[i - 1]!) + MEAL_SPACING) out[i] = toTime(toMin(out[i - 1]!) + MEAL_SPACING);
+    const x = at(out[i]!);
+    if (x > from && x < to + 15) { out[i] = toTime(Math.ceil((to + 20 + base) / 5) * 5); moved ??= i; }
+    else if (moved != null && x < at(out[i - 1]!) + MEAL_SPACING) out[i] = toTime(at(out[i - 1]!) + MEAL_SPACING + base);
   }
   return { times: out, moved };
 }
@@ -119,7 +122,7 @@ export function timing(x: TimingIn): Timing {
   let pre: Pre | null = null;
   if (tm >= 0) {
     const s = slot(tm);
-    const gapMin = start - toMin(s.mealTime);
+    const gapMin = (((start - toMin(s.mealTime)) % 1440) + 1440) % 1440;
     const tooClose = gapMin < 45;
     const far = gapMin > 240;
     const snackC = far ? Math.min(30, Math.round(s.c * 0.4)) : 0;
@@ -135,7 +138,7 @@ export function timing(x: TimingIn): Timing {
     // A fast refill only matters when the next hard session is under 8 hours away; over a day the total decides.
     const urgent = x.tomorrow === 'high' && (x.nextGapMin ?? Infinity) < 480;
     post = {
-      ...s, afterMin: toMin(s.mealTime) - end, urgent,
+      ...s, afterMin: (((toMin(s.mealTime) - end) % 1440) + 1440) % 1440, urgent,
       note: urgent ? 'Următoarea sesiune grea e la mai puțin de 8 ore, așa că nu sări această masă: proteină și carbohidrați cât mai curând.' : 'Nu e nevoie de grabă: contează totalul zilei, iar următoarea masă normală e suficientă.',
       litres: x.sweatRate != null ? Math.round((x.sweatRate * minutes) / 6) / 10 : null,
     };

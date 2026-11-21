@@ -7,6 +7,7 @@ import { cycleWeek, freeze, rateDay, targetOn, type CycleIn } from '../logic/cyc
 import { windowFor } from '../logic/fasting.ts';
 import { loadFoods, type Food } from '../logic/foods.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
+import { dayBase, DEFAULT_SHIFTS, firstMealAt, onClock, type Shift, type ShiftDef } from '../logic/shift.ts';
 import { aroundSession, mealTimes, timing, type Timing } from '../logic/timing.ts';
 import { readTraining, weight, type DayPlan, type Demand, type Rules, type Session, type Training } from '../logic/training.ts';
 import { trainingFluid } from '../logic/wellness.ts';
@@ -76,7 +77,14 @@ export function syncFuel() {
 
 export const latestKg = () => { const s = ctx.get(); return Object.entries(s.weights).sort().at(-1)?.[1] ?? s.profile!.weightKg; };
 
-export const trainingTime = (date: string) => { const f = ctx.get().fuel; return f.times[weekday(date)] || f.trainingHour; };
+/** The day's shift and its hours, null on a day without one. */
+export function shiftOn(date: string): { kind: Shift; def: ShiftDef } | null {
+  const f = ctx.get().fuel;
+  const kind = f.shifts?.[date];
+  return kind ? { kind, def: { ...DEFAULT_SHIFTS[kind], ...f.shiftDefs?.[kind] } } : null;
+}
+
+export const trainingTime = (date: string) => { const f = ctx.get().fuel; return shiftOn(date)?.def.train || f.times[weekday(date)] || f.trainingHour; };
 
 /** The sessions of a day that really count: not cancelled, with a duration and an effort. */
 export function sessionsOn(date: string, t = training()): Session[] {
@@ -96,12 +104,16 @@ export function mealSlots(date: string) {
   const demand: Demand = (s.fuel.cycling ? fuelWeek(mondayOf(date)).days.find((d) => d.date === date)?.demand : undefined) ?? dayRating(date).rating.demand;
   const start = trainingTime(date);
   const easy = demand === 'rest' || demand === 'low';
-  const placed = aroundSession(mealTimes(w?.start ?? '08:00', w ? w.eatMin : 720, n), start, easy ? 0 : sessionsOn(date).reduce((a, x) => a + x.min, 0));
+  // a shift sets when eating starts (half an hour after waking); otherwise the fasting window or 08:00
+  const shift = shiftOn(date);
+  const first = shift ? firstMealAt(shift.def.wake) : w?.start ?? '08:00';
+  const base = dayBase(first);
+  const placed = aroundSession(mealTimes(first, w ? w.eatMin : 720, n), start, easy ? 0 : sessionsOn(date).reduce((a, x) => a + x.min, 0), base);
   const times = placed.times;
-  const before = times.reduce((best, x, i) => (x <= start ? i : best), -1);
+  const before = times.reduce((best, x, i) => (onClock(x, base) <= onClock(start, base) ? i : best), -1);
   const trainingMeal = easy ? null : before;
   const tags = times.map((_, i) => (trainingMeal == null ? '' : i === trainingMeal ? 'Înainte de antrenament' : i === trainingMeal + 1 ? 'După antrenament' : ''));
-  return { times, tags, demand, trainingMeal, shares: mealCarbShares(n, trainingMeal, demand), fatShares: mealFatShares(n, trainingMeal, demand), outside: !!w && placed.moved != null && times.some((x) => x > w.end) };
+  return { times, tags, demand, trainingMeal, shares: mealCarbShares(n, trainingMeal, demand), fatShares: mealFatShares(n, trainingMeal, demand), outside: !!w && placed.moved != null && times.some((x) => onClock(x, base) > onClock(w.end, base)) };
 }
 
 export function timingFor(date: string): Timing {

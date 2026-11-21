@@ -3,6 +3,7 @@ import { foodArt } from './foodart.ts';
 import { dextrinFor } from '../logic/timing.ts';
 import { prepFor } from '../logic/prep.ts';
 import { weekFocus, why } from '../logic/coach.ts';
+import { DEFAULT_SHIFTS, firstMealAt, SHIFT_HOURS, SHIFT_LABEL, SHIFT_SHORT, SHIFTS, type Shift } from '../logic/shift.ts';
 import { AVOID, EVIDENCE, MINERALS } from '../data/supplements.ts';
 import { DEFAULT_FACTORS } from '../logic/carbs.ts';
 import { isBreakWeek, weekday } from '../logic/calc.ts';
@@ -19,7 +20,7 @@ import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid,
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
 import { back, demandTag, head, heroBand, icon, listRow } from './parts.ts';
 import { labsHtml, stackCard } from './extra.ts';
-import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, timingFor, training } from './state.ts';
+import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, shiftOn, timingFor, training } from './state.ts';
 
 type Sub = 'home' | 'carbs' | 'meals' | 'water' | 'supp' | 'micro' | 'report' | 'recovery' | 'labs';
 let sub: Sub = 'home';
@@ -177,6 +178,32 @@ export function shopText(days: string[], list: ShopItem[], done: string[]): stri
   return `Lista de cumpărături, ${span}\nCantități crude, la pachetele obișnuite din Lidl, Kaufland și Profi.\n\n${parts.join('\n\n')}`;
 }
 
+/** The day's shift (2026-11-21, the user: "lucrez în 3 schimburi, nu fac mereu antrenamentul seara"). */
+function shiftCard(date: string, past: boolean) {
+  const f = ctx.get().fuel;
+  const on = shiftOn(date);
+  const def = (k: Shift) => ({ ...DEFAULT_SHIFTS[k], ...f.shiftDefs?.[k] });
+  const line = on
+    ? on.kind === 'night'
+      ? `Te trezești la ${on.def.wake}, prima masă la ${firstMealAt(on.def.wake)}, antrenament la ${on.def.train}, înainte de tură. Mesele mari rămân înainte de tură; cele din tură sunt mai ușoare.`
+      : `Te trezești la ${on.def.wake}, prima masă la ${firstMealAt(on.def.wake)}, antrenament la ${on.def.train}.`
+    : 'Fără tură aleasă: mesele pornesc la 08:00 și antrenamentul e la ora obișnuită.';
+  return `<section class="card shiftc"><div class="ch"><h2>Tura</h2>${on ? `<span class="hint">${SHIFT_HOURS[on.kind]}</span>` : ''}</div>
+    ${past ? '' : `<div class="seg small">${SHIFTS.map((k) => `<button data-f="shift" data-d="${date}" data-v="${k}" class="${on?.kind === k ? 'on' : ''}" aria-pressed="${on?.kind === k}">${SHIFT_LABEL[k]}</button>`).join('')}</div>`}
+    <p class="hint">${line}</p>
+    ${past ? '' : `<details class="sub"><summary>Toată săptămâna și orele turelor</summary>
+      <p class="hint">Pune tura pe toată săptămâna, apoi marchează zilele libere. Mesele deja generate se refac pe noile ore.</p>
+      <div class="btns">${SHIFTS.filter((k) => k !== 'off').map((k) => `<button class="ghost" data-f="shiftw" data-d="${date}" data-v="${k}">${SHIFT_LABEL[k]}</button>`).join('')}<button class="ghost" data-f="shiftw" data-d="${date}" data-v="">Fără ture</button></div>
+      <div class="grid2">${SHIFTS.map((k) => `<label class="field">${SHIFT_LABEL[k]}, trezire<input type="time" data-shdef="${k}:wake" value="${def(k).wake}"></label><label class="field">${SHIFT_LABEL[k]}, antrenament<input type="time" data-shdef="${k}:train" value="${def(k).train}"></label>`).join('')}</div></details>`}
+  </section>`;
+}
+
+/** After a shift change: the generated days from today on get meals on the new hours; logged meals stay. */
+function replan(dates: string[]) {
+  const s = ctx.get();
+  for (const d of dates) if (d >= ctx.today() && s.fuel.plan[d]?.length) s.fuel.plan[d] = genDay(d, Date.now() % 97);
+}
+
 function meals() {
   const s = ctx.get();
   const bk = asTab ? '' : back();
@@ -199,7 +226,8 @@ function meals() {
   ${heroBand('cook')}
   <p class="hint raw-note">Toate cantitățile din plan sunt pentru alimente <b>crude</b>, cântărite înainte de gătit: carnea, peștele, orezul, pastele, cartofii și leguminoasele uscate.</p>
   <div class="wknav"><button class="ib" data-f="mwk" data-v="0" aria-label="Săptămâna curentă" ${mealWeek === 0 ? 'disabled' : ''}>‹</button><b>${mealWeek ? 'Săptămâna viitoare' : 'Săptămâna asta'}</b><button class="ib" data-f="mwk" data-v="1" aria-label="Săptămâna viitoare" ${mealWeek === 1 ? 'disabled' : ''}>›</button></div>
-  <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${(s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
+  <div class="dayrow">${dates.map((d) => `<button data-f="mday" data-v="${d}" class="${d === mealDay ? 'on' : ''}" aria-pressed="${d === mealDay}"><span>${esc(dayShort(d))}</span><small>${s.fuel.shifts[d] ? SHIFT_SHORT[s.fuel.shifts[d]!] : (s.fuel.plan[d] ?? []).length || '–'}</small><i class="dot ${dem(d)}"></i></button>`).join('')}</div>
+  ${shiftCard(mealDay, past)}
   ${stale ? `<div class="updated"><p>Ținta zilei s-a schimbat față de planul de mese. Mesele deja notate rămân.</p><button class="ghost wide" data-f="gen">Actualizează mesele rămase</button></div>` : ''}
   <section class="card"><div class="ch"><h2 class="cap">${esc(dayLong(mealDay))}</h2>${demandTag(dem(mealDay))}</div>
     <table class="tbl"><thead><tr><td></td><th scope="col">kcal</th><th scope="col">P</th><th scope="col">C</th><th scope="col">G</th></tr></thead><tbody>${tableRow('Țintă', t)}${list.length ? tableRow('Planificat', sum) : ''}${tableRow('Mâncat', ate)}</tbody></table>
@@ -521,6 +549,15 @@ export function fuelAction(el: HTMLElement): boolean {
   if (a === 'tplace') { placeMeal(d['d']!, pending[Number(v)]!); ctx.close(); ctx.toast('Masa e în planul de mese.'); }
   if (a === 'retry') { pantry.failed = false; }
   if (a === 'mday') mealDay = v;
+  if (a === 'shift' || a === 'shiftw') {
+    const date = d['d']!;
+    const week = a === 'shift' ? [date] : Array.from({ length: 7 }, (_, i) => addDays(mondayOf(date), i));
+    for (const x of week) {
+      if (a === 'shiftw' && v && s.fuel.shifts[x] === 'off') continue;
+      if (!v || (a === 'shift' && s.fuel.shifts[x] === v)) delete s.fuel.shifts[x]; else s.fuel.shifts[x] = v as Shift;
+    }
+    replan(week);
+  }
   if (a === 'mwk') { mealWeek = Number(v); mealDay = ''; }
   if (a === 'gen') { s.fuel.plan[mealDay] = genDay(mealDay, Date.now() % 97); }
   if (a === 'genw') { const m = addDays(mondayOf(ctx.today()), mealWeek * 7); for (let i = 0; i < 7; i++) { const x = addDays(m, i); if (x >= ctx.today()) s.fuel.plan[x] = genDay(x, i * 3 + 1); } }
@@ -600,6 +637,14 @@ export function fuelBind() {
   document.querySelectorAll<HTMLInputElement>('[data-weight]').forEach((i) => i.addEventListener('change', () => { s.fuel.weights[i.dataset['weight'] as keyof typeof s.fuel.weights] = Math.min(1.5, Math.max(0, parseNum(i.value) || 0)); s.fuel.sig = ''; save(); }));
   document.querySelectorAll<HTMLInputElement>('[data-time]').forEach((i) => i.addEventListener('change', () => { s.fuel.times[Number(i.dataset['time'])] = i.value; save(); }));
   on('#thour', (i) => { s.fuel.trainingHour = i.value || '17:00'; save(); });
+  document.querySelectorAll<HTMLInputElement>('[data-shdef]').forEach((i) => i.addEventListener('change', () => {
+    const [k, field] = i.dataset['shdef']!.split(':') as [Shift, 'wake' | 'train'];
+    if (!i.value) return;
+    s.fuel.shiftDefs = { ...structuredClone(DEFAULT_SHIFTS), ...s.fuel.shiftDefs };
+    s.fuel.shiftDefs[k] = { ...DEFAULT_SHIFTS[k], ...s.fuel.shiftDefs[k], [field]: i.value };
+    replan(Object.keys(s.fuel.shifts).filter((x) => s.fuel.shifts[x] === k));
+    save();
+  }));
   document.querySelectorAll<HTMLInputElement>('[data-limit]').forEach((i) => i.addEventListener('change', () => { s.fuel.limits[i.dataset['limit'] as 'high' | 'moderate'] = Math.max(5, parseNum(i.value) || 0); save(); }));
   document.querySelectorAll<HTMLDetailsElement>('details.mealc').forEach((m) => m.addEventListener('toggle', () => { if (m.open) openMeals.add(m.dataset['id']!); else openMeals.delete(m.dataset['id']!); }));
   on('#mlkg', (i) => { s.waterMlKg = parseNum(i.value) || 35; save(); });

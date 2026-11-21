@@ -9,6 +9,7 @@ import { DEFAULT_FACTORS, OLD_FACTORS, type Factors } from './carbs.ts';
 import { DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand, type Limits, type Session, type Weights } from './training.ts';
 import type { Feedback } from './insights.ts';
 import type { Tolerance } from './timing.ts';
+import { DEFAULT_SHIFTS, type Shift, type ShiftDef } from './shift.ts';
 import { MICRO_KEYS, type Drink, type Measure, type MicroKey, type Supp, type SweatTest } from './wellness.ts';
 import type { Meal, Prefs } from './mealplan.ts';
 import type { Report } from './report.ts';
@@ -49,6 +50,10 @@ export interface Fuel {
   boxStrength: boolean;
   /** Monday = 0 → training time, when it differs from `trainingHour`. */
   times: Record<number, string>;
+  /** 2026-11-21, the user works in three shifts: date → that day's shift. A shift beats `times` and `trainingHour`. */
+  shifts: Record<string, Shift>;
+  /** When the user wakes up and trains on each kind of shift. */
+  shiftDefs: Record<Shift, ShiftDef>;
   /** Minutes between the pre-workout meal and training; 0 = from the tolerance. */
   preGap: number;
   tolerance: Tolerance;
@@ -98,7 +103,7 @@ export const MEALS = ['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Masa 5'];
 export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, weights: {}, checkins: {}, custom: [], recent: [],
   fast: freshFasting(),
   fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [], packs: {},
-    mode: 'auto', pattern: [null, null, null, null, null, null, null], sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, preGap: 0, tolerance: 'normal', intra: true, dextrin: true, prefuel: true, cancelled: {}, feedback: {} },
+    mode: 'auto', pattern: [null, null, null, null, null, null, null], sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, shifts: {}, shiftDefs: structuredClone(DEFAULT_SHIFTS), preGap: 0, tolerance: 'normal', intra: true, dextrin: true, prefuel: true, cancelled: {}, feedback: {} },
   drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '', glp1: freshGlp1(), goal: null, labs: [] });
 
 /** Saved states from older versions get the fields added since. */

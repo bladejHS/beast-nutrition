@@ -1,4 +1,5 @@
-/* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
+/* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
+import { dayBase, onClock } from '../logic/shift.ts';
 import { foodArt } from './foodart.ts';
 import { ctx, dayLong, esc, n0, n1, nb, nowMinutes, nowTime } from '../app.ts';
 import type { DayTarget } from '../logic/calc.ts';
@@ -157,7 +158,8 @@ function slotsOf(d: string, t: DayTarget): Slot[] {
     : sl.times.map((time, i) => ({ key: `s${i}`, i, time, title: MEALS[i]!, tag: sl.tags[i] ?? '', goal: goal(i), meal: null, mi: -1 }));
   // Food logged in a slot the day no longer shows must not disappear.
   dayMeals(s, d).forEach((list, i) => { if (list.length && !rows.some((r) => r.i === i)) rows.push({ key: `s${i}`, i, time: sl.times[i] ?? rows.at(-1)?.time ?? '', title: MEALS[i]!, tag: '', goal: null, meal: null, mi: -1 }); });
-  return rows.sort((a, b) => a.time.localeCompare(b.time));
+  const base = sl.times[0] ? dayBase(sl.times[0]) : 0;
+  return rows.sort((a, b) => onClock(a.time, base) - onClock(b.time, base));
 }
 
 const grams = (m: Meal) => m.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ');

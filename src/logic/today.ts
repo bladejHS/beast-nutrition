@@ -1,5 +1,7 @@
 /* What the Azi screen works out: the order of the day and what comes next. No state, so it can be tested alone. */
 
+import { dayBase, onClock } from './shift.ts';
+
 const toMin = (t: string) => { const [h = 0, m = 0] = t.split(':').map(Number); return h * 60 + m; };
 
 export type DayRow =
@@ -11,9 +13,12 @@ export type DayRow =
 export function dayRows(times: string[], session: { start: string; end: string } | null, now: string | null): DayRow[] {
   const rows: DayRow[] = times.map((time, i) => ({ kind: 'meal', i, time }));
   if (session) rows.push({ kind: 'train', time: session.start, end: session.end });
-  rows.sort((a, b) => toMin(a.time) - toMin(b.time));
+  // the day's own clock, so a night-shift day that runs past midnight keeps its order
+  const base = times[0] ? dayBase(times[0]) : 0;
+  const at0 = (t: string) => onClock(t, base);
+  rows.sort((a, b) => at0(a.time) - at0(b.time));
   if (now != null) {
-    const at = rows.findIndex((r) => toMin(r.time) > toMin(now));
+    const at = rows.findIndex((r) => at0(r.time) > at0(now));
     rows.splice(at < 0 ? rows.length : at, 0, { kind: 'now', time: now });
   }
   return rows;

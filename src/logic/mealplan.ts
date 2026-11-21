@@ -1,6 +1,7 @@
 /* Meal generator. Quantities are solved from real food-database values to hit the day's targets;
    templates only say which foods go together. Rules from the user: oats only with whey, sweet and savory
    apart, varied meals. */
+import { dayBase, onClock } from './shift.ts';
 import type { Food } from './foods.ts';
 import { fold } from './foods.ts';
 import { NIGHT_PROTEIN, OILY_FISH, RED_MEAT, SLOW_PROTEIN, slotOf, type Focus, type Slot } from './coach.ts';
@@ -267,7 +268,9 @@ export function regenerate(existing: Meal[], day: { p: number; c: number; f: num
   if (!open.length) return kept;
   const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
   const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}), ...(focus ? { focus } : {}) });
-  return [...kept, ...fresh].sort((a, b) => a.time.localeCompare(b.time));
+  // in the day's order, also when it runs past midnight (night shift, logic/shift.ts)
+  const base = times[0] ? dayBase(times[0]) : 0;
+  return [...kept, ...fresh].sort((a, b) => onClock(a.time, base) - onClock(b.time, base));
 }
 
 /** Other meals for the same slot, sized to the same macros, best fit first. */

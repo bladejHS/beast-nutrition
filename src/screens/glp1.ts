@@ -3,6 +3,7 @@ import { ctx, dayLong, esc, n1 } from '../app.ts';
 import { addDays } from '../logic/review.ts';
 import { doseMl, due, glucoseFeedback, glucoseLevel, LADDER, nextSite, onOrAfter, SITES, titration, units, vialAge, vialLeft, weeklyRate, weeksAtDose, type Glp1, type GlucoseWhen } from '../logic/glp1.ts';
 import { back, head, heroBand } from './parts.ts';
+import { countdownRing, doseStairs, glucoseChart, paceGauge, pepIn, siteMap } from './pepviz.ts';
 
 const DAYS = ['Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă', 'Duminică'];
 const NAUSEA = ['Deloc', 'Ușoară', 'Deranjantă', 'Puternică'];
@@ -60,6 +61,18 @@ function dueText(g: Glp1, today: string): { title: string; text: string; act: bo
   }
 }
 
+const dayGap = (a: string, b: string) => Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 864e5);
+
+/** Days to the next injection for the ring: 0 today, negative when late, null before the first one. */
+export function daysLeft(g: Glp1, today: string): number | null {
+  const d = due(g, today);
+  if (d.kind === 'today') return 0;
+  if (d.kind === 'upcoming') return d.days;
+  if (d.kind === 'skip') return dayGap(today, d.next);
+  if (d.kind === 'late' || d.kind === 'restart') return -1;
+  return null;
+}
+
 /** On Azi: only when there is something to do (inject, a missed dose, the nausea question the day after). */
 export function glp1Card(today: string): string {
   const g = ctx.get().glp1;
@@ -81,7 +94,7 @@ function rateLine(weights: Record<string, number>): string {
   const loss = -r;
   const kg = Object.values(weights).at(-1) ?? 0;
   const tag = loss > 1.5 ? 'warn' : loss >= 0.5 ? 'coach' : 'hint';
-  return `<p class="${tag}">Ritmul din ultimele 2 săptămâni: <b>${loss >= 0 ? '−' : '+'}${n1(Math.abs(loss))}% pe săptămână</b> (aproximativ ${n1(Math.abs(loss) * kg / 100)} kg). Ținta: 0,5–1%.</p>`;
+  return `${paceGauge(loss)}<p class="${tag}">Ritmul din ultimele 2 săptămâni: <b>${loss >= 0 ? '−' : '+'}${n1(Math.abs(loss))}% pe săptămână</b> (aproximativ ${n1(Math.abs(loss) * kg / 100)} kg). Ținta: 0,5–1%.</p>`;
 }
 
 function stepText(g: Glp1, weights: Record<string, number>): string {
@@ -108,11 +121,6 @@ function setup(g: Glp1): string {
     <button class="primary wide" data-g="on" style="margin-top:16px">Pornește cu ${mg(LADDER[0])}</button></section>`;
 }
 
-function ladder(g: Glp1): string {
-  const i = LADDER.findIndex((x) => x === g.mg);
-  return `<ol class="ladder">${LADDER.map((x, k) => `<li class="${k < i ? 'past' : k === i ? 'now' : ''}"><b>${mg(x)}</b><small>${k === LADDER.length - 1 ? 'întreținere' : `săpt. ${k * 4 + 1}–${k * 4 + 4}`}</small></li>`).join('')}</ol>`;
-}
-
 const RULES = [
   ['Proteina întâi', 'La fiecare masă începi cu proteina. Pofta scade, iar ce lași în farfurie să nu fie proteina.'],
   ['Forță de 2–3 ori pe săptămână', 'Fără ea, până la 40% din kilogramele pierdute pot fi mușchi. HYBRID FORGE o are deja.'],
@@ -128,20 +136,23 @@ export function glp1Html(): string {
   const today = ctx.today();
   if (!g.on) {
     return `${back('Peptide', 'data-tab="pept"')}${head('supp', 'Semaglutidă', 'Wegovy, o injecție pe săptămână, cu medicul.')}
+    <div class="pep${pepIn()}">
     ${heroBand('inject')}
     ${setup(g)}
-    <section class="card"><h2>Protocolul din prospect</h2>${ladder({ ...g, mg: -1 })}<p class="hint">Fiecare treaptă cel puțin 4 săptămâni. Nu urci dacă slăbești deja 0,5–1% pe săptămână sau dacă greața e puternică.</p></section>
+    <section class="card"><h2>Protocolul din prospect</h2>${doseStairs(LADDER, -1, 0)}<p class="hint">Fiecare treaptă cel puțin 4 săptămâni. Nu urci dacă slăbești deja 0,5–1% pe săptămână sau dacă greața e puternică.</p></section>
     ${glucoseCard(g)}
-    ${redFlags()}`;
+    ${redFlags()}</div>`;
   }
   const t = dueText(g, today);
   const weeks = weeksAtDose(g);
   const last = g.shots.at(-1);
   return `${back('Peptide', 'data-tab="pept"')}${head('supp', 'Semaglutidă', `${String(g.mg).replace('.', ',')} mg pe săptămână, ${DAYS[g.day]!.toLowerCase()}`)}
+  <div class="pep${pepIn()}">
   ${heroBand('inject')}
-  <section class="card glp"><h2>${t.title}</h2><p>${t.text}</p>${t.act ? '<button class="primary wide" data-g="shot">Am făcut injecția</button>' : ''}
-    ${last ? `<p class="hint">Ultima: ${esc(shortDay(last.date))}, ${mg(last.mg)}, ${SITES[last.site]}.${last.nausea != null ? ` Greață: ${NAUSEA[last.nausea]!.toLowerCase()}.` : ''}</p>` : ''}</section>
-  <section class="card"><h2>Doza</h2>${ladder(g)}
+  <section class="card glp${t.act ? ' hot' : ''}"><div class="glp-top">${countdownRing(daysLeft(g, today), t.title.replace(/&nbsp;/g, ' '))}<div><h2>${t.title}</h2><p>${t.text}</p></div></div>${t.act ? '<button class="primary wide pulse" data-g="shot">Am făcut injecția</button>' : ''}
+    ${last ? `<p class="hint">Ultima: ${esc(shortDay(last.date))}, ${mg(last.mg)}, ${SITES[last.site]}.${last.nausea != null ? ` Greață: ${NAUSEA[last.nausea]!.toLowerCase()}.` : ''}</p>` : ''}
+    ${siteMap(SITES, nextSite(g), g.shots.map((x) => x.site))}</section>
+  <section class="card"><h2>Doza</h2>${doseStairs(LADDER, g.mg, weeks)}
     <p>${weeks ? `${weeks} ${weeks === 1 ? 'săptămână' : 'săptămâni'} pe ${mg(g.mg)}.` : `Încă nicio doză de ${mg(g.mg)}.`}</p>
     ${rateLine(s.weights)}
     <p class="coach">${stepText(g, s.weights)}</p>
@@ -149,13 +160,13 @@ export function glp1Html(): string {
     <p class="hint">Aplicația doar propune. Schimbi doza aici după ce ai vorbit cu medicul.</p></section>
   ${glucoseCard(g)}
   ${vialCard(g)}
-  <section class="card"><h2>Cum mănânci pe semaglutidă</h2>${RULES.map(([a, b]) => `<div class="line"><span><b>${a}</b><br><small>${b}</small></span></div>`).join('')}</section>
+  <section class="card"><h2>Cum mănânci pe semaglutidă</h2><div class="rules">${RULES.map(([a, b], i) => `<div class="rule" style="--i:${i}"><em>${String(i + 1).padStart(2, '0')}</em><b>${a}</b><small>${b}</small></div>`).join('')}</div></section>
   ${redFlags()}
   ${g.shots.length ? `<section class="card"><h2>Istoric</h2>${[...g.shots].reverse().slice(0, 12).map((x, k) => `<div class="line"><span>${esc(shortDay(x.date))} · ${SITES[x.site]}</span><b>${mg(x.mg)}</b><button class="link" data-g="del" data-v="${g.shots.length - 1 - k}" aria-label="Șterge">×</button></div>`).join('')}</section>` : ''}
   <section class="card"><h2>Setări</h2><p class="field">Ziua injecției</p><div class="chips seven">${DAYS.map((d, i) => `<button data-g="day" data-v="${i}" aria-pressed="${g.day === i}">${d.slice(0, 2)}</button>`).join('')}</div>
     <p class="hint">Între două doze trebuie să treacă cel puțin 3 zile; aplicația ține cont când muți ziua.</p>
     <button class="ghost wide" data-g="off" style="margin-top:14px">Opresc tratamentul</button>
-    <p class="hint">La oprire, o parte mare din greutate revine de obicei în primul an. Hotărăște oprirea cu medicul și păstrează obiceiurile din aplicație.</p></section>`;
+    <p class="hint">La oprire, o parte mare din greutate revine de obicei în primul an. Hotărăște oprirea cu medicul și păstrează obiceiurile din aplicație.</p></section></div>`;
 }
 
 const WHEN: Record<GlucoseWhen, string> = { fasting: 'Pe nemâncate', post: 'La 2 h după masă', other: 'Altă oră' };
@@ -169,6 +180,7 @@ function glucoseCard(g: Glp1): string {
   const cls = fb.level === 'urgent' || fb.level === 'doctor' ? 'warn' : fb.level === 'watch' ? 'coach' : '';
   return `<section class="card gluc"><h2>Glicemie</h2>
     <div class="ins ${cls}"><p><b>${esc(fb.title)}</b></p><p>${esc(fb.text)}</p></div>
+    ${glucoseChart(list.slice(-12).map((x) => ({ mg: x.mg, level: glucoseLevel(x) })))}
     <div class="chips three">${(Object.keys(WHEN) as GlucoseWhen[]).map((k) => `<button data-g="gwhen" data-v="${k}" aria-pressed="${gWhen === k}">${WHEN[k]}</button>`).join('')}</div>
     <div class="row-in"><input id="glp-gl" type="text" inputmode="numeric" placeholder="mg/dL" aria-label="Glicemia, în mg/dL" style="width:110px"><button class="primary" data-g="gadd">Notează</button></div>
     <p class="hint">Pe nemâncate: 70–99 normal, 100–125 puțin crescută. La 2 ore după masă: sub 140. Glucometrul e un ghid; diagnosticul îl pune medicul, din laborator.</p>

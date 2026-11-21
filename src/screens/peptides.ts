@@ -4,7 +4,9 @@
 import { ctx, esc } from '../app.ts';
 import { labDef } from '../logic/labs.ts';
 import { RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
-import { back, head, heroBand, listRow } from './parts.ts';
+import { back, head, listRow } from './parts.ts';
+import { daysLeft } from './glp1.ts';
+import { countdownRing, peptideHero, pepIn, siteMap } from './pepviz.ts';
 
 const UNITS: Rx['unit'][] = ['µg', 'mg', 'UI', 'ml'];
 const HORMONES = ['testo', 'testofree', 'lh', 'fsh', 'e2', 'shbg', 'prl', 'hct'];
@@ -46,6 +48,7 @@ function rxCard(r: Rx): string {
   const last = r.log.at(-1);
   return `<section class="card rx"><div class="ch"><h2>${esc(r.name)}</h2>${r.on ? '' : '<span class="hint">oprit</span>'}</div>
     <p><b>${num(r.amount)} ${r.unit}</b> · ${esc(r.how)}${r.doctor ? ` · ${esc(r.doctor)}` : ''}</p>
+    ${siteMap(RX_SITES, rxNextSite(r), r.log.map((x) => x.site))}
     <p class="hint">${last ? `Ultima: ${since === 0 ? 'azi' : since === 1 ? 'ieri' : `acum ${since} zile`}, ${last.time}, ${RX_SITES[last.site]}.` : 'Nicio administrare notată.'} Locul următor: ${RX_SITES[rxNextSite(r)]}.</p>
     ${r.on ? `<button class="primary wide" data-rx="dose" data-v="${r.id}">Am făcut-o acum</button>` : ''}
     ${r.log.length ? `<details class="sub"><summary>Istoric (${r.log.length})</summary>${[...r.log].reverse().slice(0, 20).map((x) => `<div class="line"><span>${esc(x.date)} ${x.time} · ${RX_SITES[x.site]}</span><b>${num(x.amount)} ${r.unit}</b><button class="link" data-rx="ddel" data-v="${r.id}" data-d="${x.id}" aria-label="Șterge">×</button></div>`).join('')}</details>` : ''}
@@ -58,16 +61,24 @@ export function peptidesHtml(): string {
   const g = s.glp1;
   const list = s.rx ?? [];
   const open = editing === 'new' ? null : list.find((r) => r.id === editing) ?? null;
+  const left = g.on ? daysLeft(g, ctx.today()) : null;
+  const active = list.filter((r) => r.on).length + (g.on ? 1 : 0);
+  const doses = g.shots.length + list.reduce((t, r) => t + r.log.length, 0);
   return `${back()}${head('supp', 'Peptide', 'Tratamentele cu peptide, urmărite lângă nutriție și analize.')}
-  ${heroBand('inject')}
+  <div class="pep${pepIn()}">
+  ${peptideHero('Lanțuri scurte de aminoacizi', 'Semnale pe care corpul le înțelege. Le urmărești aici, exact cum le-a prescris medicul.', [[String(active), active === 1 ? 'tratament activ' : 'tratamente active'], [String(doses), 'doze notate'], [left == null ? '–' : left <= 0 ? 'AZI' : `${left}z`, 'până la semaglutidă']])}
+  <button class="glp-tile${left != null && left <= 0 ? ' hot' : ''}" data-tab="glp1">
+    ${countdownRing(left, 'Semaglutidă')}
+    <span class="gt-t"><small>GLP-1 · o dată pe săptămână</small><b>Semaglutidă</b><span>${g.on ? `${num(g.mg)} mg pe săptămână · ${g.shots.length} ${g.shots.length === 1 ? 'injecție notată' : 'injecții notate'}` : 'Wegovy cu medicul: doze, zile, ritm'}</span></span>
+    <i class="gt-go" aria-hidden="true">›</i>
+  </button>
   <div class="list">
-    ${listRow('data-tab="glp1"', 'Semaglutidă', g.on ? `${num(g.mg)} mg pe săptămână · ${g.shots.length} ${g.shots.length === 1 ? 'injecție notată' : 'injecții notate'}` : 'Wegovy cu medicul: doze, zile, ritm')}
     ${listRow('data-f="sub" data-v="labs"', 'Analize', 'Hormoni, glicemie, ficat: urmărite în timp')}
   </div>
   ${list.map((r) => (r.id === editing ? rxForm(r) : rxCard(r))).join('')}
   ${editing === 'new' ? rxForm(null) : !open ? '<button class="ghost wide" data-rx="new">Adaugă un tratament prescris</button>' : ''}
   ${doctorCard()}
-  <p class="hint pad">Doar tratamente prescrise. Doza, pornirea și oprirea le stabilește medicul.</p>`;
+  <p class="hint pad">Doar tratamente prescrise. Doza, pornirea și oprirea le stabilește medicul.</p></div>`;
 }
 
 export function peptidesAction(el: HTMLElement): boolean {

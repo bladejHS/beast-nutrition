@@ -2,6 +2,11 @@
 import { ctx, dayLong, esc, n1 } from '../app.ts';
 import { addDays } from '../logic/review.ts';
 import { doseMl, due, glucoseFeedback, glucoseLevel, LADDER, nextSite, onOrAfter, SITES, titration, units, vialAge, vialLeft, weeklyRate, weeksAtDose, type Glp1, type GlucoseWhen } from '../logic/glp1.ts';
+import { adjustedKg, BASELINE_LABS, labsCovered, phaseOf, phaseStates, PHASE_TITLE, PHASE_WHEN, proteinFloor, rateBandKg, type PhaseId } from '../logic/glp1plan.ts';
+import { goalView } from '../logic/goal.ts';
+import { trendAlpha, weightTrend } from '../logic/trend.ts';
+import { weightKey } from '../logic/training.ts';
+import { dayRating, latestKg, training } from './state.ts';
 import { back, head, heroBand } from './parts.ts';
 import { countdownRing, doseStairs, glucoseChart, paceGauge, pepIn, siteMap } from './pepviz.ts';
 
@@ -121,6 +126,138 @@ function setup(g: Glp1): string {
     <button class="primary wide" data-g="on" style="margin-top:16px">Pornește cu ${mg(LADDER[0])}</button></section>`;
 }
 
+/* ---- The whole protocol, five phases (2026-11-21). Same look as the performance plan in Plan: gold = done,
+   violet = to do, outline = the app cannot tell. Numbers are the user's own; no dose is proposed beyond the
+   label's ladder. See logic/glp1plan.ts for the arithmetic and the sources. */
+
+interface ProtoItem { ok: boolean | null; title: string; body: string; act?: string }
+
+function protoPhases(): { id: PhaseId; items: ProtoItem[] }[] {
+  const s = ctx.get();
+  const g = s.glp1;
+  const p = s.profile!;
+  const plan = s.plan;
+  const today = ctx.today();
+  const kg = latestKg();
+  const adj = adjustedKg(p.heightCm, kg, p.sex);
+  const floor = proteinFloor(adj);
+  const [lo, hi] = rateBandKg(kg);
+  const covered = labsCovered(s.labs);
+  const r = weeklyRate(s.weights);
+  const loss = r == null ? null : -r;
+  const weighs = Object.keys(s.weights).length;
+  const waist = s.measures.some((m) => m.waist);
+  const lifts = strengthDays(today);
+  const micro = s.supps.some((x) => /multivitamin|omega|vitamina d|d3/i.test(`${x.ingredient} ${x.product}`));
+  const protein = plan?.macros.p ?? 0;
+  const reverse = plan?.phase === 'reverse' || plan?.phase === 'maintain';
+
+  return [
+    { id: 'before', items: [
+      { ok: !!g.screened, title: 'Contraindicațiile, trecute cu medicul',
+        body: g.screened
+          ? `Bifat pe ${esc(shortDay(g.screened))}.`
+          : 'Eliminatorii: carcinom medular tiroidian sau MEN2, la tine sau în familie; pancreatită în trecut; boală inflamatorie intestinală; gastropareză; litiază biliară. Bifează după ce medicul le-a trecut cu tine.',
+        act: g.screened ? undefined : 'screen' },
+      { ok: covered >= BASELINE_LABS.length - 2, title: `Analizele de start: ${covered} din ${BASELINE_LABS.length}`,
+        body: 'HbA1c, glicemie, insulină, LDL, HDL, trigliceride, ALT, creatinină, lipază, TSH, vitamina D, B12. Lipaza de la început nu pune diagnostic, dar e valoarea față de care se citește una viitoare. Se repetă la 3 luni.',
+        act: covered >= BASELINE_LABS.length - 2 ? undefined : 'labs' },
+      { ok: weighs >= 7 && waist, title: 'Măsurătorile de referință',
+        body: `${weighs >= 7 ? `${weighs} cântăriri notate` : `Doar ${weighs} ${weighs === 1 ? 'cântărire' : 'cântăriri'}: ritmul se citește din media pe 7 zile, nu dintr-o valoare`}. ${waist ? 'Talia e notată.' : 'Notează și talia: pe un deficit cu forță, ea se mișcă atunci când cântarul stă.'} Plus pozele de progres și încărcările de la care pleci.`,
+        act: weighs >= 7 && waist ? undefined : 'body' },
+      { ok: !!s.goal, title: 'Ținta finală',
+        body: s.goal ? `${String(s.goal.kg).replace('.', ',')} kg. Aplicația oprește deficitul când trendul ajunge acolo.` : 'Fără ea nu există fază de menținere și nici ieșire: slăbitul nu are unde să se termine.',
+        act: s.goal ? undefined : 'body' },
+    ] },
+    { id: 'titrate', items: [
+      { ok: g.on ? weeksAtDose(g) >= 4 : null, title: 'Patru săptămâni pe fiecare treaptă',
+        body: `${LADDER.map((x) => String(x).replace('.', ',')).join(' → ')} mg pe săptămână, minimum 4 săptămâni per treaptă. Doza de 7,2 mg există din martie 2026, dar numai după ce 2,4 mg a fost tolerată cel puțin 4 săptămâni.` },
+      { ok: loss == null ? null : loss >= 0.5, title: 'Cea mai mică doză care dă ritmul',
+        body: `Nu doza maximă tolerată. Ținta e ${n1(lo)}–${n1(hi)} kg pe săptămână la ${n1(kg)} kg${loss != null ? `; acum ${n1(loss * kg / 100)} kg` : ''}. Dacă o treaptă de jos ține ritmul și proteina și forța sunt la locul lor, rămâi acolo.` },
+      { ok: g.shots.slice(-2).every((x) => (x.nausea ?? 0) < 2) && g.shots.length > 0 ? true : null, title: 'Greața, ținută sub control',
+        body: 'Porții mici, mâncat încet, oprit la primul semn de sătul, mai puține grăsimi în ziua injecției. Dacă greața e deranjantă, treapta se repetă, nu se urcă. Regulile de mai jos.' },
+    ] },
+    { id: 'cut', items: [
+      { ok: loss == null ? null : loss >= 0.5 && loss <= 1, title: 'Ritmul, nu viteza',
+        body: `${loss == null ? 'Apare după două săptămâni de cântăriri.' : `Acum ${n1(loss)}% pe săptămână.`} Sub 0,5% e prea lent, peste 1% începi să plătești în masă slabă. Două kilograme pe săptămână nu e un succes, e semnalul că mănânci prea puțin.` },
+      { ok: protein ? protein >= floor : null, title: `Proteina: ${protein ? `${protein} g` : 'de calculat'}, pragul ${floor} g`,
+        body: `La ${n1(kg)} kg și ${p.bf}% grăsime, referința pentru proteină e greutatea ajustată, ${n1(adj)} kg — pe greutatea totală ai supraestima. ${protein ? protein >= floor ? 'Planul tău e peste prag.' : `Planul dă ${protein} g: sub prag pentru un deficit ținut cu GLP-1.` : ''} Proteina se mănâncă prima la fiecare masă: când apetitul e suprimat, ce rămâne în farfurie nu trebuie să fie carnea.` },
+      { ok: lifts == null ? null : lifts >= 2, title: `Forță de 3 ori pe săptămână${lifts == null ? '' : `: ${lifts} în ultimele 7 zile`}`,
+        body: 'Nu e „exercițiu", e tratamentul care decide dacă pierzi grăsime sau mușchi. Fără el intri în statistica de 25–40% masă slabă — care, atenție, e aceeași la dietă simplă fără haltere: nu e un efect al medicamentului.' },
+      { ok: null, title: 'Indicatorul e forța, nu cântarul',
+        body: 'Dacă încărcările din HYBRID FORGE se țin sau cresc în timp ce greutatea scade, pierzi grăsime. Dacă forța scade două săptămâni la rând, protocolul e rupt: mănânci prea puțin, prea puțină proteină, sau cobori prea repede. Nu se urcă doza atunci.' },
+      { ok: null, title: 'Volumul nu crește în deficit',
+        body: 'Instinctul e să adaugi serii și cardio. Greșit: recuperarea e deja compromisă. Încărcările rămân mari, volumul moderat, iar cardio-ul stă pe mers în pantă, bicicletă și vâslit — nu alergare, pentru genunchi.' },
+      { ok: micro, title: 'Micronutrienți și fibre',
+        body: 'Cu aportul tăiat de medicament, carențele devin reale. Multivitamine, vitamina D, omega-3, fibre din legume la fiecare masă, magneziu pentru constipație.',
+        act: micro ? undefined : 'supp' },
+    ] },
+    { id: 'hold', items: [
+      { ok: null, title: 'Șase până la douăsprezece luni la ținta atinsă',
+        body: 'Nu oprești medicamentul când ajungi la greutatea-țintă. Greutatea nouă trebuie să devină normalul fiziologic, nu un punct prin care ai trecut. Aici se câștigă sau se pierde tot.' },
+      { ok: null, title: 'Testul obiceiurilor',
+        body: `Dacă ${floor} g de proteină și trei antrenamente pe săptămână încă îți cer voință, nu ești de partea cealaltă a podului — ești pe el. Obiceiurile automate sunt condiția de ieșire, nu numărul de pe cântar.` },
+    ] },
+    { id: 'exit', items: [
+      { ok: reverse ? true : null, title: 'Caloriile urcă ÎNAINTE să coboare doza',
+        body: `Ordinea contează și e contraintuitivă. Reverse diet până la mențineri, apoi se scade doza. Invers — doza jos peste un deficit — înseamnă apetit revenit peste calorii mici: exact rețeta de rebound.${reverse ? ' Ești deja în faza asta.' : ''}`,
+        act: reverse ? undefined : 'plan' },
+      { ok: null, title: 'Coborârea, în trepte de luni',
+        body: 'Nu se întrerupe brusc. Trepte lungi, cu greutatea și apetitul urmărite la fiecare pas. Peste 2 săptămâni fără doză, medicul decide de la ce treaptă se repornește.' },
+      { ok: null, title: 'Ce te așteaptă dacă oprești fără asta',
+        body: 'Jumătate dintre oameni renunță în primul an, 70% în doi. După oprire se recâștigă în medie două treimi din ce s-a pierdut. Obezitatea e boală cronică: a rămâne pe tratament nu e un eșec, e o opțiune pe care o discuți cu medicul.' },
+      { ok: null, title: 'Forța nu se oprește niciodată',
+        body: 'Nici în menținere, nici după. E singura parte din protocol care nu are dată de final.' },
+    ] },
+  ];
+}
+
+/** Strength sessions done in the last 7 days, or null when the training week cannot be read. */
+function strengthDays(today: string): number | null {
+  try {
+    const t = training();
+    let n = 0;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(today, -i);
+      const dp = dayRating(d, t);
+      const hard = dp.done.some((x) => { const k = weightKey(x); return k === 'workout' || k === 'amrap'; });
+      if (hard) n++;
+    }
+    return n;
+  } catch { return null; }
+}
+
+function protocolHtml(): string {
+  const g = ctx.get().glp1;
+  const s = ctx.get();
+  const today = ctx.today();
+  let atGoal = false;
+  if (s.goal && s.plan) {
+    const st = goalView(s.goal, weightTrend(s.weights, trendAlpha(s.plan.phase)), s.plan.phase, today).state;
+    atGoal = st === 'reached' || st === 'stop' || st === 'band';
+  }
+  const now = phaseOf(g, atGoal);
+  const states = phaseStates(now);
+  const mark = (ok: boolean | null) => (ok == null ? 'na' : ok ? 'ok' : 'todo');
+  const btn: Record<string, string> = {
+    screen: '<button class="ghost" data-g="screen">Medicul le-a trecut cu mine</button>',
+    labs: '<button class="ghost" data-tab="fuel" data-sub="labs">Deschide Analize</button>',
+    body: '<button class="ghost" data-tab="corp">Deschide Corp</button>',
+    supp: '<button class="ghost" data-tab="fuel" data-sub="supp">Suplimente</button>',
+    plan: '<button class="ghost" data-tab="plan">Deschide Planul meu</button>',
+  };
+  let k = 0;
+  return `<section class="card perf proto"><h2>Protocolul, pe faze</h2>
+    <p class="hint">Tot ce ține de semaglutidă într-o singură ordine, pe cifrele tale. Auriu: făcut. Violet: de făcut. Contur: aplicația nu poate ști. Doza rămâne a medicului — aici sunt doar treptele din prospect și ce controlezi tu.</p>
+    <p class="coach">Ierarhia: proteina decide dacă pierzi grăsime sau mușchi, forța decide același lucru din altă direcție, medicamentul decide dacă ții deficitul, iar ieșirea decide dacă păstrezi rezultatul. În ordinea asta.</p>
+    ${protoPhases().map(({ id, items }) => `<div class="ph ${states[id]}">
+      <h3><i aria-hidden="true"></i>${PHASE_TITLE[id]}<small>${PHASE_WHEN[id]}</small>${states[id] === 'now' ? '<b class="tag">acum</b>' : ''}</h3>
+      ${items.map((x) => `<div class="pf ${mark(x.ok)}"><i class="pf-s" aria-hidden="true"></i><b><span>${++k}</span>${x.title}</b><p>${x.body}</p>${x.act ? `<div class="btns">${btn[x.act]}</div>` : ''}</div>`).join('')}
+    </div>`).join('')}
+    <p class="hint">Surse: prospectul Wegovy; STEP 1 (−14,9% la 68 de săptămâni) și substudiul DEXA; extensia STEP 1 (două treimi recâștigate la un an după oprire); SELECT (rezultate cardiovasculare); Norton despre masă slabă vs. masă musculară; ISSN 2017 și Helms 2014 pentru proteină.</p>
+  </section>`;
+}
+
 const RULES = [
   ['Proteina întâi', 'La fiecare masă începi cu proteina. Pofta scade, iar ce lași în farfurie să nu fie proteina.'],
   ['Forță de 2–3 ori pe săptămână', 'Fără ea, până la 40% din kilogramele pierdute pot fi mușchi. HYBRID FORGE o are deja.'],
@@ -140,6 +277,7 @@ export function glp1Html(): string {
     ${heroBand('inject')}
     ${setup(g)}
     <section class="card"><h2>Protocolul din prospect</h2>${doseStairs(LADDER, -1, 0)}<p class="hint">Fiecare treaptă cel puțin 4 săptămâni. Nu urci dacă slăbești deja 0,5–1% pe săptămână sau dacă greața e puternică.</p></section>
+    ${protocolHtml()}
     ${glucoseCard(g)}
     ${redFlags()}</div>`;
   }
@@ -158,6 +296,7 @@ export function glp1Html(): string {
     <p class="coach">${stepText(g, s.weights)}</p>
     <p class="field">Doza prescrisă acum de medic</p><div class="chips five">${LADDER.map((x) => `<button data-g="mg" data-v="${x}" aria-pressed="${g.mg === x}">${String(x).replace('.', ',')}</button>`).join('')}</div>
     <p class="hint">Aplicația doar propune. Schimbi doza aici după ce ai vorbit cu medicul.</p></section>
+  ${protocolHtml()}
   ${glucoseCard(g)}
   ${vialCard(g)}
   <section class="card"><h2>Cum mănânci pe semaglutidă</h2><div class="rules">${RULES.map(([a, b], i) => `<div class="rule" style="--i:${i}"><em>${String(i + 1).padStart(2, '0')}</em><b>${a}</b><small>${b}</small></div>`).join('')}</div></section>
@@ -227,6 +366,12 @@ export function glp1Action(el: HTMLElement): boolean {
     return true;
   }
   else if (a === 'gdel') { g.glucose = (g.glucose ?? []).filter((x) => x.id !== v); }
+  else if (a === 'screen') {
+    g.screened = today;
+    ctx.commit(); ctx.render();
+    ctx.toast('Notat: contraindicațiile trecute cu medicul.', () => { delete g.screened; ctx.commit(); ctx.render(); });
+    return true;
+  }
   else if (a === 'vial-on') { g.vial = { mg: 10, ml: 2, mixed: today }; }
   else if (a === 'vial-off') { g.vial = null; }
   else if (a === 'vial-save') {

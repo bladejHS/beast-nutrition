@@ -32,6 +32,8 @@ export interface Glp1 {
   vial?: Vial | null;
   /** The user's own blood-sugar readings (2026-11-21). */
   glucose?: Glucose[];
+  /** Date the doctor went through the contraindications, noted by the user (2026-11-21, protocol phase 0). */
+  screened?: string;
 }
 
 export interface Vial {

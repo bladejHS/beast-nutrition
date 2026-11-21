@@ -1549,3 +1549,25 @@ html, body { background: var(--bg); }
 .proto .ph.next .pf { opacity: .62; }
 .proto .ph .pf:first-of-type { border-top: 0; }
 
+
+/* Peptide: CJC tracking */
+.trk { margin-top: 14px; display: grid; gap: 16px; }
+.trk h3 { margin: 0 0 8px; }
+.trk-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.trk-stats div { background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); padding: 10px 6px; text-align: center; display: grid; gap: 2px; }
+.trk-stats b { font-size: 1.35rem; color: var(--sky); }
+.trk-stats small { font-size: .7rem; color: var(--t3); }
+.trk-done { display: grid; gap: 2px; padding: 12px; background: rgba(var(--glow), .12); box-shadow: inset 0 0 0 1px var(--act); }
+.trk-done span { color: var(--t2); font-size: .85rem; }
+.trk-fx button { flex: 1 1 45%; min-height: 40px; font-size: 13px; padding: 0 10px; }
+.trk-fx .on { background: var(--act); box-shadow: none; color: #fff; }
+.trk-grid { display: grid; gap: 4px; }
+.trk-row { display: grid; grid-template-columns: 28px repeat(7, 1fr); gap: 4px; align-items: center; }
+.trk-row span { font-size: .7rem; color: var(--t3); }
+.trk-row i, .trk-key i { display: grid; place-items: center; height: 24px; background: var(--s2); font: 700 10px/1 var(--font); font-style: normal; color: #fff; }
+.trk i.done { background: var(--act-hot); }
+.trk i.miss { background: transparent; box-shadow: inset 0 0 0 1px var(--bad); }
+.trk i.today { box-shadow: inset 0 0 0 2px var(--sky); }
+.trk i.pause { background: repeating-linear-gradient(135deg, var(--s2) 0 4px, var(--s3) 4px 8px); }
+.trk-key { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.trk-key i { display: inline-block; width: 14px; height: 14px; vertical-align: middle; }

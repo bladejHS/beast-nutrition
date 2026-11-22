@@ -66,7 +66,12 @@ export function cycleTabHtml(): string {
   const s = ctx.get(), manual = s.fuel.mode === 'manual';
   const week = fuelWeek(mondayOf(today));
   const lv = levels(week.days);
-  const mine = (i: number) => (manual ? s.fuel.pattern?.[i] ?? 'moderate' : week.days[i]!.demand === 'rest' ? 'low' : week.days[i]!.demand);
+  /** Monday = 0, so a date lines up with the week template the user edits. */
+  const weekdayOf = (d: string) => (new Date(`${d}T12:00:00`).getDay() + 6) % 7;
+  /** What the picker shows for an upcoming day: the user's own class in manual mode, otherwise the class the app
+      gave that very day — the same one the wave and the table show, so the screen reads as one. */
+  const mine = (d: { date: string; demand: Demand }) =>
+    manual ? s.fuel.pattern?.[weekdayOf(d.date)] ?? 'moderate' : d.demand === 'rest' ? 'low' : d.demand;
   const today7 = days.map((d) => ({ label: d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase(), c: d.c, kind: d.demand, today: d.date === today }));
   const hi = days.reduce((a, d) => (d.c > a.c ? d : a), days[0]!);
   const html = `${head('cycle', 'Carb cycling', manual ? 'Tu alegi zilele. Aplicația îți dă macronutrienții fiecărui tip de zi.' : 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
@@ -78,9 +83,9 @@ export function cycleTabHtml(): string {
     ${fuelBars(lv.map((x) => ({ name: x.name, kind: x.lv, c: x.c, kcal: x.kcal, used: x.used })))}
     <p class="hint">În fiecare zi la fel: ${n0(lv[0]!.p)} g proteine, ${n0(lv[0]!.f)} g grăsimi. Se mută doar carbohidrații, iar săptămâna are exact caloriile planului, așa că valorile se reechilibrează după câte zile HIGH, MEDIUM și LOW alegi.</p>
   </section>
-  <section class="card"><h2>Săptămâna ta</h2>
-    ${WEEK.map((name, i) => `<div class="pick-row"><span>${name}</span><div class="seg small">${PICK.map(([v, l]) => `<button data-cyc="day" data-i="${i}" data-v="${v}" class="${mine(i) === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`).join('')}
-    <p class="hint">${manual ? 'Se aplică în fiecare săptămână, de azi înainte. Zilele trecute rămân cum au fost.' : 'Acum alege aplicația, după antrenamente. Cum atingi o zi, treci pe alegerea ta.'}</p>
+  <section class="card"><h2>Zilele tale</h2>
+    ${days.map((d) => { const i = weekdayOf(d.date); const cur = mine(d); return `<div class="pick-row${d.date === today ? ' now' : ''}"><span>${d.date === today ? 'Azi' : esc(WEEK[i]!)}</span><div class="seg small">${PICK.map(([v, l]) => `<button data-cyc="day" data-i="${i}" data-v="${v}" class="${cur === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`; }).join('')}
+    <p class="hint">Aceleași șapte zile ca sus, în aceeași ordine. ${manual ? 'Alegerea ta se aplică în fiecare săptămână în ziua aceea, de azi înainte; zilele trecute rămân cum au fost.' : 'Acum alege aplicația, după antrenamente. Cum atingi o zi, treci pe alegerea ta.'}</p>
     ${manual ? '<button class="ghost wide" data-cyc="auto">Lasă aplicația să aleagă după antrenamente</button>' : ''}
   </section>
   ${pmSect('Valul, în mișcare')}

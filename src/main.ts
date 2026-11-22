@@ -14,6 +14,7 @@ import { fuelAction, fuelBind, fuelHome, fuelSub, fuelHtml, mealsTab } from './s
 import { glp1Action, glp1Html } from './screens/glp1.ts';
 import { peptidesAction, peptidesHtml } from './screens/peptides.ts';
 import { cjcAction, cjcHtml } from './screens/cjc.ts';
+import { pilotBind, runPilot } from './screens/pilot.ts';
 import { goalAction, goalBind, labsAction, labsBind, stackAction } from './screens/extra.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
@@ -163,7 +164,7 @@ function render() {
   if (tab === 'azi') chapterCheck();
   if (tab === 'azi') todayBind();
   if (tab === 'corp') { bodyBind(); goalBind(); }
-  fuelBind(); fastBind(); labsBind();
+  fuelBind(); fastBind(); labsBind(); pilotBind();
   ctx.fresh = false;
 }
 
@@ -202,7 +203,7 @@ document.addEventListener('change', async (ev) => {
 document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') close(); });
 
 // An app left open overnight must not keep logging on yesterday.
-const wake = () => { if (document.visibilityState === 'visible' && followToday()) render(); };
+const wake = () => { if (document.visibilityState === 'visible' && followToday()) { render(); runPilot(); } };
 document.addEventListener('visibilitychange', wake);
 addEventListener('focus', wake);
 
@@ -228,3 +229,5 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 followToday();
 if (s.profile && s.plan) trophyInit();
 render();
+// the pilot looks once a day, after the first screen is up (screens/pilot.ts)
+setTimeout(() => runPilot(), 1200);

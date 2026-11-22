@@ -1,5 +1,6 @@
 /* Carb Cycling: nutrient timing, what the logs show, and the settings. */
 import { dextrinFor } from '../logic/timing.ts';
+import { pilotCard } from './pilot.ts';
 import { ctx, dayShort, esc, n0, nb } from '../app.ts';
 import { dayBand } from '../logic/carbs.ts';
 import { byClass, insights, MIN_RATINGS, plannedVsActual, type DayRow, type Rated } from '../logic/insights.ts';
@@ -131,7 +132,8 @@ export function configView() {
   const band = dayBand(f.factors);
   const active = Object.entries(f.overrides).filter(([d]) => d >= today).sort();
   const sw = (id: string, on: boolean, label: string, hint = '') => `<label class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i><span>${label}</span></label>${hint ? `<p class="hint">${hint}</p>` : ''}`;
-  return `<section class="card">${sw('cyc', f.cycling, 'Folosește distribuția în ținta zilnică', `Pornit, caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal și se mută doar carbohidrații. Nu e o metodă Layne Norton, e un calcul al aplicației peste metoda lui.`)}</section>
+  return `${pilotCard()}
+  <section class="card">${sw('cyc', f.cycling, 'Folosește distribuția în ținta zilnică', `Pornit, caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal și se mută doar carbohidrații. Nu e o metodă Layne Norton, e un calcul al aplicației peste metoda lui.`)}</section>
   <section class="card"><h2>Clasificare</h2><div class="seg"><button data-f="cmode" data-v="auto" class="${f.mode === 'auto' ? 'on' : ''}">Automată</button><button data-f="cmode" data-v="manual" class="${f.mode === 'manual' ? 'on' : ''}">Manuală</button></div>
     <p class="hint">${f.mode === 'auto' ? 'Din antrenamentele reale. O zi o poți schimba oricând din detaliile ei.' : 'Doar clasele alese de tine. O zi neclasificată rămâne pe MODERATE.'}</p>
     <div class="gap">${sw('csync', f.sync, 'Sincronizare automată cu antrenamentele', 'Oprită, rămâne ultimul plan citit din HYBRID FORGE.')}</div>

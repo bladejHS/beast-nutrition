@@ -101,7 +101,12 @@ export interface State {
   labs: LabResult[];
   /** Other prescribed treatments under Peptide (logic/rx.ts). */
   rx: Rx[];
+  /** The pilot: it changes the target by itself when `on` (logic/autopilot.ts). */
+  pilot?: { on: boolean; last?: string; log: PilotEntry[] };
 }
+
+/** One thing the pilot did, kept so Corp can show a log of it and the user can undo the last one. */
+export interface PilotEntry { date: string; kind: string; from: number; to: number; why: string }
 
 const KEY = 'beast-nutrition:v2';
 export const MEALS = ['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Masa 5'];
@@ -109,7 +114,7 @@ export const empty = (): State => ({ v: 1, profile: null, plan: null, days: {}, 
   fast: freshFasting(),
   fuel: { cycling: false, factors: { ...DEFAULT_FACTORS }, limits: { ...DEFAULT_LIMITS }, overrides: {}, snap: {}, sig: '', trainingHour: '17:00', prefs: { meals: 4, exclude: '', allergies: '', maxCook: 30, budget: 0 }, plan: {}, shopDone: [], packs: {},
     mode: 'auto', pattern: [null, null, null, null, null, null, null], sync: true, syncedWeek: null, sensitivity: 1, weights: { ...DEFAULT_WEIGHTS }, boxStrength: true, times: {}, shifts: {}, shiftDefs: structuredClone(DEFAULT_SHIFTS), preGap: 0, tolerance: 'normal', intra: true, dextrin: true, dextrinDays: {}, prefuel: true, cancelled: {}, feedback: {} },
-  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '', glp1: freshGlp1(), goal: null, labs: [], rx: [] });
+  drinks: {}, sweat: [], waterMlKg: 35, remindMin: 0, supps: [], suppLog: {}, measures: [], reports: {}, backedUp: '', glp1: freshGlp1(), goal: null, labs: [], rx: [], pilot: { on: false, log: [] } });
 
 /** Saved states from older versions get the fields added since. */
 function withDefaults(d: Partial<State>): State {

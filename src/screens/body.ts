@@ -1,5 +1,6 @@
 /* Corp: the scale, the weekly decision, the check-in and the measurements. */
 import { photosBind, photosCard } from './photos.ts';
+import { pilotCard } from './pilot.ts';
 import { audioOn, transformCard, trendNow, trophyCheck, trophyInit, weighReveal } from './show.ts';
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
 import { kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
@@ -144,6 +145,7 @@ export function bodyHtml() {
   ${pmSect('Ținta')}
   ${goalCard()}
   ${pmSect('Decizia săptămânii')}
+  ${pilotCard(true)}
   ${reviewCard()}
   ${pmSect('Cântarul')}
   ${weighCard(points)}

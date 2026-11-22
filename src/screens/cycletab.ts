@@ -78,6 +78,14 @@ export function cycleTabHtml(): string {
   <div class="pm${pmIn()}">
   ${pmHero({ eyebrow: `Azi, ${CARB_LABEL[days[0]!.demand].toLowerCase()}: ${n0(days[0]!.c)} g carbohidrați`, title: 'Valul săptămânii', sub: 'Punctul plin e azi. Culoarea fiecărui punct arată tipul zilei.', art: carbWave(today7), tall: true })}
   ${pmStats([[String(days[0]!.c), 'g carbo azi'], [String(avg), 'media pe zi'], [hi.date === today ? 'AZI' : dayShort(hi.date).slice(0, 3).toUpperCase(), 'ziua cea mai mare'], [String(count.find(([k]) => k === 'high')?.[1] ?? 0), 'zile HIGH']])}
+  ${(() => {
+    // the one warning an automatic coach must give before a big day: the scale goes up on water, not on fat, and a
+    // user who does not expect it cuts calories in response to glycogen (ICECAP: +0,6 kg after a week at maintenance)
+    const i = days.findIndex((d) => d.demand === 'high');
+    if (i < 0 || i > 2) return '';
+    const when = i === 0 ? 'Azi' : i === 1 ? 'Mâine' : `Poimâine, ${dayLong(days[i]!.date).split(', ')[0]},`;
+    return `<p class="hint pad">${when} e zi HIGH: ${n0(days[i]!.c)} g de carbohidrați. A doua zi cântarul urcă de obicei cu 0,5–1,5 kg și se așază în 2–4 zile. E apă legată de glicogen, nu grăsime; nu tăia nimic pentru ea.</p>`;
+  })()}
   ${pmSect('Macronutrienți pe tip de zi')}
   <section class="card">
     ${fuelBars(lv.map((x) => ({ name: x.name, kind: x.lv, c: x.c, kcal: x.kcal, used: x.used })))}

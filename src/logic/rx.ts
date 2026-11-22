@@ -2,6 +2,8 @@
    make one and proposes no dose. It keeps what the doctor wrote: the name, the dose and how often, in the user's own
    words, and logs each administration with the site, so the doctor can read the history next to the lab results. */
 
+import type { Vial } from './vial.ts';
+
 export const RX_SITES = ['Abdomen stânga', 'Abdomen dreapta', 'Coapsă stângă', 'Coapsă dreaptă', 'Braț stâng', 'Braț drept'] as const;
 
 export interface RxDose { id: string; date: string; time: string; amount: number; site: number; note?: string; /** Hours since the last meal, when typed. */ fasted?: number }
@@ -23,6 +25,8 @@ export interface Rx {
   checks?: Record<string, RxCheck>;
   /** CJC: the highest dose the automatic step-up may reach again, lowered when an increase was not tolerated. */
   cap?: number;
+  /** CJC: the two vials as the user mixed them (logic/vial.ts). */
+  vials?: { cjc?: Vial; ipa?: Vial };
 }
 
 /** The site after the last one, so the injections rotate. */

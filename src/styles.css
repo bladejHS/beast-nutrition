@@ -1586,3 +1586,18 @@ html, body { background: var(--bg); }
 .trk-auto { padding: 8px 10px; background: rgba(var(--glow), .12); box-shadow: inset 2px 0 0 var(--act-hot); font-size: .9rem; }
 .glp-tile.static { cursor: default; }
 .trk-done { margin-top: 0; }
+
+/* Peptide: the vial and the insulin syringe (2026-11-22) */
+.syr { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 12px 0 6px; }
+.syr i { font-style: normal; color: var(--t3); font-size: 1.1rem; }
+.syr-n { flex: 1; display: grid; gap: 2px; text-align: center; padding: 10px 4px; background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); }
+.syr-n b { font-size: 1.5rem; color: var(--sky); line-height: 1; }
+.syr-n span { font-size: .65rem; color: var(--t3); }
+.syr-n.tot { background: rgba(var(--glow), .14); box-shadow: inset 0 0 0 1px var(--act); }
+.syr-n.tot b { color: var(--t1); }
+.vial { margin-top: 18px; }
+.vial h3 { margin: 0 0 4px; }
+.vial .hint { margin: 10px 0 0; }
+.vial-ch button { flex: 1 1 auto; min-height: 42px; font-size: 14px; padding: 0 12px; }
+.vial-ch .on { background: var(--act); box-shadow: none; color: #fff; }
+.bad-t { color: var(--bad); }

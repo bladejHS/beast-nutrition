@@ -4,6 +4,7 @@
    50 when an increase brings side effects, abdomen left/right. The logic lives in logic/rx.ts. */
 import { ctx, esc } from '../app.ts';
 import { addDays, avgSleep, CJC_AUTO_MAX, CJC_FX, CJC_SCHEMA, cjcAdherence, cjcCycle, cjcNextIn, cjcNextSite, cjcRaise, cjcTonight, cycleGrid, isCjc, recentFx, RX_SITES, type Rx } from '../logic/rx.ts';
+import { bestWater, daysOfVial, dosesIn, mcgPerUnit, mlFor, U_PER_ML, unit, unitsFor, VIAL_MG, vialWarning, WATER_ML, type Vial } from '../logic/vial.ts';
 import { back, head } from './parts.ts';
 import { countdownRing, pepIn, siteMap } from './pepviz.ts';
 
@@ -20,6 +21,50 @@ function weightSince(from: string): [number, number] | null {
   return [before[1], w.at(-1)![1]];
 }
 
+const PEP: Array<['cjc' | 'ipa', string]> = [['cjc', 'CJC-1295 no DAC'], ['ipa', 'Ipamorelin']];
+const vialOf = (r: Rx, k: 'cjc' | 'ipa'): Vial | null => r.vials?.[k] ?? null;
+
+/** The two vials, ready only when both are mixed. */
+function syringe(r: Rx, mcg: number): string {
+  const a = vialOf(r, 'cjc'), b = vialOf(r, 'ipa');
+  if (!a || !b) return `<p class="hint">Spune mai jos ce flacoane ai, ca să îți arăt câte unități tragi.</p>`;
+  const ua = unitsFor(a, mcg), ub = unitsFor(b, mcg);
+  const ml = mlFor(a, mcg) + mlFor(b, mcg);
+  return `<div class="syr">
+    <div class="syr-n"><b>${num(ua)}</b><span>unități CJC</span></div>
+    <i>+</i>
+    <div class="syr-n"><b>${num(ub)}</b><span>unități Ipamorelin</span></div>
+    <i>=</i>
+    <div class="syr-n tot"><b>${num(Math.round((ua + ub) * 10) / 10)}</b><span>unități în seringă</span></div>
+  </div>
+  <p class="hint">Pe seringa de insulină U-100: tragi CJC până la gradația ${num(ua)}, apoi Ipamorelin până ajungi la ${num(Math.round((ua + ub) * 10) / 10)}. În total ${num(Math.round(ml * 1000) / 1000)} ml.</p>
+  ${[['CJC-1295', a, ua], ['Ipamorelin', b, ub]].map(([n, v, u]) => { const w = vialWarning(v as Vial, mcg); return w ? `<p class="hint bad-t">${n}: ${esc(w)}</p>` : ''; }).join('')}`;
+}
+
+/** Building a vial: what is in it, how much water, and what a unit is worth afterwards. */
+function vialCard(r: Rx): string {
+  const mcg = cjcTonight(r, ctx.today()).amount;
+  const blocks = PEP.map(([k, name]) => {
+    const v = vialOf(r, k);
+    const rec = bestWater(v?.mg ?? 5, mcg);
+    const chips = (list: number[], cur: number | undefined, attr: string, suffix: string) => `<div class="chips vial-ch">${list.map((x) => `<button class="${cur === x ? 'on' : ''}" data-cj="${attr}" data-k="${k}" data-d="${x}">${num(x)}${suffix}</button>`).join('')}</div>`;
+    const w = v ? vialWarning(v, mcg) : null;
+    return `<div class="vial"><h3>${name}</h3>
+      <p class="hint">Cât scrie pe flacon</p>${chips(VIAL_MG, v?.mg, 'vmg', ' mg')}
+      <p class="hint">Apă bacteriostatică de pus${v ? `, recomandat ${num(rec?.ml ?? 2)} ml` : ''}</p>${chips(WATER_ML, v?.ml, 'vml', ' ml')}
+      ${v ? `<div class="line"><span>1 unitate</span><b>${num(Math.round(mcgPerUnit(v) * 10) / 10)} mcg</b></div>
+        <div class="line"><span>Pentru ${mcg} mcg</span><b>${unit(unitsFor(v, mcg))} · ${num(mlFor(v, mcg))} ml</b></div>
+        <div class="line"><span>Îți ajunge pentru</span><b>${dosesIn(v, mcg)} injecții · cam ${daysOfVial(v, mcg)} zile</b></div>
+        ${w ? `<p class="hint bad-t">${esc(w)}</p>` : ''}` : '<p class="hint">Alege mărimea flaconului și apa, ca să calculez unitățile.</p>'}</div>`;
+  }).join('');
+  return `<section class="card"><h2>Construirea flacoanelor</h2>
+    <p class="hint">Seringă de insulină U-100: ${U_PER_ML} unități = 1 ml, deci o unitate = 0,01 ml.</p>
+    ${blocks}
+    <details class="sub"><summary>Cum se reconstituie</summary>
+      <ol class="ticks"><li>Șterge dopul fiecărui flacon cu alcool și lasă-l să se usuce.</li><li>Trage apa bacteriostatică în seringă și las-o să curgă încet pe peretele flaconului, nu direct pe pulbere.</li><li>Nu agita. Rotește ușor sau lasă-l să se dizolve singur, câteva minute.</li><li>Lichidul trebuie să fie limpede. Dacă rămâne tulbure sau are particule, nu îl folosi.</li><li>Ține flacoanele la frigider, 2–8 °C, la întuneric. Pulberea nedesfăcută stă la congelator.</li><li>Scrie pe flacon data amestecării. Odată reconstituit, se folosește în 3–4 săptămâni.</li></ol>
+      <p class="hint">Apa bacteriostatică (cu alcool benzilic) ține flaconul bun câteva săptămâni. Apa sterilă simplă e doar pentru o singură folosire.</p></details></section>`;
+}
+
 const schema = () => `<dl class="sch">${CJC_SCHEMA.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`;
 
 /** Tonight, decided by the rules. */
@@ -34,6 +79,7 @@ function tonight(r: Rx): string {
   return `<section class="card trk-form"><h2>Diseară: ${t.amount} mcg CJC + ${t.amount} mcg Ipamorelin</h2>
     ${t.why ? `<p class="trk-auto">${esc(t.why)}</p>` : ''}
     <label class="field">Când ai mâncat ultima dată?<select id="cjc-fast"><option value="">alege</option><option value="3">acum peste 3 ore</option><option value="2">acum 2–3 ore</option><option value="1">acum mai puțin de 2 ore</option></select></label>
+    ${syringe(r, t.amount)}
     <p class="hint">Locul: ${RX_SITES[cjcNextSite(r)]}. Subcutanat, înainte de culcare.</p>
     <button class="primary wide" data-cj="dose">Notez injecția de acum</button></section>`;
 }
@@ -102,6 +148,7 @@ export function cjcHtml(): string {
     ${grid(r)}
     <section class="card"><h2>Locul injecției</h2>${siteMap(RX_SITES, cjcNextSite(r), r.log.map((x) => x.site))}<p class="hint">Alternează singur: abdomen stânga, abdomen dreapta.</p></section>
     ${dose(r)}
+    ${vialCard(r)}
     ${labs(r)}
     <details class="card"><summary><b>Schema ta</b></summary>${schema()}</details>
     ${r.log.length ? `<details class="card"><summary><b>Istoric (${r.log.length})</b></summary>${[...r.log].reverse().slice(0, 40).map((x) => `<div class="line"><span>${esc(x.date)} ${x.time} · ${RX_SITES[x.site]}</span><b>${num(x.amount)} mcg</b><button class="link" data-rx="ddel" data-v="${r.id}" data-d="${x.id}" aria-label="Șterge">×</button></div>`).join('')}</details>` : ''}
@@ -136,7 +183,17 @@ export function cjcAction(el: HTMLElement): boolean {
     });
     return true;
   }
-  if (a === 'sleep' || a === 'fx') {
+  if (a === 'vmg' || a === 'vml') {
+    const k = el.dataset['k'] as 'cjc' | 'ipa';
+    const n = Number(el.dataset['d']);
+    r.vials ??= {};
+    const had = r.vials[k];
+    const cur = had ?? { mg: 5, ml: 2 };
+    const next = a === 'vmg' ? { ...cur, mg: n } : { ...cur, ml: n };
+    // The first time a vial size is picked, start from the water that makes the dose easiest to read.
+    if (a === 'vmg' && !had) { const b = bestWater(n, cjcTonight(r, today).amount); if (b) next.ml = b.ml; }
+    r.vials[k] = next;
+  } else if (a === 'sleep' || a === 'fx') {
     const n = Number(el.dataset['d']);
     r.checks ??= {};
     const c = (r.checks[today] ??= { fx: [] });

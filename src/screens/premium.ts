@@ -10,11 +10,12 @@ const f1 = (v: number) => (Math.round(v * 10) / 10).toString().replace('.', ',')
 /** The wrapper's classes: "in" plays the entrance once, when the screen is opened. */
 export const pmIn = () => (ctx.fresh ? ' in' : '');
 
-/** The hero: an aurora behind the art, the screen's name in small caps, the title and one line under it. */
-export function pmHero(o: { eyebrow: string; title: string; sub?: string; art: string; tone?: string }): string {
-  return `<section class="pm-hero${o.tone ? ` t-${o.tone}` : ''}" aria-label="${esc(o.title)}">
+/** The hero: an aurora behind the art, then a line of live data, the title and one line under it. `eyebrow` holds
+    something true about right now, never a decorative label. */
+export function pmHero(o: { eyebrow: string; title: string; sub?: string; art: string; tone?: string; tall?: boolean }): string {
+  return `<section class="pm-hero${o.tall ? ' tall' : ''}${o.tone ? ` t-${o.tone}` : ''}" aria-label="${esc(o.title)}">
     <div class="pm-aura" aria-hidden="true"><i></i><i></i><i></i></div>
-    <div class="pm-art" aria-hidden="true">${o.art}</div>
+    <div class="pm-art"${o.tall ? '' : ' aria-hidden="true"'}>${o.art}</div>
     <div class="pm-h"><small>${esc(o.eyebrow)}</small><b>${esc(o.title)}</b>${o.sub ? `<span>${esc(o.sub)}</span>` : ''}</div>
   </section>`;
 }
@@ -106,6 +107,13 @@ export function summit(points: Array<{ date: string; kg: number; trend: number }
     <text class="sm-t" x="2" y="${(y(points[0]!.trend) - 8).toFixed(1)}">${f1(points[0]!.trend)}</text>
     <text class="sm-t now" x="${W - 2}" y="${(y(end.trend) - 10).toFixed(1)}" text-anchor="end">${f1(end.trend)}</text>
   </svg>`;
+}
+
+/** A row of small marks, one per thing: lit when done. The supplements of today, the nights of a treatment. */
+export function pmStrip(items: Array<{ label: string; on: boolean; now?: boolean }>, note = ''): string {
+  return `<div class="pm-strip" role="img" aria-label="${esc(note || 'Progres')}">
+    ${items.map((x, i) => `<span class="ps${x.on ? ' on' : ''}${x.now ? ' now' : ''}" style="--i:${i}"><i></i><small>${esc(x.label)}</small></span>`).join('')}
+  </div>`;
 }
 
 /** A capsule, drawn, for the supplement cards. */

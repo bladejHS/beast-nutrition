@@ -3,10 +3,10 @@
    cycling is on. The numbers are the same week the rest of the app uses (state.ts fuelWeek). */
 import { ctx, dayLong, dayShort, esc, n0 } from '../app.ts';
 import { addDays, mondayOf } from '../logic/review.ts';
-import type { Demand } from '../logic/training.ts';
+import { CARB_LABEL, type Demand } from '../logic/training.ts';
 import { demandTag, head } from './parts.ts';
 import { fuelWeek } from './state.ts';
-import { carbWave, fuelBars, grainArt, pmHero, pmIn, pmSect, pmStats } from './premium.ts';
+import { carbWave, fuelBars, pmHero, pmIn, pmSect, pmStats } from './premium.ts';
 
 
 const ORDER: Demand[] = ['high', 'moderate', 'low', 'rest'];
@@ -71,11 +71,9 @@ export function cycleTabHtml(): string {
   const hi = days.reduce((a, d) => (d.c > a.c ? d : a), days[0]!);
   const html = `${head('cycle', 'Carb cycling', manual ? 'Tu alegi zilele. Aplicația îți dă macronutrienții fiecărui tip de zi.' : 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
   <div class="pm${pmIn()}">
-  ${pmHero({ eyebrow: 'Fuel for the work required', title: 'Valul săptămânii', sub: 'Carbohidrații se mută după efort. Săptămâna rămâne a planului.', art: grainArt() })}
+  ${pmHero({ eyebrow: `Azi, ${CARB_LABEL[days[0]!.demand].toLowerCase()}: ${n0(days[0]!.c)} g carbohidrați`, title: 'Valul săptămânii', sub: 'Punctul plin e azi. Culoarea fiecărui punct arată tipul zilei.', art: carbWave(today7), tall: true })}
   ${pmStats([[String(days[0]!.c), 'g carbo azi'], [String(avg), 'media pe zi'], [hi.date === today ? 'AZI' : dayShort(hi.date).slice(0, 3).toUpperCase(), 'ziua cea mai mare'], [String(count.find(([k]) => k === 'high')?.[1] ?? 0), 'zile HIGH']])}
-  <section class="card">${carbWave(today7)}
-    <p class="hint">Următoarele 7 zile. Punctul plin e azi; culoarea punctului arată tipul zilei.</p></section>
-  ${pmSect('Macronutrienți pe tip de zi', 'low · medium · high')}
+  ${pmSect('Macronutrienți pe tip de zi')}
   <section class="card">
     ${fuelBars(lv.map((x) => ({ name: x.name, kind: x.lv, c: x.c, kcal: x.kcal, used: x.used })))}
     <p class="hint">În fiecare zi la fel: ${n0(lv[0]!.p)} g proteine, ${n0(lv[0]!.f)} g grăsimi. Se mută doar carbohidrații, iar săptămâna are exact caloriile planului, așa că valorile se reechilibrează după câte zile HIGH, MEDIUM și LOW alegi.</p>
@@ -87,7 +85,7 @@ export function cycleTabHtml(): string {
   </section>
   ${pmSect('Valul, în mișcare')}
   <div class="hero-stage" aria-hidden="true"><canvas class="hero-cv" data-kind="carbs" data-j="${esc(JSON.stringify({ c: days.map((d) => d.c), d: days.map((d) => (d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase())), t: days.map((d) => d.demand), now: 0, intro: !ran }))}"></canvas></div>
-  ${pmSect('Următoarele 7 zile', 'zi de zi')}
+  ${pmSect('Următoarele 7 zile')}
   <section class="card cyc-card"><table class="cyc-t">
     <thead><tr><th>Ziua</th><th>Tipul zilei</th><th class="n">Carbo</th><th class="n">Calorii</th></tr></thead>
     <tbody>${rows}</tbody></table>

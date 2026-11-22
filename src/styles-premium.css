@@ -16,8 +16,18 @@
 .pm-art { position: absolute; inset: 0 0 auto 0; height: 106px; z-index: 1; opacity: .9; pointer-events: none; }
 .pm-art svg { width: 100%; height: 100%; }
 .pm-hero::after { content: ""; position: absolute; inset: 0; z-index: 1; background: linear-gradient(180deg, transparent 18%, rgba(6, 4, 10, .55) 46%, rgba(6, 4, 10, .88) 72%); pointer-events: none; }
+.pm-hero.tall { display: block; padding-top: 16px; }
+.pm-hero.tall .pm-art { position: static; height: auto; opacity: 1; margin-bottom: 14px; }
+.pm-hero.tall::after { background: linear-gradient(180deg, transparent 56%, rgba(6, 4, 10, .45)); }
+.pm-strip { display: flex; gap: 6px; }
+.pm-strip .ps { flex: 1; display: grid; gap: 5px; justify-items: center; }
+.pm-strip .ps i { display: block; width: 100%; height: 30px; border-radius: 9px; background: var(--s3); box-shadow: inset 0 0 0 1px var(--line); }
+.pm-strip .ps.on i { background: linear-gradient(180deg, var(--act-hot), var(--act)); box-shadow: 0 0 16px -4px rgba(var(--glow), .9); }
+.pm-strip .ps.now i { box-shadow: inset 0 0 0 2px var(--sky); }
+.pm-strip .ps small { max-width: 100%; overflow: hidden; font-size: 10px; color: var(--t3); letter-spacing: .04em; white-space: nowrap; text-overflow: ellipsis; }
+.pm-strip .ps.now small { color: var(--sky); }
 .pm-h { position: relative; z-index: 2; display: grid; gap: 4px; }
-.pm-h small { font: 800 condensed 11px/1 var(--font); letter-spacing: .22em; text-transform: uppercase; color: var(--sky); }
+.pm-h small { font: 650 13px/1.2 var(--font); letter-spacing: .01em; color: var(--sky); }
 .pm-h b { font: 900 extra-condensed 40px/.92 var(--font); text-transform: uppercase; letter-spacing: .01em; }
 .pm-h span { color: var(--t2); font-size: 14px; max-width: 32ch; }
 .t-gold .pm-aura i { background: var(--gold); }

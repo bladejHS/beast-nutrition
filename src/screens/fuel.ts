@@ -18,7 +18,7 @@ import { CARB_LABEL, DEFAULT_LIMITS, DEFAULT_WEIGHTS, type Demand } from '../log
 import { analyseStack, microTotals, MICROS, sweatLoss, sweatRate, trainingFluid, waterTarget, type MicroEntry } from '../logic/wellness.ts';
 import { carbsHtml, cv, openCarbs, type View } from './carbs.ts';
 import { dextrinSwitch } from './carbmore.ts';
-import { capsule, pillArt, pmHero, pmIn, pmRing, pmSect } from './premium.ts';
+import { capsule, pillArt, pmHero, pmIn, pmSect, pmStrip } from './premium.ts';
 import { back, demandTag, head, heroBand, icon, listRow } from './parts.ts';
 import { labsHtml, stackCard } from './extra.ts';
 import { dayFuel, dayRating, fuelWeek, fx, kitchen, latestKg, loadPantry, mealSlots, notice, pantry, sessionsOn, shiftOn, timingFor, training, dextrinDay } from './state.ts';
@@ -286,20 +286,17 @@ function supp() {
   const streak = (() => { let n = 0; for (let i = 0; i < 30; i++) { const d = addDays(today, -i); const t = s.suppLog[d] ?? []; if (!t.length || (i > 0 && t.length < s.supps.length)) break; n++; } return n; })();
   return `${back()}${head('supp', 'Suplimente', 'Informații educaționale, nu sfaturi medicale.')}
   <div class="pm${pmIn()}">
-  ${pmHero({ eyebrow: 'Stack-ul tău', title: s.supps.length ? (left ? `Mai ai ${left} de luat` : 'Totul luat azi') : 'Nimic pe listă încă', sub: s.supps.length ? 'Bifezi ce ai luat; aplicația ține ziua și seria.' : 'Adaugă ce iei, ca să îți țină evidența și să verifice combinațiile.', art: pillArt() })}
-  ${s.supps.length ? `<section class="card pm-today">
-    ${pmRing(taken.length, s.supps.length, `${taken.length}/${s.supps.length}`, left ? 'luate' : 'gata')}
-    <div class="pm-t-t"><b>${left ? 'Azi' : 'Gata pe azi'}</b><span>${left ? `Mai ai ${left} ${left === 1 ? 'supliment' : 'suplimente'} de bifat.` : 'Toate bifate. Ține-o tot așa.'}</span>${streak > 1 ? `<span class="hint">${streak} zile la rând cu tot stack-ul luat.</span>` : ''}</div>
-  </section>` : ''}
+  ${pmHero({ eyebrow: s.supps.length ? `${taken.length} din ${s.supps.length} luate azi` : 'Niciun supliment pe listă', title: s.supps.length ? (left ? `Mai ai ${left} de luat` : 'Totul luat azi') : 'Nimic pe listă încă', sub: s.supps.length ? (streak > 1 ? `${streak} zile la rând cu tot stack-ul luat.` : 'Bifezi ce ai luat; aplicația ține ziua și seria.') : 'Adaugă ce iei, ca să îți țină evidența și să verifice combinațiile.', art: s.supps.length ? pmStrip(s.supps.map((x) => ({ label: x.product.split(' ')[0]!, on: taken.includes(x.id) })), 'Suplimentele de azi') : pillArt(), tall: s.supps.length > 0 })}
+
   ${issues.map((i) => `<p class="${i.level === 'warn' ? 'warn' : 'hint'} issue">${esc(i.text)}</p>`).join('')}
-  ${s.supps.length ? pmSect('Ce iei azi', `${taken.length} din ${s.supps.length}`) : ''}
+  ${s.supps.length ? pmSect('Ce iei azi') : ''}
   ${s.supps.map((x) => `<section class="card sup${taken.includes(x.id) ? ' done' : ''}"><label class="check"><input type="checkbox" data-take="${x.id}" ${taken.includes(x.id) ? 'checked' : ''}>${capsule(taken.includes(x.id))}<span><b>${esc(x.product)}</b> ${esc(x.brand)}<small class="hint">${[x.ingredient, x.serving, x.time, x.freq].filter(Boolean).map(esc).join(', ')}</small></span></label><button class="xs" data-f="delsup" data-v="${x.id}" aria-label="Șterge ${esc(x.product)}">×</button></section>`).join('')}
   <details class="card"><summary><b>Adaugă un supliment</b></summary><form id="suf">
     ${[['product', 'Produs'], ['brand', 'Marcă'], ['ingredient', 'Ingredient activ'], ['serving', 'Porție'], ['time', 'Când'], ['freq', 'Frecvență'], ['notes', 'Note']].map(([k, l]) => `<label class="field">${l}<input name="${k}" ${k === 'product' || k === 'ingredient' ? 'required' : ''}></label>`).join('')}
     <label class="field">Cantitate pe zi, mg<input name="mgPerDay" type="text" inputmode="decimal" value="0"></label><button class="primary wide">Salvează</button></form></details>
-  ${pmSect('Stack-ul pentru antrenament', 'cele mai bune dovezi')}
+  ${pmSect('Stack-ul pentru antrenament')}
   ${stackCard()}
-  ${pmSect('Ce spun dovezile', 'în ordinea dovezilor')}
+  ${pmSect('Ce spun dovezile')}
   ${EVIDENCE.map((e) => `<details class="card"><summary><b>${esc(e.name)}</b> <span class="ev">${e.strength}</span></summary><p>${esc(e.purpose)}</p>${[[e.strength === 'Doar la deficit' || e.name === 'Omega-3' ? 'Doză și limită' : 'Doze studiate', e.dose], ['Moment', e.timing], ['Efecte adverse', e.effects], ['Contraindicații', e.contra], ['Interacțiuni', e.interactions]].map(([a, b]) => `<p><b>${a}:</b> ${esc(b)}</p>`).join('')}<p class="hint">Alege produse testate de terți, de exemplu Informed Sport sau NSF. Surse: ${esc(e.refs)}.</p></details>`).join('')}
   ${pmSect('De evitat')}
   <section class="card">${AVOID.map(([a, b]) => `<p><b>${a}.</b> ${esc(b)}</p>`).join('')}</section></div>`;

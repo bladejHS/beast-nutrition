@@ -3,11 +3,11 @@
    the questions and the labs for the endocrinologist. The app proposes no dose for anything here. */
 import { ctx, esc } from '../app.ts';
 import { labDef } from '../logic/labs.ts';
-import { CJC_NAME, cjcCycle, cjcNextIn, cjcNextSite, isCjc, RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
+import { addDays, CJC_NAME, cjcCycle, cjcNextIn, cjcNextSite, isCjc, RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
 import { back, head, listRow } from './parts.ts';
 import { daysLeft } from './glp1.ts';
 import { countdownRing, pepIn, siteMap } from './pepviz.ts';
-import { chainArt, pmHero, pmSect, pmStats } from './premium.ts';
+import { chainArt, pmHero, pmSect, pmStats, pmStrip } from './premium.ts';
 
 const UNITS: Rx['unit'][] = ['µg', 'mg', 'UI', 'ml'];
 const HORMONES = ['testo', 'testofree', 'lh', 'fsh', 'e2', 'shbg', 'prl', 'hct'];
@@ -73,6 +73,17 @@ function rxCard(r: Rx): string {
     <p class="hint">Mergi la medic dacă apar: durere sau umflătură mare la locul injecției, febră, palpitații, dureri de cap puternice, sânii sensibili sau umflați, schimbări mari de dispoziție.</p></section>`;
 }
 
+/** The last 14 days: a mark for each day a treatment was taken. */
+function recent(): Array<{ label: string; on: boolean; now?: boolean }> {
+  const s = ctx.get();
+  const today = ctx.today();
+  const all = [...(s.rx ?? []).flatMap((r) => r.log.map((x) => x.date)), ...s.glp1.shots.map((x) => x.date)];
+  return Array.from({ length: 14 }, (_, i) => {
+    const date = addDays(today, i - 13);
+    return { label: date.slice(8), on: all.includes(date), now: date === today };
+  });
+}
+
 export function peptidesHtml(): string {
   const s = ctx.get();
   const g = s.glp1;
@@ -83,7 +94,7 @@ export function peptidesHtml(): string {
   const doses = g.shots.length + list.reduce((t, r) => t + r.log.length, 0);
   return `${back()}${head('supp', 'Peptide', 'Tratamentele cu peptide, urmărite lângă nutriție și analize.')}
   <div class="pm pep${pepIn()}">
-  ${pmHero({ eyebrow: 'Lanțuri scurte de aminoacizi', title: 'Peptide', sub: 'Semnale pe care corpul le înțelege. Le urmărești aici, lângă nutriție și analize.', art: chainArt() })}
+  ${pmHero({ eyebrow: active ? `${active} ${active === 1 ? 'tratament activ' : 'tratamente active'}, ${doses} doze notate` : 'Niciun tratament pornit', title: 'Peptide', sub: 'Semnale pe care corpul le înțelege. Le urmărești aici, lângă nutriție și analize.', art: doses ? pmStrip(recent(), 'Ultimele 14 zile') : chainArt(), tall: doses > 0 })}
   ${pmStats([[String(active), active === 1 ? 'tratament activ' : 'tratamente active'], [String(doses), 'doze notate'], [left == null ? '–' : left <= 0 ? 'AZI' : `${left}z`, 'până la semaglutidă']])}
   ${pmSect('Tratamentele tale')}
   <button class="glp-tile${left != null && left <= 0 ? ' hot' : ''}" data-tab="glp1">

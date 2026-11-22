@@ -138,15 +138,14 @@ export function bodyHtml() {
   const weeks = finishedWeeks(s.weights, ctx.today()).length;
   return `${banner('body', 'Corp')}
   <div class="pm${pmIn()}">
-  ${pmHero({ eyebrow: 'Corpul tău, în timp', title: end ? `${n1(end.trend)} kg` : 'Prima cântărire', sub: end ? (change == null ? 'Linia e tendința, nu cântărirea de azi.' : `${change > 0 ? '+' : '−'}${n1(Math.abs(change))} kg în ultimele 7 zile, pe tendință.`) : 'Notează-ți greutatea și începe graficul.', art: ribbonArt() })}
+  ${pmHero({ eyebrow: points.length > 1 ? `${points.length} cântăriri din ${shortDate(points[0]!.date)}` : 'Prima zi', title: end ? `${n1(end.trend)} kg` : 'Prima cântărire', sub: end ? (change == null ? 'Linia e tendința, nu cântărirea de azi.' : `${change > 0 ? '+' : '−'}${n1(Math.abs(change))} kg în ultimele 7 zile, pe tendință.`) : 'Notează-ți greutatea și începe graficul.', art: points.length > 1 ? summit(points, goal) : ribbonArt(), tall: points.length > 1 })}
   ${pmStats([[gone != null && gone > 0 ? `−${n1(gone)}` : gone != null ? n1(-gone) : '–', 'kg de la start'], [left != null ? n1(Math.max(0, left)) : '–', 'kg până la țintă'], [String(weeks), weeks === 1 ? 'săptămână' : 'săptămâni'], [String(Object.keys(s.weights).length), 'cântăriri']])}
-  ${points.length > 1 ? `<section class="card">${summit(points, goal)}<p class="hint">Tendința de la ${shortDate(points[0]!.date)} până azi. Punctul alb e acum.</p></section>` : ''}
   ${heroBand('weigh')}
   ${pmSect('Ținta')}
   ${goalCard()}
   ${pmSect('Decizia săptămânii')}
   ${reviewCard()}
-  ${pmSect('Cântarul', 'tendința peste zgomot')}
+  ${pmSect('Cântarul')}
   ${weighCard(points)}
   ${transformCard()}
   ${pmSect('Cum te simți')}

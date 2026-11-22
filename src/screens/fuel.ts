@@ -75,7 +75,7 @@ function home() {
   // 2026-11-15, the user: the layout of Mai mult was off. Same head as the other tabs, tiles of one size in one order
   // (icon, name, value, line, bar at the foot), a word instead of a lone dash, the lists as one group under a title.
   return `${head('nutrition', 'Mai mult', 'Uneltele din spatele zilei și planul tău.')}
-  <h2 class="more-sec">Azi</h2>
+  ${pmSect('Azi')}
   <div class="ftiles">
     ${tile('water', go('water'), 'Hidratare', `${n1(water / 1000)}<small> / ${n1(waterT / 1000)} L</small>`, water >= waterT ? 'Ținta e atinsă' : `Mai ai ${n1(Math.max(0, waterT - water) / 1000)} L`, water / waterT)}
     ${tile('carbs', go('carbs'), 'Carb Cycling', s.fuel.cycling ? CARB_LABEL[demand] : 'Oprit', s.fuel.cycling ? `${n0(target.c)} g carbohidrați azi` : 'Carbohidrații după antrenament')}
@@ -84,7 +84,7 @@ function home() {
     ${tile('advanced', 'data-tab="post"', 'Post', w ? esc(w.ratio) : 'Oprit', w ? `${fast?.eating ? 'Fereastra e deschisă' : 'În post'} · ${esc(w.start)}–${esc(w.end)}` : '12:12, 14:10 sau 16:8')}
     ${tile('analytics', go('report'), 'Raport', 'Săptămâna', 'în cifre, din ce ai notat')}
   </div>
-  <h2 class="more-sec">Plan și sănătate</h2>
+  ${pmSect('Plan și sănătate')}
   <div class="list">
     ${listRow('data-tab="plan"', 'Planul meu', `${n0(s.plan!.macros.kcal)} kcal pe zi · profil, check-in, backup`)}
     ${listRow('data-tab="pept"', 'Peptide', s.glp1.on ? `Semaglutidă ${String(s.glp1.mg).replace('.', ',')} mg pe săptămână` : 'Semaglutidă și tratamentele cu medicul')}

@@ -1,5 +1,6 @@
 /* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
 import { dayBase, onClock } from '../logic/shift.ts';
+import { pmSect } from './premium.ts';
 import { foodArt } from './foodart.ts';
 import { ctx, dayLong, esc, n0, n1, nb, nowMinutes, nowTime } from '../app.ts';
 import type { DayTarget } from '../logic/calc.ts';
@@ -290,7 +291,7 @@ export function todayHtml() {
   ${numbers(d, t, sum)}
   ${quick(d, addTo)}
   ${d === today ? nextCard(d, slots, shown, idx != null && idx >= 0 ? idx : null) : ''}
-  <h3 class="az-sec">Ziua</h3>
+  ${pmSect('Ziua')}
   ${dayList(d, slots, next)}
   ${weekRow(d)}
   ${yesterday && d >= today && !journal.flat().length ? '<button class="ghost wide" data-az="copy">Copiază mesele de ieri</button>' : ''}

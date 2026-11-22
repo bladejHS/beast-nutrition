@@ -246,15 +246,27 @@ function protocolHtml(): string {
     supp: '<button class="ghost" data-tab="fuel" data-sub="supp">Suplimente</button>',
     plan: '<button class="ghost" data-tab="plan">Deschide Planul meu</button>',
   };
-  let k = 0;
+  const phases = protoPhases();
+  const totals = phases.map(({ items }) => {
+    const known = items.filter((x) => x.ok != null);
+    return { done: known.filter((x) => x.ok).length, of: known.length };
+  });
+  // only the phase in progress is open; the rest collapse, so the card is a map and not a wall
+  const body = phases.map(({ id, items }, i) => {
+    const st = states[id];
+    const t = totals[i]!;
+    const count = t.of ? `<em class="ph-n${t.done === t.of ? ' full' : ''}">${t.done}/${t.of}</em>` : '';
+    const rows = items.map((x, j) => `<div class="pf ${mark(x.ok)}"><i class="pf-s" aria-hidden="true"></i><b><span>${j + 1}</span>${x.title}</b><p>${x.body}</p>${x.act ? `<div class="btns">${btn[x.act]}</div>` : ''}</div>`).join('');
+    return `<details class="ph ${st}"${st === 'now' ? ' open' : ''}>
+      <summary><i aria-hidden="true"></i><b>${PHASE_TITLE[id]}</b><small>${PHASE_WHEN[id]}</small>${count}${st === 'now' ? '<u class="tag">acum</u>' : ''}</summary>
+      <div class="ph-b">${rows}</div>
+    </details>`;
+  }).join('');
   return `<section class="card perf proto"><h2>Protocolul, pe faze</h2>
     <p class="hint">Tot ce ține de semaglutidă într-o singură ordine, pe cifrele tale. Auriu: făcut. Violet: de făcut. Contur: aplicația nu poate ști. Doza rămâne a medicului — aici sunt doar treptele din prospect și ce controlezi tu.</p>
     <p class="coach">Ierarhia: proteina decide dacă pierzi grăsime sau mușchi, forța decide același lucru din altă direcție, medicamentul decide dacă ții deficitul, iar ieșirea decide dacă păstrezi rezultatul. În ordinea asta.</p>
-    ${protoPhases().map(({ id, items }) => `<div class="ph ${states[id]}">
-      <h3><i aria-hidden="true"></i>${PHASE_TITLE[id]}<small>${PHASE_WHEN[id]}</small>${states[id] === 'now' ? '<b class="tag">acum</b>' : ''}</h3>
-      ${items.map((x) => `<div class="pf ${mark(x.ok)}"><i class="pf-s" aria-hidden="true"></i><b><span>${++k}</span>${x.title}</b><p>${x.body}</p>${x.act ? `<div class="btns">${btn[x.act]}</div>` : ''}</div>`).join('')}
-    </div>`).join('')}
-    <p class="hint">Surse: prospectul Wegovy; STEP 1 (−14,9% la 68 de săptămâni) și substudiul DEXA; extensia STEP 1 (două treimi recâștigate la un an după oprire); SELECT (rezultate cardiovasculare); Norton despre masă slabă vs. masă musculară; ISSN 2017 și Helms 2014 pentru proteină.</p>
+    ${body}
+    <p class="hint">Faza în care ești e deschisă; celelalte se deschid la atingere. Surse: prospectul Wegovy; STEP 1 (−14,9% la 68 de săptămâni) și substudiul DEXA; extensia STEP 1 (două treimi recâștigate la un an după oprire); SELECT (rezultate cardiovasculare); Norton despre masă slabă vs. masă musculară; ISSN 2017 și Helms 2014 pentru proteină.</p>
   </section>`;
 }
 

@@ -1,4 +1,4 @@
-/* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
+/* Azi: what kind of day this is, what is left, what comes next. Read in a hurry, often in a gym. */
 import { dayBase, onClock } from '../logic/shift.ts';
 import { foodArt } from './foodart.ts';
 import { ctx, dayLong, esc, n0, n1, nb, nowMinutes, nowTime } from '../app.ts';
@@ -135,7 +135,7 @@ function numbers(d: string, t: DayTarget, sum: ReturnType<typeof totals>) {
   const perfect = d === ctx.today() && isPerfect(sum, t);
   const streak = perfect ? perfectStreak() : 0;
   return `<section class="dash ${state}${drop ? ' drop' : ''}${perfect ? ' perfect' : ''}">
-    ${perfect ? `<p class="perf"><b>Macro perfect</b>${streak > 1 ? `<span><i class="perf-fl" aria-hidden="true"></i>${streak} zile la rând</span>` : ''}</p>` : ''}
+    ${perfect ? `<p class="perfd"><b>Macro perfect</b>${streak > 1 ? `<span><i class="perf-fl" aria-hidden="true"></i>${streak} zile la rând</span>` : ''}</p>` : ''}
     <div class="ring"><div class="liq" style="--l:${fill.toFixed(3)}" aria-hidden="true"><i></i><i></i></div><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rt" cx="60" cy="60" r="52"/><circle class="rv" cx="60" cy="60" r="52" pathLength="100" data-ring="az-k" data-to="${fill.toFixed(3)}"/></svg>
       <div class="ring-in"><b data-count="az-left" data-to="${Math.round(Math.abs(left))}">${n0(Math.abs(left))}</b><span>kcal ${left < 0 ? 'peste' : 'rămase'}</span><em>din ${n0(t.kcal)}</em></div></div>
     <div class="macros">${macro('p', 'Proteine', sum.p, t.p)}${macro('c', 'Carbo', sum.c, t.c)}${macro('f', 'Grăsimi', sum.f, t.f)}

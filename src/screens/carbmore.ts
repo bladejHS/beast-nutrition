@@ -133,7 +133,7 @@ export function configView() {
   const active = Object.entries(f.overrides).filter(([d]) => d >= today).sort();
   const sw = (id: string, on: boolean, label: string, hint = '') => `<label class="switch"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><i></i><span>${label}</span></label>${hint ? `<p class="hint">${hint}</p>` : ''}`;
   return `${pilotCard()}
-  <section class="card">${sw('cyc', f.cycling, 'Folosește distribuția în ținta zilnică', `Pornit, caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal și se mută doar carbohidrații. Nu e o metodă Layne Norton, e un calcul al aplicației peste metoda lui.`)}</section>
+  <section class="card">${sw('cyc', f.cycling, 'Folosește distribuția în ținta zilnică', `Pornit, caloriile săptămânii rămân ${n0(r.kcalPlan)} kcal și se mută doar carbohidrații. Slăbitul vine din caloriile săptămânii: o meta-analiză pe 9 studii nu a găsit niciun avantaj al ciclării pentru compoziția corporală. Ce câștigi e calitatea antrenamentelor grele și o zi mai ușor de dus.`)}</section>
   <section class="card"><h2>Clasificare</h2><div class="seg"><button data-f="cmode" data-v="auto" class="${f.mode === 'auto' ? 'on' : ''}">Automată</button><button data-f="cmode" data-v="manual" class="${f.mode === 'manual' ? 'on' : ''}">Manuală</button></div>
     <p class="hint">${f.mode === 'auto' ? 'Din antrenamentele reale. O zi o poți schimba oricând din detaliile ei.' : 'Doar clasele alese de tine. O zi neclasificată rămâne pe MODERATE.'}</p>
     <div class="gap">${sw('csync', f.sync, 'Sincronizare automată cu antrenamentele', 'Oprită, rămâne ultimul plan citit din HYBRID FORGE.')}</div>

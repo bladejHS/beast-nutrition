@@ -85,7 +85,9 @@ function analysis(p: DayPlan) {
 }
 
 function sportCard(demand: Demand, f: { p: number; c: number; f: number }) {
-  const rows = sportRows(f, latestKg(), ctx.get().fuel.prefs.meals, demand);
+  const kg = latestKg();
+  const prof = ctx.get().profile;
+  const rows = sportRows(f, kg, ctx.get().fuel.prefs.meals, demand, prof ? kg * (1 - prof.bf / 100) : undefined);
   return `<details class="card"><summary><b>Repere sportive</b></summary>${rows.map((r) => `<div class="line"><span>${r.label}</span><b>${r.value}</b><em>${r.ref}</em></div>`).join('')}
     <p class="hint">Repere pentru sportivi la mențineri (ACSM 2016, ISSN), doar informative, nu ținte. În deficit carbohidrații stau normal sub interval: de aceea contează masa dinainte de antrenament.</p></details>`;
 }

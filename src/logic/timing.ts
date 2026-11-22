@@ -49,14 +49,23 @@ export const waterBefore = (kg: number) => [Math.round((kg * 5) / 50) * 50, Math
 
 export interface SportRow { label: string; value: string; ref: string; ok: boolean }
 
-/** The day against sports-nutrition references. Information only: in a deficit carbs usually sit under them, and nothing is changed for it. */
-export function sportRows(day: { p: number; c: number; f: number }, kg: number, meals: number, demand: Demand): SportRow[] {
+/** The day against sports-nutrition references. Information only: in a deficit carbs usually sit under them, and
+ *  nothing is changed for it.
+ *
+ *  2026-11-22, after the research: the 3–5 / 5–7 / 6–10 g/kg bands of the AND-DC-ACSM 2016 position stand are per
+ *  kilogram of *total* body mass and were written for athletes who are not in a deficit. At 134 kg even the lowest
+ *  band is 402 g of carbohydrate a day — more energy than the whole target. Marking that as a failure every day was
+ *  telling the user he is doing something wrong when the number simply does not apply to him. The carbohydrate row
+ *  is now reported per kilogram of lean mass, where the number is readable, and the athlete band is shown as what it
+ *  is: a ceiling for someone eating to perform, not a floor for someone eating to lose fat. */
+export function sportRows(day: { p: number; c: number; f: number }, kg: number, meals: number, demand: Demand, leanKg?: number): SportRow[] {
   const per = (g: number) => (g / kg).toFixed(1).replace('.', ',');
   const range: Record<Demand, [number, number]> = { rest: [3, 5], low: [3, 5], moderate: [5, 7], high: [6, 10] };
   const [lo, hi] = range[demand];
   const dose = day.p / meals;
+  const lean = leanKg && leanKg > 0 ? leanKg : kg;
   return [
-    { label: 'Carbohidrați', value: `${per(day.c)} g/kg`, ref: `${lo}–${hi} g/kg`, ok: day.c / kg >= lo },
+    { label: 'Carbohidrați', value: `${(day.c / lean).toFixed(1).replace('.', ',')} g/kg masă slabă`, ref: `sportivi: ${lo}–${hi} g/kg corp`, ok: true },
     { label: 'Proteină pe masă', value: `${Math.round(dose)} g`, ref: `peste ${Math.round(kg * 0.4)} g`, ok: dose >= kg * 0.4 },
     { label: 'Grăsimi', value: `${per(day.f)} g/kg`, ref: 'peste 0,5 g/kg', ok: day.f / kg >= 0.5 },
   ];

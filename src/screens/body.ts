@@ -50,7 +50,12 @@ function reviewCard() {
   const r = review(plan, finishedWeeks(s.weights, today), s.checkins);
   // One decision per week: the new target needs a full week before anyone can judge it.
   const applied = plan.adjustments.filter((a) => a.date >= mondayOf(today)).at(-1);
-  const act = r.pct == null ? '' : applied
+  // with the pilot on, the week's decision is its job: two voices proposing two different cuts is how a user ends
+  // up eating 15% less twice in the same week (2026-11-22)
+  const piloted = !!s.pilot?.on;
+  const act = r.pct == null ? '' : piloted
+    ? '<p class="hint">Pilotul se ocupă de ajustări: schimbă ținta singur, din întreținerea măsurată, cel mult o dată la șapte zile. Oprește-l din Carb Cycling → Reguli dacă vrei să decizi tu.</p>'
+    : applied
     ? `<p class="hint">Ai aplicat ${applied.pct > 0 ? '+' : '−'}${Math.abs(applied.pct)}% săptămâna asta. Următoarea decizie vine după o săptămână întreagă cu noua țintă.</p>`
     : `<button class="primary wide" data-apply="${r.pct}" data-note="${esc(r.note ?? '')}">Aplică ${r.pct > 0 ? '+' : '−'}${Math.abs(r.pct)}% la carbohidrați și grăsimi</button>`;
   const rev = r.suggestReverse ? '<button class="primary wide" data-phase="reverse">Treci la reverse diet</button>' : '';

@@ -312,8 +312,9 @@ test('meal times stay on the clock when the minutes round up', () => {
 });
 
 test('sport references inform and never hide a shortfall', () => {
-  const [c, p, f] = sportRows({ p: 185, c: 320, f: 50 }, 100, 4, 'high');
-  assert.deepEqual([c!.value, c!.ref, c!.ok], ['3,2 g/kg', '6–10 g/kg', false]);
+  const [c, p, f] = sportRows({ p: 185, c: 320, f: 50 }, 100, 4, 'high', 70);
+  // reported per kg of lean mass, where the number is readable; the athlete band is a ceiling, not a failed target
+  assert.deepEqual([c!.value, c!.ref, c!.ok], ['4,6 g/kg masă slabă', 'sportivi: 6–10 g/kg corp', true]);
   assert.deepEqual([p!.value, p!.ok], ['46 g', true]);
   assert.equal(f!.ok, true);
   assert.equal(sportRows({ p: 80, c: 150, f: 20 }, 60, 4, 'rest')[2]!.ok, false);

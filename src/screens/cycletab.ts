@@ -99,7 +99,7 @@ export function cycleTabHtml(): string {
   ${pmSect('Cum se face corect')}
   <section class="card">
     <p><b>Carbohidrații după efort.</b> Cele mai multe în zilele cu sesiuni grele (Lower Body, Upper + Power, alergarea lungă), mai puține în zilele cu efort mediu, cele mai puține în zilele de recuperare (mers, mobilitate). Principiul „fuel for the work required”: mănânci carbohidrați pentru munca pe care o ai de făcut.</p>
-    <p><b>Săptămâna rămâne aceeași.</b> Carb cycling-ul doar mută carbohidrații între zile. Slăbitul vine din deficitul săptămânii, nu din ciclare.</p>
+    <p><b>Săptămâna rămâne aceeași.</b> Carb cycling-ul doar mută carbohidrații între zile. Slăbitul vine din deficitul săptămânii, nu din ciclare: meta-analiza lui Gejl și Nybo (2021, 9 studii) nu a găsit niciun avantaj pentru compoziția corporală, iar un studiu din 2026 pe 30 de femei cu obezitate a dat aceeași pierdere de grăsime ca mâncatul egal în fiecare zi. Ce câștigi e calitatea sesiunilor grele și o zi mai ușor de dus.</p>
     <p><b>Proteinele la fel, zilnic.</b> Țin masa musculară în deficit; nu se ciclează.</p>
     <p><b>Ziua dinaintea unei zile HIGH urcă puțin</b>, ca să intri în antrenamentul greu cu glicogenul refăcut.</p>
     <p><b>În ziua de antrenament</b>, carbohidrații se adună în masa dinainte și în cea de după.</p>

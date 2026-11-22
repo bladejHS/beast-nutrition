@@ -1616,3 +1616,6 @@ html, body { background: var(--bg); }
 .vial-ch button { flex: 1 1 auto; min-height: 42px; font-size: 14px; padding: 0 12px; }
 .vial-ch .on { background: var(--act); box-shadow: none; color: #fff; }
 .bad-t { color: var(--bad); }
+.syr-n.wide { max-width: 220px; margin: 0 auto; }
+.vial-seg { margin-bottom: 4px; }
+.vial-seg button { font-size: 13px; }

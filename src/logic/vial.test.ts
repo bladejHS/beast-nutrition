@@ -39,3 +39,15 @@ test('the warnings about the mark on the syringe', () => {
   assert.match(vialWarning({ mg: 2, ml: 5 }, 300)!, /aproape toată seringa/);
   assert.match(vialWarning({ mg: 3, ml: 2 }, 100)!, /între gradații/);
 });
+
+test('one vial holding both peptides: 5 mg + 5 mg, 10 mg in total', () => {
+  // The mg is what the vial holds of each peptide, so a unit carries that much of each.
+  const v = { mg: 5, ml: 2 };
+  assert.equal(mcgPerUnit(v), 25);
+  assert.equal(unitsFor(v, 100), 4);
+  // 5 ml makes 100 mcg land on 10 units, the easiest mark to read
+  assert.equal(bestWater(5, 100)!.ml, 5);
+  assert.equal(unitsFor({ mg: 5, ml: 5 }, 100), 10);
+  // one draw, so the vial lasts as many doses as either peptide allows
+  assert.equal(dosesIn(v, 100), 50);
+});

@@ -22,46 +22,83 @@ function weightSince(from: string): [number, number] | null {
 }
 
 const PEP: Array<['cjc' | 'ipa', string]> = [['cjc', 'CJC-1295 no DAC'], ['ipa', 'Ipamorelin']];
-const vialOf = (r: Rx, k: 'cjc' | 'ipa'): Vial | null => r.vials?.[k] ?? null;
+const vialOf = (r: Rx, k: 'cjc' | 'ipa' | 'mix'): Vial | null => r.vials?.[k] ?? null;
+/** The user's own vial holds both peptides (5 mg + 5 mg), so this is the default, and so are its numbers until
+    they say otherwise. */
+const isBlend = (r: Rx) => r.vials?.blend ?? true;
+const MIX_DEFAULT: Vial = { mg: 5, ml: 5 };
+const mixVial = (r: Rx) => vialOf(r, 'mix') ?? MIX_DEFAULT;
 
-/** The two vials, ready only when both are mixed. */
+/** What to draw tonight: one number with a blended vial, two with separate vials. */
 function syringe(r: Rx, mcg: number): string {
+  if (isBlend(r)) {
+    const v = mixVial(r);
+    const u = unitsFor(v, mcg);
+    const w = vialWarning(v, mcg);
+    return `<div class="syr">
+      <div class="syr-n tot wide"><b>${num(u)}</b><span>unități din flacon</span></div>
+    </div>
+    <p class="hint">Pe seringa de insulină U-100: tragi până la gradația ${num(u)}, adică ${num(mlFor(v, mcg))} ml. Atât înseamnă ${mcg} mcg CJC + ${mcg} mcg Ipamorelin, fiindcă sunt amândouă în același flacon.</p>
+    ${w ? `<p class="hint bad-t">${esc(w)}</p>` : ''}`;
+  }
   const a = vialOf(r, 'cjc'), b = vialOf(r, 'ipa');
-  if (!a || !b) return `<p class="hint">Spune mai jos ce flacoane ai, ca să îți arăt câte unități tragi.</p>`;
+  if (!a || !b) return '<p class="hint">Spune mai jos ce flacoane ai, ca să îți arăt câte unități tragi.</p>';
   const ua = unitsFor(a, mcg), ub = unitsFor(b, mcg);
+  const tot = Math.round((ua + ub) * 10) / 10;
   const ml = mlFor(a, mcg) + mlFor(b, mcg);
   return `<div class="syr">
     <div class="syr-n"><b>${num(ua)}</b><span>unități CJC</span></div>
     <i>+</i>
     <div class="syr-n"><b>${num(ub)}</b><span>unități Ipamorelin</span></div>
     <i>=</i>
-    <div class="syr-n tot"><b>${num(Math.round((ua + ub) * 10) / 10)}</b><span>unități în seringă</span></div>
+    <div class="syr-n tot"><b>${num(tot)}</b><span>unități în seringă</span></div>
   </div>
-  <p class="hint">Pe seringa de insulină U-100: tragi CJC până la gradația ${num(ua)}, apoi Ipamorelin până ajungi la ${num(Math.round((ua + ub) * 10) / 10)}. În total ${num(Math.round(ml * 1000) / 1000)} ml.</p>
-  ${[['CJC-1295', a, ua], ['Ipamorelin', b, ub]].map(([n, v, u]) => { const w = vialWarning(v as Vial, mcg); return w ? `<p class="hint bad-t">${n}: ${esc(w)}</p>` : ''; }).join('')}`;
+  <p class="hint">Pe seringa de insulină U-100: tragi CJC până la gradația ${num(ua)}, apoi Ipamorelin până ajungi la ${num(tot)}. În total ${num(Math.round(ml * 1000) / 1000)} ml.</p>
+  ${([['CJC-1295', a], ['Ipamorelin', b]] as Array<[string, Vial]>).map(([n, v]) => { const w = vialWarning(v, mcg); return w ? `<p class="hint bad-t">${n}: ${esc(w)}</p>` : ''; }).join('')}`;
 }
 
-/** Building a vial: what is in it, how much water, and what a unit is worth afterwards. */
+const chips = (list: number[], cur: number | undefined, attr: string, k: string, suffix: string) =>
+  `<div class="chips vial-ch">${list.map((x) => `<button class="${cur === x ? 'on' : ''}" data-cj="${attr}" data-k="${k}" data-d="${x}">${num(x)}${suffix}</button>`).join('')}</div>`;
+
+/** The numbers a mixed vial gives: what a unit is worth and how long it lasts. */
+function vialLines(v: Vial, mcg: number, each: boolean): string {
+  const w = vialWarning(v, mcg);
+  return `<div class="line"><span>1 unitate</span><b>${num(Math.round(mcgPerUnit(v) * 10) / 10)} mcg${each ? ' din fiecare' : ''}</b></div>
+    <div class="line"><span>Pentru ${mcg} mcg${each ? ' din fiecare' : ''}</span><b>${unit(unitsFor(v, mcg))} · ${num(mlFor(v, mcg))} ml</b></div>
+    <div class="line"><span>Îți ajunge pentru</span><b>${dosesIn(v, mcg)} injecții · cam ${daysOfVial(v, mcg)} zile</b></div>
+    ${w ? `<p class="hint bad-t">${esc(w)}</p>` : ''}`;
+}
+
+/** Building the vial: what is in it, how much water, and what a unit is worth afterwards. */
 function vialCard(r: Rx): string {
   const mcg = cjcTonight(r, ctx.today()).amount;
-  const blocks = PEP.map(([k, name]) => {
-    const v = vialOf(r, k);
-    const rec = bestWater(v?.mg ?? 5, mcg);
-    const chips = (list: number[], cur: number | undefined, attr: string, suffix: string) => `<div class="chips vial-ch">${list.map((x) => `<button class="${cur === x ? 'on' : ''}" data-cj="${attr}" data-k="${k}" data-d="${x}">${num(x)}${suffix}</button>`).join('')}</div>`;
-    const w = v ? vialWarning(v, mcg) : null;
-    return `<div class="vial"><h3>${name}</h3>
-      <p class="hint">Cât scrie pe flacon</p>${chips(VIAL_MG, v?.mg, 'vmg', ' mg')}
-      <p class="hint">Apă bacteriostatică de pus${v ? `, recomandat ${num(rec?.ml ?? 2)} ml` : ''}</p>${chips(WATER_ML, v?.ml, 'vml', ' ml')}
-      ${v ? `<div class="line"><span>1 unitate</span><b>${num(Math.round(mcgPerUnit(v) * 10) / 10)} mcg</b></div>
-        <div class="line"><span>Pentru ${mcg} mcg</span><b>${unit(unitsFor(v, mcg))} · ${num(mlFor(v, mcg))} ml</b></div>
-        <div class="line"><span>Îți ajunge pentru</span><b>${dosesIn(v, mcg)} injecții · cam ${daysOfVial(v, mcg)} zile</b></div>
-        ${w ? `<p class="hint bad-t">${esc(w)}</p>` : ''}` : '<p class="hint">Alege mărimea flaconului și apa, ca să calculez unitățile.</p>'}</div>`;
-  }).join('');
-  return `<section class="card"><h2>Construirea flacoanelor</h2>
+  const blend = isBlend(r);
+  const pick = `<div class="seg vial-seg"><button class="${blend ? 'on' : ''}" data-cj="vmode" data-d="1">Un flacon, amândouă</button><button class="${blend ? '' : 'on'}" data-cj="vmode" data-d="0">Două flacoane</button></div>`;
+  let blocks: string;
+  if (blend) {
+    const v = mixVial(r);
+    const rec = bestWater(v.mg, mcg);
+    blocks = `<div class="vial"><h3>Flaconul tău</h3>
+      <p class="hint">Cât scrie pe flacon din fiecare peptidă (în total ${num(v.mg * 2)} mg)</p>${chips(VIAL_MG, v.mg, 'vmg', 'mix', ' mg')}
+      <p class="hint">Apă bacteriostatică pusă în flacon${rec ? `, recomandat ${num(rec.ml)} ml` : ''}</p>${chips(WATER_ML, v.ml, 'vml', 'mix', ' ml')}
+      ${vialLines(v, mcg, true)}
+      <p class="hint">Amândouă fiind în același flacon, o singură tragere îți dă și CJC, și Ipamorelin. Schimbă mai sus dacă flaconul tău e altfel.</p></div>`;
+  } else {
+    blocks = PEP.map(([k, name]) => {
+      const v = vialOf(r, k);
+      const rec = bestWater(v?.mg ?? 5, mcg);
+      return `<div class="vial"><h3>${name}</h3>
+        <p class="hint">Cât scrie pe flacon</p>${chips(VIAL_MG, v?.mg, 'vmg', k, ' mg')}
+        <p class="hint">Apă bacteriostatică de pus${v ? `, recomandat ${num(rec?.ml ?? 2)} ml` : ''}</p>${chips(WATER_ML, v?.ml, 'vml', k, ' ml')}
+        ${v ? vialLines(v, mcg, false) : '<p class="hint">Alege mărimea flaconului și apa, ca să calculez unitățile.</p>'}</div>`;
+    }).join('');
+  }
+  return `<section class="card"><h2>Construirea flaconului</h2>
     <p class="hint">Seringă de insulină U-100: ${U_PER_ML} unități = 1 ml, deci o unitate = 0,01 ml.</p>
+    ${pick}
     ${blocks}
     <details class="sub"><summary>Cum se reconstituie</summary>
-      <ol class="ticks"><li>Șterge dopul fiecărui flacon cu alcool și lasă-l să se usuce.</li><li>Trage apa bacteriostatică în seringă și las-o să curgă încet pe peretele flaconului, nu direct pe pulbere.</li><li>Nu agita. Rotește ușor sau lasă-l să se dizolve singur, câteva minute.</li><li>Lichidul trebuie să fie limpede. Dacă rămâne tulbure sau are particule, nu îl folosi.</li><li>Ține flacoanele la frigider, 2–8 °C, la întuneric. Pulberea nedesfăcută stă la congelator.</li><li>Scrie pe flacon data amestecării. Odată reconstituit, se folosește în 3–4 săptămâni.</li></ol>
+      <ol class="ticks"><li>Șterge dopul cu alcool și lasă-l să se usuce.</li><li>Trage apa bacteriostatică în seringă și las-o să curgă încet pe peretele flaconului, nu direct pe pulbere.</li><li>Nu agita. Rotește ușor sau lasă-l să se dizolve singur, câteva minute.</li><li>Lichidul trebuie să fie limpede. Dacă rămâne tulbure sau are particule, nu îl folosi.</li><li>Ține flaconul la frigider, 2–8 °C, la întuneric. Pulberea nedesfăcută stă la congelator.</li><li>Scrie pe flacon data amestecării. Odată reconstituit, se folosește în 3–4 săptămâni.</li></ol>
       <p class="hint">Apa bacteriostatică (cu alcool benzilic) ține flaconul bun câteva săptămâni. Apa sterilă simplă e doar pentru o singură folosire.</p></details></section>`;
 }
 
@@ -183,12 +220,15 @@ export function cjcAction(el: HTMLElement): boolean {
     });
     return true;
   }
-  if (a === 'vmg' || a === 'vml') {
-    const k = el.dataset['k'] as 'cjc' | 'ipa';
+  if (a === 'vmode') {
+    r.vials ??= {};
+    r.vials.blend = el.dataset['d'] === '1';
+  } else if (a === 'vmg' || a === 'vml') {
+    const k = el.dataset['k'] as 'cjc' | 'ipa' | 'mix';
     const n = Number(el.dataset['d']);
     r.vials ??= {};
     const had = r.vials[k];
-    const cur = had ?? { mg: 5, ml: 2 };
+    const cur = had ?? (k === 'mix' ? MIX_DEFAULT : { mg: 5, ml: 2 });
     const next = a === 'vmg' ? { ...cur, mg: n } : { ...cur, ml: n };
     // The first time a vial size is picked, start from the water that makes the dose easiest to read.
     if (a === 'vmg' && !had) { const b = bestWater(n, cjcTonight(r, today).amount); if (b) next.ml = b.ml; }

@@ -25,8 +25,9 @@ export interface Rx {
   checks?: Record<string, RxCheck>;
   /** CJC: the highest dose the automatic step-up may reach again, lowered when an increase was not tolerated. */
   cap?: number;
-  /** CJC: the two vials as the user mixed them (logic/vial.ts). */
-  vials?: { cjc?: Vial; ipa?: Vial };
+  /** CJC: the vials as the user mixed them (logic/vial.ts). `mix` is one vial holding both peptides, which is what
+      the user has (5 mg + 5 mg); `blend` false means two separate vials. */
+  vials?: { cjc?: Vial; ipa?: Vial; mix?: Vial; blend?: boolean };
 }
 
 /** The site after the last one, so the injections rotate. */

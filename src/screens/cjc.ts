@@ -7,6 +7,7 @@ import { addDays, avgSleep, CJC_AUTO_MAX, CJC_FX, CJC_SCHEMA, cjcAdherence, cjcC
 import { bestWater, daysOfVial, dosesIn, mcgPerUnit, mlFor, U_PER_ML, unit, unitsFor, VIAL_MG, vialWarning, WATER_ML, type Vial } from '../logic/vial.ts';
 import { back, head } from './parts.ts';
 import { countdownRing, pepIn, siteMap } from './pepviz.ts';
+import { pmSect } from './premium.ts';
 
 const num = (v: number) => String(v).replace('.', ',');
 const hhmm = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -133,7 +134,7 @@ function morning(r: Rx): string {
 
 function grid(r: Rx): string {
   const rows = cycleGrid(r, ctx.today()).map((w, i) => `<div class="trk-row"><span>S${i + 1}</span>${w.map((c) => `<i class="${c.state}" title="${c.date}${c.amount ? ` · ${c.amount} mcg` : ''}">${c.amount && c.amount !== 100 ? c.amount : ''}</i>`).join('')}</div>`).join('');
-  return `<section class="card trk"><h2>Ciclul</h2><div class="trk-grid" aria-label="Calendarul ciclului">${rows}</div>
+  return `<section class="card trk"><div class="trk-grid" aria-label="Calendarul ciclului">${rows}</div>
     <p class="hint trk-key"><i class="done"></i> făcută <i class="rest"></i> pauză 5/2 <i class="miss"></i> sărită <i class="today"></i> azi <i class="pause"></i> pauză de ciclu</p></section>`;
 }
 
@@ -173,19 +174,23 @@ export function cjcHtml(): string {
   const today = ctx.today();
   const top = `${back('Peptide', 'data-tab="pept"')}${head('supp', 'CJC-1295 + Ipamorelin', 'No DAC, în aceeași seringă, seara înainte de culcare.')}`;
   const note = '<p class="hint pad">Schema e aleasă de tine, nu prescrisă. Nu e un medicament aprobat și e pe lista interzisă WADA. Ipamorelinul poate crește foamea, ceea ce lucrează contra deficitului.</p>';
-  if (!r) return `${top}<div class="pep${pepIn()}"><section class="card"><h2>Schema ta</h2>${schema()}
+  if (!r) return `${top}<div class="pm pep${pepIn()}"><section class="card"><h2>Schema ta</h2>${schema()}
     <button class="primary wide" data-rx="cjc">Pornesc schema de azi</button></section>${note}</div>`;
   const c = cjcCycle(r.start, today);
-  return `${top}<div class="pep${pepIn()}">
+  return `${top}<div class="pm pep${pepIn()}">
     <div class="glp-tile static">${countdownRing(cjcNextIn(r, today), 'Următoarea injecție')}
       <span class="gt-t"><small>${c.phase === 'pause' ? `Pauză · încă ${c.pauseLeft} zile` : `Săptămâna ${c.week} din 8–12`}</small><b>${r.amount} + ${r.amount} mcg</b><span>${r.log.length} ${r.log.length === 1 ? 'injecție notată' : 'injecții notate'}</span></span></div>
     ${stats(r)}
     ${tonight(r)}
     ${morning(r)}
+    ${pmSect('Ciclul')}
     ${grid(r)}
-    <section class="card"><h2>Locul injecției</h2>${siteMap(RX_SITES, cjcNextSite(r), r.log.map((x) => x.site))}<p class="hint">Alternează singur: abdomen stânga, abdomen dreapta.</p></section>
+    ${pmSect('Locul injecției')}
+    <section class="card">${siteMap(RX_SITES, cjcNextSite(r), r.log.map((x) => x.site))}<p class="hint">Alternează singur: abdomen stânga, abdomen dreapta.</p></section>
+    ${pmSect('Doza și flaconul')}
     ${dose(r)}
     ${vialCard(r)}
+    ${pmSect('Analize')}
     ${labs(r)}
     <details class="card"><summary><b>Schema ta</b></summary>${schema()}</details>
     ${r.log.length ? `<details class="card"><summary><b>Istoric (${r.log.length})</b></summary>${[...r.log].reverse().slice(0, 40).map((x) => `<div class="line"><span>${esc(x.date)} ${x.time} · ${RX_SITES[x.site]}</span><b>${num(x.amount)} mcg</b><button class="link" data-rx="ddel" data-v="${r.id}" data-d="${x.id}" aria-label="Șterge">×</button></div>`).join('')}</details>` : ''}

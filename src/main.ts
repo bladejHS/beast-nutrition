@@ -1,4 +1,5 @@
 import './styles.css';
+import './styles-premium.css';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
 import { chapterCheck, isPerfect, trophyInit } from './screens/show.ts';

@@ -9,6 +9,7 @@ import { fatMass, type Measure } from '../logic/wellness.ts';
 import { banner, heroBand, shortDate } from './parts.ts';
 import { latestKg } from './state.ts';
 import { goalCard } from './extra.ts';
+import { pmHero, pmIn, pmSect, pmStats, ribbonArt, summit } from './premium.ts';
 
 const FIELDS: [keyof Measure, string][] = [['hips', 'Șolduri, cm'], ['chest', 'Piept, cm'], ['arm', 'Braț, cm'], ['thigh', 'Coapsă, cm'], ['bf', 'Grăsime, %']];
 const FEEL: [keyof CheckIn, string][] = [['energy', 'Energie'], ['strength', 'Forță'], ['hunger', 'Foame (10 = deloc)'], ['mood', 'Dispoziție'], ['stress', 'Stres (10 = deloc)'], ['sleep', 'Somn']];
@@ -128,16 +129,32 @@ function measuresCard(points: TrendPoint[]) {
 export function bodyHtml() {
   const s = ctx.get();
   const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
+  const end = points.at(-1);
+  const change = trendChange(points);
+  const goal = s.goal?.kg ?? null;
+  const start = points[0]?.trend ?? null;
+  const gone = start != null && end ? start - end.trend : null;
+  const left = goal != null && end ? end.trend - goal : null;
+  const weeks = finishedWeeks(s.weights, ctx.today()).length;
   return `${banner('body', 'Corp')}
+  <div class="pm${pmIn()}">
+  ${pmHero({ eyebrow: 'Corpul tău, în timp', title: end ? `${n1(end.trend)} kg` : 'Prima cântărire', sub: end ? (change == null ? 'Linia e tendința, nu cântărirea de azi.' : `${change > 0 ? '+' : '−'}${n1(Math.abs(change))} kg în ultimele 7 zile, pe tendință.`) : 'Notează-ți greutatea și începe graficul.', art: ribbonArt() })}
+  ${pmStats([[gone != null && gone > 0 ? `−${n1(gone)}` : gone != null ? n1(-gone) : '–', 'kg de la start'], [left != null ? n1(Math.max(0, left)) : '–', 'kg până la țintă'], [String(weeks), weeks === 1 ? 'săptămână' : 'săptămâni'], [String(Object.keys(s.weights).length), 'cântăriri']])}
+  ${points.length > 1 ? `<section class="card">${summit(points, goal)}<p class="hint">Tendința de la ${shortDate(points[0]!.date)} până azi. Punctul alb e acum.</p></section>` : ''}
   ${heroBand('weigh')}
+  ${pmSect('Ținta')}
   ${goalCard()}
+  ${pmSect('Decizia săptămânii')}
   ${reviewCard()}
+  ${pmSect('Cântarul', 'tendința peste zgomot')}
   ${weighCard(points)}
   ${transformCard()}
+  ${pmSect('Cum te simți')}
   ${checkinCard()}
   ${weeksCard()}
+  ${pmSect('Măsurători și poze')}
   ${measuresCard(points)}
-  ${photosCard()}`;
+  ${photosCard()}</div>`;
 }
 
 /** The only way the plan's numbers move from here: one change a week, never under the floor, and it can be undone. */

@@ -6,7 +6,8 @@ import { labDef } from '../logic/labs.ts';
 import { CJC_NAME, cjcCycle, cjcNextIn, cjcNextSite, isCjc, RX_SITES, rxNextSite, rxSince, rxValid, type Rx } from '../logic/rx.ts';
 import { back, head, listRow } from './parts.ts';
 import { daysLeft } from './glp1.ts';
-import { countdownRing, peptideHero, pepIn, siteMap } from './pepviz.ts';
+import { countdownRing, pepIn, siteMap } from './pepviz.ts';
+import { chainArt, pmHero, pmSect, pmStats } from './premium.ts';
 
 const UNITS: Rx['unit'][] = ['µg', 'mg', 'UI', 'ml'];
 const HORMONES = ['testo', 'testofree', 'lh', 'fsh', 'e2', 'shbg', 'prl', 'hct'];
@@ -81,19 +82,22 @@ export function peptidesHtml(): string {
   const active = list.filter((r) => r.on).length + (g.on ? 1 : 0);
   const doses = g.shots.length + list.reduce((t, r) => t + r.log.length, 0);
   return `${back()}${head('supp', 'Peptide', 'Tratamentele cu peptide, urmărite lângă nutriție și analize.')}
-  <div class="pep${pepIn()}">
-  ${peptideHero('Lanțuri scurte de aminoacizi', 'Semnale pe care corpul le înțelege. Le urmărești aici, exact cum le-a prescris medicul.', [[String(active), active === 1 ? 'tratament activ' : 'tratamente active'], [String(doses), 'doze notate'], [left == null ? '–' : left <= 0 ? 'AZI' : `${left}z`, 'până la semaglutidă']])}
+  <div class="pm pep${pepIn()}">
+  ${pmHero({ eyebrow: 'Lanțuri scurte de aminoacizi', title: 'Peptide', sub: 'Semnale pe care corpul le înțelege. Le urmărești aici, lângă nutriție și analize.', art: chainArt() })}
+  ${pmStats([[String(active), active === 1 ? 'tratament activ' : 'tratamente active'], [String(doses), 'doze notate'], [left == null ? '–' : left <= 0 ? 'AZI' : `${left}z`, 'până la semaglutidă']])}
+  ${pmSect('Tratamentele tale')}
   <button class="glp-tile${left != null && left <= 0 ? ' hot' : ''}" data-tab="glp1">
     ${countdownRing(left, 'Semaglutidă')}
     <span class="gt-t"><small>GLP-1 · o dată pe săptămână</small><b>Semaglutidă</b><span>${g.on ? `${num(g.mg)} mg pe săptămână · ${g.shots.length} ${g.shots.length === 1 ? 'injecție notată' : 'injecții notate'}` : 'Wegovy cu medicul: doze, zile, ritm'}</span></span>
     <i class="gt-go" aria-hidden="true">›</i>
   </button>
-  <div class="list">
-    ${listRow('data-f="sub" data-v="labs"', 'Analize', 'Hormoni, glicemie, ficat: urmărite în timp')}
-  </div>
   ${cjcTile()}
   ${list.filter((r) => !isCjc(r)).map((r) => (r.id === editing ? rxForm(r) : rxCard(r))).join('')}
   ${editing === 'new' ? rxForm(null) : !open ? '<button class="ghost wide" data-rx="new">Adaugă un tratament prescris</button>' : ''}
+  ${pmSect('Analize și context')}
+  <div class="list">
+    ${listRow('data-f="sub" data-v="labs"', 'Analize', 'Hormoni, glicemie, ficat: urmărite în timp')}
+  </div>
   ${doctorCard()}
   <p class="hint pad">Tratamentele prescrise le notezi exact cum a scris medicul.</p></div>`;
 }

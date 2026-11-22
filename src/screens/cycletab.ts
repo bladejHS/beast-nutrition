@@ -6,6 +6,7 @@ import { addDays, mondayOf } from '../logic/review.ts';
 import type { Demand } from '../logic/training.ts';
 import { demandTag, head } from './parts.ts';
 import { fuelWeek } from './state.ts';
+import { carbWave, fuelBars, grainArt, pmHero, pmIn, pmSect, pmStats } from './premium.ts';
 
 
 const ORDER: Demand[] = ['high', 'moderate', 'low', 'rest'];
@@ -66,31 +67,41 @@ export function cycleTabHtml(): string {
   const week = fuelWeek(mondayOf(today));
   const lv = levels(week.days);
   const mine = (i: number) => (manual ? s.fuel.pattern?.[i] ?? 'moderate' : week.days[i]!.demand === 'rest' ? 'low' : week.days[i]!.demand);
+  const today7 = days.map((d) => ({ label: d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase(), c: d.c, kind: d.demand, today: d.date === today }));
+  const hi = days.reduce((a, d) => (d.c > a.c ? d : a), days[0]!);
   const html = `${head('cycle', 'Carb cycling', manual ? 'Tu alegi zilele. Aplicația îți dă macronutrienții fiecărui tip de zi.' : 'Carbohidrații urmează antrenamentul. Proteinele și grăsimile rămân la fel în fiecare zi.')}
-  <section class="card"><h2>Macronutrienți pe tip de zi</h2>
-    <div class="lv-grid">${lv.map((x) => `<div class="lv lv-${x.lv}"><b>${x.name}</b><span class="lv-k">${n0(x.kcal)}<small>kcal</small></span><span class="lv-m"><i class="mp">P ${n0(x.p)} g</i><i class="mc">C ${n0(x.c)} g</i><i class="mf">G ${n0(x.f)} g</i></span>${x.used ? '' : '<small class="lv-n">nefolosită săptămâna asta</small>'}</div>`).join('')}</div>
-    <p class="hint">Proteinele și grăsimile sunt aceleași în fiecare zi; se mută doar carbohidrații. Săptămâna are exact caloriile planului, așa că valorile se reechilibrează după câte zile HIGH, MEDIUM și LOW alegi.</p>
+  <div class="pm${pmIn()}">
+  ${pmHero({ eyebrow: 'Fuel for the work required', title: 'Valul săptămânii', sub: 'Carbohidrații se mută după efort. Săptămâna rămâne a planului.', art: grainArt() })}
+  ${pmStats([[String(days[0]!.c), 'g carbo azi'], [String(avg), 'media pe zi'], [hi.date === today ? 'AZI' : dayShort(hi.date).slice(0, 3).toUpperCase(), 'ziua cea mai mare'], [String(count.find(([k]) => k === 'high')?.[1] ?? 0), 'zile HIGH']])}
+  <section class="card">${carbWave(today7)}
+    <p class="hint">Următoarele 7 zile. Punctul plin e azi; culoarea punctului arată tipul zilei.</p></section>
+  ${pmSect('Macronutrienți pe tip de zi', 'low · medium · high')}
+  <section class="card">
+    ${fuelBars(lv.map((x) => ({ name: x.name, kind: x.lv, c: x.c, kcal: x.kcal, used: x.used })))}
+    <p class="hint">În fiecare zi la fel: ${n0(lv[0]!.p)} g proteine, ${n0(lv[0]!.f)} g grăsimi. Se mută doar carbohidrații, iar săptămâna are exact caloriile planului, așa că valorile se reechilibrează după câte zile HIGH, MEDIUM și LOW alegi.</p>
   </section>
   <section class="card"><h2>Săptămâna ta</h2>
     ${WEEK.map((name, i) => `<div class="pick-row"><span>${name}</span><div class="seg small">${PICK.map(([v, l]) => `<button data-cyc="day" data-i="${i}" data-v="${v}" class="${mine(i) === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>`).join('')}
     <p class="hint">${manual ? 'Se aplică în fiecare săptămână, de azi înainte. Zilele trecute rămân cum au fost.' : 'Acum alege aplicația, după antrenamente. Cum atingi o zi, treci pe alegerea ta.'}</p>
     ${manual ? '<button class="ghost wide" data-cyc="auto">Lasă aplicația să aleagă după antrenamente</button>' : ''}
   </section>
+  ${pmSect('Valul, în mișcare')}
   <div class="hero-stage" aria-hidden="true"><canvas class="hero-cv" data-kind="carbs" data-j="${esc(JSON.stringify({ c: days.map((d) => d.c), d: days.map((d) => (d.date === today ? 'AZI' : dayShort(d.date).slice(0, 2).toUpperCase())), t: days.map((d) => d.demand), now: 0, intro: !ran }))}"></canvas></div>
-  <h2 class="more-sec">Următoarele 7 zile</h2>
+  ${pmSect('Următoarele 7 zile', 'zi de zi')}
   <section class="card cyc-card"><table class="cyc-t">
     <thead><tr><th>Ziua</th><th>Tipul zilei</th><th class="n">Carbo</th><th class="n">Calorii</th></tr></thead>
     <tbody>${rows}</tbody></table>
     <p class="hint">În fiecare zi: ${n0(days[0]!.p)} g proteine, ${n0(days[0]!.f)} g grăsimi. Media carbohidraților: ${avg} g pe zi. Fiecare săptămână, de luni până duminică, are exact carbohidrații și caloriile planului. ${count.map(([k, n]) => `${n} ${k === 'high' ? 'HIGH' : k === 'moderate' ? 'MODERATE' : k === 'low' ? 'LOWER' : 'RECOVERY'}`).join(', ')}.</p>
   </section>
-  <section class="card"><h2>Cum se face corect</h2>
+  ${pmSect('Cum se face corect')}
+  <section class="card">
     <p><b>Carbohidrații după efort.</b> Cele mai multe în zilele cu sesiuni grele (Lower Body, Upper + Power, alergarea lungă), mai puține în zilele cu efort mediu, cele mai puține în zilele de recuperare (mers, mobilitate). Principiul „fuel for the work required”: mănânci carbohidrați pentru munca pe care o ai de făcut.</p>
     <p><b>Săptămâna rămâne aceeași.</b> Carb cycling-ul doar mută carbohidrații între zile. Slăbitul vine din deficitul săptămânii, nu din ciclare.</p>
     <p><b>Proteinele la fel, zilnic.</b> Țin masa musculară în deficit; nu se ciclează.</p>
     <p><b>Ziua dinaintea unei zile HIGH urcă puțin</b>, ca să intri în antrenamentul greu cu glicogenul refăcut.</p>
     <p><b>În ziua de antrenament</b>, carbohidrații se adună în masa dinainte și în cea de după.</p>
     <button class="ghost wide" data-tab="fuel" data-sub="carbs">Calendar, factori și setări</button>
-  </section>`;
+  </section></div>`;
   ran = true;
   return html;
 }

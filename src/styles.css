@@ -1558,6 +1558,21 @@ html, body { background: var(--bg); }
 .ph-b .pf:first-of-type { border-top: 0; }
 .proto > details.ph.next .ph-b .pf { opacity: .72; }
 
+/* ---- What the app applies by itself on semaglutide (2026-11-22). */
+.card.auto { border-left-color: var(--act-hot); }
+.card.auto.off { border-left-color: var(--line); }
+.card.auto.off h2 { color: var(--t3); }
+.card.auto > .ghost { margin-top: 10px; }
+.card.auto > .ghost[aria-pressed="true"] { color: var(--act-hot); box-shadow: inset 0 0 0 1px var(--act-hot); }
+.card.auto h3 { margin: 16px 0 2px; font: 800 condensed 13px/1 var(--font); letter-spacing: .08em; text-transform: uppercase; color: var(--t3); }
+.auto-e { display: flex; align-items: flex-start; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line); }
+.auto-e:first-of-type { border-top: 0; }
+.auto-e > i { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: rgba(var(--glow), .14); color: var(--act-hot); font: 700 13px/1 var(--font); font-style: normal; }
+.auto-e > div { flex: 1 1 auto; min-width: 0; }
+.auto-e p { margin: 0; color: var(--t2); font-size: 14px; line-height: 1.45; }
+.auto-e small { display: block; margin-top: 3px; color: var(--t3); font-size: 12.5px; }
+.auto-e .link { flex: none; align-self: center; }
+
 
 /* Peptide: CJC tracking */
 .trk { margin-top: 14px; display: grid; gap: 16px; }

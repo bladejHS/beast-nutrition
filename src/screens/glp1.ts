@@ -3,9 +3,10 @@ import { ctx, dayLong, esc, n1 } from '../app.ts';
 import { addDays } from '../logic/review.ts';
 import { doseMl, due, glucoseFeedback, glucoseLevel, LADDER, nextSite, onOrAfter, SITES, titration, units, vialAge, vialLeft, weeklyRate, weeksAtDose, type Glp1, type GlucoseWhen } from '../logic/glp1.ts';
 import { adjustedKg, BASELINE_LABS, labsCovered, phaseOf, phaseStates, PHASE_TITLE, PHASE_WHEN, proteinFloor, rateBandKg, type PhaseId } from '../logic/glp1plan.ts';
+import { decide, freshAuto } from '../logic/glp1auto.ts';
 import { goalView } from '../logic/goal.ts';
 import { trendAlpha, weightTrend } from '../logic/trend.ts';
-import { weightKey } from '../logic/training.ts';
+import { classify, weightKey, type Demand } from '../logic/training.ts';
 import { dayRating, latestKg, training } from './state.ts';
 import { back, head, heroBand } from './parts.ts';
 import { countdownRing, doseStairs, glucoseChart, paceGauge, pepIn, siteMap } from './pepviz.ts';
@@ -105,6 +106,7 @@ function rateLine(weights: Record<string, number>): string {
 function stepText(g: Glp1, weights: Record<string, number>): string {
   const st = titration(g, weights);
   switch (st.kind) {
+    case 'held': return 'Aplicația ține treapta pe loc. Motivul e în „Ce face aplicația singură", mai jos; se ridică de la sine când condiția dispare.';
     case 'wait': return `Mai rămâi ${st.weeks} ${st.weeks === 1 ? 'săptămână' : 'săptămâni'} pe doza asta: fiecare treaptă ține cel puțin 4 săptămâni.`;
     case 'data': return 'Ai 4 săptămâni pe doza asta, dar prea puține cântăriri ca să știm ritmul. Cântărește-te zilnic, dimineața.';
     case 'lowsugar': return 'Ai avut o glicemie sub 70 mg/dL în ultimele 2 săptămâni: nu urca doza până nu vorbești cu medicul, și nu sări mesele din plan.';
@@ -124,6 +126,62 @@ function setup(g: Glp1): string {
     <p class="field">Ziua injecției</p><div class="chips seven">${DAYS.map((d, i) => `<button data-g="day" data-v="${i}" aria-pressed="${g.day === i}">${d.slice(0, 2)}</button>`).join('')}</div>
     <p class="hint">În Hybrid365 duminica e zi de recuperare: dacă alegi sâmbătă seara, după alergarea lungă, greața din prima zi cade pe ziua liniștită.</p>
     <button class="primary wide" data-g="on" style="margin-top:16px">Pornește cu ${mg(LADDER[0])}</button></section>`;
+}
+
+/* ---- What the app applies by itself (2026-11-22). The rules live in logic/glp1auto.ts and write nothing but
+   State.glp1: never the macros, never the training, never the dose in milligrams. */
+
+/** Runs the rules and applies them. Called once per render of this screen; returns true when something changed. */
+export function autoRun(): boolean {
+  const s = ctx.get();
+  const g = s.glp1;
+  const a = (g.auto ??= freshAuto());
+  const today = ctx.today();
+  if (!a.on || !g.on) { a.phase = undefined; return false; }
+
+  let week: (Demand | null)[] = [null, null, null, null, null, null, null];
+  try {
+    const t = training();
+    const rules = { limits: s.fuel.limits, weights: s.fuel.weights, boxStrength: s.fuel.boxStrength };
+    week = Array.from({ length: 7 }, (_, i) => classify(t.week[i] ?? [], rules).demand);
+  } catch { /* the training week cannot be read: rule R1 simply does not fire */ }
+
+  const baseline = s.labs.filter((r) => (BASELINE_LABS as readonly string[]).includes(r.marker)).map((r) => r.date).sort();
+  const phase = PHASE_TITLE[phaseOf(g, atGoal())];
+  const { set, entries } = decide(g, a, { today, week, weights: s.weights, lastLabs: baseline.at(-1) ?? '', phase });
+
+  if (set.day != null) g.day = set.day;
+  if (set.hold != null) g.hold = set.hold;
+  for (const e of entries) a.log.push({ ...e, id: `a${Date.now().toString(36)}${a.log.length}` });
+  if (entries.some((e) => e.kind === 'labs')) a.recheck = today;
+  a.phase = phase;
+  if (a.log.length > 30) a.log = a.log.slice(-30);
+  if (set.day != null || set.hold != null || entries.length) { ctx.commit(); return true; }
+  return false;
+}
+
+/** True when the final weight has been reached, read the same way Corp reads it. */
+function atGoal(): boolean {
+  const s = ctx.get();
+  if (!s.goal || !s.plan) return false;
+  const st = goalView(s.goal, weightTrend(s.weights, trendAlpha(s.plan.phase)), s.plan.phase, ctx.today()).state;
+  return st === 'reached' || st === 'stop' || st === 'band';
+}
+
+/* Typographic marks, not emoji: emoji break the condensed type of the rest of the app. */
+const AUTO_ICON: Record<string, string> = { day: '↻', hold: '‖', release: '▸', labs: '✚', phase: '◆' };
+
+function autoCard(g: Glp1): string {
+  const a = g.auto ?? freshAuto();
+  const log = [...a.log].reverse().slice(0, 6);
+  return `<section class="card auto${a.on ? '' : ' off'}"><h2>Ce face aplicația singură</h2>
+    <p class="hint">Pe baza protocolului, strict pe semaglutidă: ziua injecției, blocarea treptei și controlul la 3 luni. Nu atinge niciodată caloriile, macronutrienții sau antrenamentul, și nu schimbă doza în miligrame — aceea rămâne a medicului.</p>
+    <button class="ghost wide" data-g="auto" aria-pressed="${a.on}">${a.on ? 'Pornit — oprește' : 'Oprit — pornește'}</button>
+    ${g.hold ? '<p class="warn">Treapta următoare e blocată de aplicație.</p>' : ''}
+    ${log.length
+      ? `<h3>Ultimele</h3>${log.map((e) => `<div class="auto-e"><i aria-hidden="true">${AUTO_ICON[e.kind] ?? '•'}</i><div><p>${esc(e.text)}</p><small>${esc(shortDay(e.date))}</small></div>${e.undo ? `<button class="link" data-g="unauto" data-v="${esc(e.id)}">Anulează</button>` : ''}</div>`).join('')}`
+      : `<p class="hint">${a.on ? 'Încă nimic de aplicat. Regulile se verifică de fiecare dată când deschizi ecranul.' : 'Oprit: nimic nu se aplică singur.'}</p>`}
+  </section>`;
 }
 
 /* ---- The whole protocol, five phases (2026-11-21). Same look as the performance plan in Plan: gold = done,
@@ -280,6 +338,8 @@ const RULES = [
 ];
 
 export function glp1Html(): string {
+  // the rules run before the screen is built, so what they changed is already on it (never re-renders from here)
+  autoRun();
   const s = ctx.get();
   const g = s.glp1;
   const today = ctx.today();
@@ -308,6 +368,7 @@ export function glp1Html(): string {
     <p class="coach">${stepText(g, s.weights)}</p>
     <p class="field">Doza prescrisă acum de medic</p><div class="chips five">${LADDER.map((x) => `<button data-g="mg" data-v="${x}" aria-pressed="${g.mg === x}">${String(x).replace('.', ',')}</button>`).join('')}</div>
     <p class="hint">Aplicația doar propune. Schimbi doza aici după ce ai vorbit cu medicul.</p></section>
+  ${autoCard(g)}
   ${protocolHtml()}
   ${glucoseCard(g)}
   ${vialCard(g)}
@@ -378,6 +439,26 @@ export function glp1Action(el: HTMLElement): boolean {
     return true;
   }
   else if (a === 'gdel') { g.glucose = (g.glucose ?? []).filter((x) => x.id !== v); }
+  else if (a === 'auto') {
+    const au = (g.auto ??= freshAuto());
+    au.on = !au.on;
+    if (!au.on) { g.hold = false; au.phase = undefined; }
+    ctx.commit(); ctx.render();
+    ctx.toast(au.on ? 'Pornit: aplicația aplică protocolul singură.' : 'Oprit: nimic nu se mai aplică singur.');
+    return true;
+  }
+  else if (a === 'unauto') {
+    const au = g.auto;
+    const e = au?.log.find((x) => x.id === v);
+    if (e?.undo) {
+      if (e.undo.day != null) g.day = e.undo.day;
+      if (e.undo.hold != null) g.hold = e.undo.hold;
+      au!.log = au!.log.filter((x) => x !== e);
+      ctx.commit(); ctx.render();
+      ctx.toast('Anulat. Regula nu se mai aplică până când condiția se schimbă.');
+      return true;
+    }
+  }
   else if (a === 'screen') {
     g.screened = today;
     ctx.commit(); ctx.render();

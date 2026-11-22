@@ -8,6 +8,7 @@
 import { weekday } from './calc.ts';
 import { addDays } from './review.ts';
 import { trendChange, weightTrend } from './trend.ts';
+import type { Auto } from './glp1auto.ts';
 
 export const LADDER = [0.25, 0.5, 1, 1.7, 2.4] as const;
 export const SITES = ['Abdomen stânga', 'Abdomen dreapta', 'Coapsă stângă', 'Coapsă dreaptă', 'Braț stâng', 'Braț drept'] as const;
@@ -34,6 +35,10 @@ export interface Glp1 {
   glucose?: Glucose[];
   /** Date the doctor went through the contraindications, noted by the user (2026-11-21, protocol phase 0). */
   screened?: string;
+  /** The app holds the next step of the ladder: losing too fast, or a low blood sugar (logic/glp1auto.ts). */
+  hold?: boolean;
+  /** What the app applied by itself, and the switch for it (logic/glp1auto.ts). */
+  auto?: Auto;
 }
 
 export interface Vial {
@@ -101,6 +106,7 @@ export function weeklyRate(weights: Record<string, number>, days = 14): number |
 }
 
 export type Step =
+  | { kind: 'held' }
   | { kind: 'wait'; weeks: number }
   | { kind: 'data' }
   | { kind: 'nausea' }
@@ -114,6 +120,8 @@ export type Step =
 const lowSugar = (g: Glp1) => { const end = g.glucose?.at(-1)?.date; return !!end && (g.glucose ?? []).some((x) => x.mg < 70 && gap(x.date, end) < 14); };
 
 export function titration(g: Glp1, weights: Record<string, number>): Step {
+  // the app put a hold on the ladder by itself (logic/glp1auto.ts); nothing below may propose a step up
+  if (g.hold) return { kind: 'held' };
   const weeks = weeksAtDose(g);
   if (weeks < 4) return { kind: 'wait', weeks: 4 - weeks };
   const recent = g.shots.slice(-2).map((x) => x.nausea ?? 0);

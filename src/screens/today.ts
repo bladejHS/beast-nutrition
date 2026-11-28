@@ -23,6 +23,7 @@ import { glp1Card } from './glp1.ts';
 import { chance, dateRo, segments } from '../logic/goal.ts';
 import { trendAlpha, weightTrend } from '../logic/trend.ts';
 import { isPerfect, perfectCheck, perfectStreak, trophyShelf } from './show.ts';
+import { streakButton } from './streak.ts';
 
 let date = '';
 let seen = '';
@@ -291,7 +292,7 @@ export function todayHtml() {
   perfectCheck(d, sum, t);
   // the entrance plays once per visit (ctx.fresh), never when an action redraws the screen
   return `<div class="azi${ctx.fresh ? ' enter' : ''}">
-  <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button></header>
+  <header class="dhead"><span class="wolf" aria-hidden="true"></span><h1>${dayTitle(d)}</h1><button class="ib" data-day="-1" aria-label="Ziua anterioară">‹</button><button class="ib" data-day="1" aria-label="Ziua următoare">›</button>${streakButton()}</header>
   ${d === today ? road() : heroBand(DAY_KIND[(new Date(`${d}T12:00:00`).getDay() + 6) % 7]!)}
   ${d === today ? trophyShelf() : ''}
   ${d === today ? '' : '<button class="backbtn" data-az="today">‹ Înapoi la azi</button>'}

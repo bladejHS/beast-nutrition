@@ -21,6 +21,7 @@ import { goalAction, goalBind, goalSync, labsAction, labsBind, stackAction } fro
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
+import { streakAction } from './screens/streak.ts';
 import { importBackup, importMfp, isEditing, mindHtml, planAction, planHtml, setupBind, setupHtml } from './screens/plan.ts';
 import { dayFuel, freshFuel, kitchen, mealSlots, syncFuel } from './screens/state.ts';
 import { dayMeals, totals } from './logic/store.ts';
@@ -201,7 +202,7 @@ document.addEventListener('click', (ev) => {
     tab = el.dataset['tab'] as Tab; ctx.fresh = true; render(); scrollTo(0, 0);
     return;
   }
-  if (photosAction(el) || cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || cjcAction(el) || peptidesAction(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
+  if (streakAction(el) || photosAction(el) || cookAction(el) || cycleAction(el) || goalAction(el) || labsAction(el) || stackAction(el) || glp1Action(el) || cjcAction(el) || peptidesAction(el) || fuelAction(el) || fastAction(el) || bodyAction(el) || planAction(el) || todayAction(el) || mineAction(el)) return;
   logAction(el);
 });
 

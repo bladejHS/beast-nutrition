@@ -153,6 +153,33 @@ textarea { font-size: 16px; }
 .road-ms em.ok { color: var(--gold); }
 .road-ms em.off { color: var(--bad); }
 
+/* the streak: a flame in the corner of Azi, the month calendar in a sheet (screens/streak.ts, 2026-11-28) */
+.dhead .ib:last-of-type { margin-right: 0; }
+.stk-b { display: inline-flex; align-items: center; gap: 4px; min-width: 52px; height: 36px; margin-left: 4px; padding: 0 11px 0 9px; border-radius: 18px; color: var(--t2); background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); font: 800 15px/1 var(--font); font-variant-numeric: tabular-nums; }
+.stk-b svg { width: 18px; height: 18px; fill: currentColor; }
+.stk-b.on { color: #ffb648; background: rgba(255, 166, 60, .1); box-shadow: inset 0 0 0 1px rgba(255, 166, 60, .35); }
+.stk-b.on b { color: var(--t1); }
+.stk-b:active { transform: scale(.94); }
+.stk-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 16px; }
+.stk-sum div { padding: 12px 10px; border-radius: 14px; background: var(--s2); text-align: center; }
+.stk-sum b { display: block; font: 900 extra-condensed 32px/1 var(--font); }
+.stk-sum span { display: block; margin-top: 4px; font: 600 12px/1.2 var(--font); color: var(--t2); }
+.stk-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.stk-nav b { font: 800 condensed 18px/1 var(--font); text-transform: capitalize; }
+.stk-cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.stk-w { padding: 4px 0; text-align: center; font: 700 11px/1 var(--font); letter-spacing: .08em; color: var(--t3); }
+.stk-d { display: grid; place-items: center; aspect-ratio: 1; border-radius: 12px; font: 700 15px/1 var(--font); font-variant-numeric: tabular-nums; color: var(--t3); background: var(--s2); }
+.stk-d.logged { color: var(--t1); background: rgba(var(--glow), .22); box-shadow: inset 0 0 0 1px rgba(var(--glow), .45); }
+.stk-d.perfect { color: #1a1206; background: linear-gradient(180deg, var(--gold-2), var(--gold)); }
+.stk-d.missed { color: var(--t3); opacity: .7; }
+.stk-d.future { background: transparent; color: var(--n5); }
+.stk-d.is-today { outline: 2px solid var(--t1); outline-offset: 1px; }
+.stk-leg { display: flex; gap: 14px; margin: 14px 0 4px; font: 600 13px/1 var(--font); color: var(--t2); }
+.stk-leg span { display: inline-flex; align-items: center; gap: 6px; }
+.stk-leg span::before { content: ''; width: 12px; height: 12px; border-radius: 4px; background: var(--s2); }
+.stk-leg .perfect::before { background: var(--gold); }
+.stk-leg .logged::before { background: rgba(var(--glow), .45); }
+
 /* Azi, calories and macros as one bar and a list (today.ts numbers(), 2026-11-28) */
 .dash.dq { display: block; }
 .dq-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }

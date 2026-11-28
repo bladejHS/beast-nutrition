@@ -13,6 +13,7 @@ import { classify } from '../logic/training.ts';
 import { fatFloorShare, minusMinutes, nextBreak, proteinPerMeal, sleepAverage } from '../logic/perf.ts';
 import { waterTarget } from '../logic/wellness.ts';
 import { banner, back } from './parts.ts';
+import { currentPace } from './pilot.ts';
 import { PRINCIPLES } from '../content.ts';
 
 declare const __BUILD__: string;
@@ -287,7 +288,7 @@ export function setupHtml() {
     <label class="field">Faza<select name="phase" id="ph"><option value="cut" ${opt('cut', pl?.phase)}>Slăbire</option><option value="maintain" ${opt('maintain', pl?.phase)}>Menținere</option><option value="reverse" ${opt('reverse', pl?.phase)}>Reverse diet</option></select></label>
     <label class="field">Calorii de menținere știute din experiență, opțional<input name="maint" type="text" inputmode="numeric" value="${pl?.maintenance ?? ''}" placeholder="gol = calculate"></label>
     <div id="cutbox">
-      <label class="field">Ritm pe săptămână<select name="rate">${[0.4, 0.5, 0.6, 0.7, 0.8, 1].map((r) => `<option value="${r}" ${opt(r, pl?.ratePct ?? 0.6)}>${String(r).replace('.', ',')}% din greutate${r === 1 ? ' (maxim)' : ''}</option>`).join('')}</select></label>
+      <label class="field">Ritm pe săptămână<select name="rate">${(() => { const gp = currentPace(); return gp ? `<option value="${gp.pct}" ${opt(gp.pct, pl?.ratePct)}>După ținta finală: ${String(gp.pct).replace('.', ',')}%, ca să prinzi data</option>` : ''; })()}${[0.4, 0.5, 0.6, 0.7, 0.8, 1].map((r) => `<option value="${r}" ${opt(r, pl?.ratePct ?? 0.6)}>${String(r).replace('.', ',')}% din greutate${r === 1 ? ' (maxim)' : ''}</option>`).join('')}</select></label>
       <label class="field">Pauze de dietă<select name="breaks"><option value="">Fără pauze planificate</option>${[[2, 1], [2, 2], [3, 1], [4, 1]].map(([a, b]) => `<option value="${a}+${b}" ${pl?.breaks?.on === a && pl.breaks.off === b ? 'selected' : ''}>${a} săptămâni deficit + ${b} la mențineri</option>`).join('')}</select></label>
       <label class="field">Zile cu calorii mari<select name="high"><option value="">Fără, aceleași calorii zilnic</option><option value="5" ${pl?.highDays.length === 1 ? 'selected' : ''}>Una: sâmbătă</option><option value="5,6" ${pl?.highDays.length === 2 ? 'selected' : ''}>Două: sâmbătă și duminică</option></select></label>
     </div>
@@ -392,7 +393,8 @@ export function planAction(el: HTMLElement): boolean {
     const url = URL.createObjectURL(new Blob([JSON.stringify(s)], { type: 'application/json' }));
     const a = document.createElement('a');
     a.href = url; a.download = `beast-nutrition-${ctx.today()}.json`; a.click();
-    URL.revokeObjectURL(url);
+    // Safari reads the file after the click returns: revoked at once, the backup came out empty or not at all
+    window.setTimeout(() => URL.revokeObjectURL(url), 4000);
     ctx.render();
     return true;
   }

@@ -26,11 +26,15 @@ export function currentPace(): GoalPace | null {
 /** Everything eaten on a day, for the days that have anything logged. */
 function intakeOf(s: State, today: string, days = 30): Array<{ date: string; kcal: number }> {
   const out: Array<{ date: string; kcal: number }> = [];
-  for (let i = 0; i < days; i++) {
+  for (let i = 1; i <= days; i++) {
     const d = addDaysUtc(today, -i);
     const meals = dayMeals(s, d);
     if (!meals.flat().length) continue;
-    out.push({ date: d, kcal: totals(meals).kcal });
+    const kcal = totals(meals).kcal;
+    // 2026-11-28 (code review): a day with only breakfast written down read as a day eaten at 600 kcal, pulled the
+    // measured maintenance down and could make the pilot cut. Days logged under half the target are left out.
+    if (s.plan && kcal < s.plan.macros.kcal * 0.5) continue;
+    out.push({ date: d, kcal });
   }
   return out.reverse();
 }
@@ -38,10 +42,13 @@ function intakeOf(s: State, today: string, days = 30): Array<{ date: string; kca
 /** Mean protein over the same window as the estimate, or null when too few days were logged. */
 function proteinMean(s: State, today: string, days = 21): number | null {
   const vals: number[] = [];
-  for (let i = 0; i < days; i++) {
+  for (let i = 1; i <= days; i++) {
     const meals = dayMeals(s, addDaysUtc(today, -i));
     if (!meals.flat().length) continue;
-    vals.push(totals(meals).p);
+    const t = totals(meals);
+    // the same half-logged days would read as a protein problem
+    if (s.plan && t.kcal < s.plan.macros.kcal * 0.5) continue;
+    vals.push(t.p);
   }
   return vals.length >= 7 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }

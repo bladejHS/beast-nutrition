@@ -160,7 +160,17 @@ function slotsOf(d: string, t: DayTarget): Slot[] {
   // Food logged in a slot the day no longer shows must not disappear.
   dayMeals(s, d).forEach((list, i) => { if (list.length && !rows.some((r) => r.i === i)) rows.push({ key: `s${i}`, i, time: sl.times[i] ?? rows.at(-1)?.time ?? '', title: MEALS[i]!, tag: '', goal: null, meal: null, mi: -1 }); });
   const base = sl.times[0] ? dayBase(sl.times[0]) : 0;
-  return rows.sort((a, b) => onClock(a.time, base) - onClock(b.time, base));
+  rows.sort((a, b) => onClock(a.time, base) - onClock(b.time, base));
+  // 2026-11-28, the user: a generated day still reads Masa 1, Masa 2, Masa 3, Masa 4, in the order of the clock; the
+  // dish goes under it, with its tag
+  let k = 0;
+  for (const r of rows) {
+    if (!r.meal) continue;
+    const dish = r.meal.name;
+    r.title = r.meal.snack ? 'Gustare' : `Masa ${++k}`;
+    r.tag = [dish, r.meal.tag].filter(Boolean).join(' · ');
+  }
+  return rows;
 }
 
 const grams = (m: Meal) => m.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ');

@@ -153,6 +153,13 @@ textarea { font-size: 16px; }
 .road-ms em.ok { color: var(--gold); }
 .road-ms em.off { color: var(--bad); }
 
+/* a logged food opens for editing (screens/entryedit.ts, 2026-11-28) */
+.ent-b { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; align-items: center; padding: 4px 0; text-align: left; color: inherit; }
+.ent-b b { grid-column: 1; display: block; font-weight: 450; overflow-wrap: anywhere; }
+.ent-b small { grid-column: 1; color: var(--t2); }
+.ent-ed { grid-column: 2; grid-row: 1 / span 2; font: 650 12.5px/1 var(--font); font-style: normal; color: var(--sky); }
+.ent-b:active { opacity: .7; }
+
 /* the streak: a flame in the corner of Azi, the month calendar in a sheet (screens/streak.ts, 2026-11-28) */
 .dhead .ib:last-of-type { margin-right: 0; }
 .stk-b { display: inline-flex; align-items: center; gap: 4px; min-width: 52px; height: 36px; margin-left: 4px; padding: 0 11px 0 9px; border-radius: 18px; color: var(--t2); background: var(--s2); box-shadow: inset 0 0 0 1px var(--line); font: 800 15px/1 var(--font); font-variant-numeric: tabular-nums; }

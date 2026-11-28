@@ -24,6 +24,7 @@ import { chance, dateRo, segments } from '../logic/goal.ts';
 import { trendAlpha, weightTrend } from '../logic/trend.ts';
 import { isPerfect, perfectCheck, perfectStreak, trophyShelf } from './show.ts';
 import { streakButton } from './streak.ts';
+import { openEntryEdit } from './entryedit.ts';
 
 let date = '';
 let seen = '';
@@ -212,7 +213,8 @@ function nextCard(d: string, slots: Slot[], shown: number | null, next: number |
 
 function entryRow(e: Entry, i: number) {
   // an entry brought from MyFitnessPal has no weight, only the meal's totals
-  return `<div class="entry"><div><b>${esc(e.name)}</b><small>${e.g ? `${nb(n0(e.g), 'g')}, ` : ''}${nb(n0(e.kcal), 'kcal')}, ${nb(n0(e.p), 'g')} proteine</small></div><button class="xs" data-del="${i}:${e.id}" aria-label="Șterge ${esc(e.name)}">×</button></div>`;
+  // 2026-11-28: a tap on the food opens it for editing (screens/entryedit.ts)
+  return `<div class="entry"><button class="ent-b" data-ent="${i}:${e.id}" aria-label="Modifică ${esc(e.name)}"><b>${esc(e.name)}</b><small>${e.g ? `${nb(n0(e.g), 'g')}, ` : ''}${nb(n0(e.kcal), 'kcal')}, ${nb(n0(e.p), 'g')} proteine</small><i class="ent-ed" aria-hidden="true">Modifică</i></button><button class="xs" data-del="${i}:${e.id}" aria-label="Șterge ${esc(e.name)}">×</button></div>`;
 }
 
 function mealRow(x: Slot, list: Entry[], isNext: boolean) {
@@ -330,6 +332,7 @@ export function todayAction(el: HTMLElement): boolean {
     ctx.toast(`${g} g dextrină adăugată: ${Math.round(g * 0.95)} g carbohidrați.`, () => { if (before) s.days[day] = before; else delete s.days[day]; ctx.commit(); ctx.render(); });
     return true;
   }
+  if (d['ent']) { const [i, id] = d['ent'].split(':'); openEntryEdit(currentDate(), Number(i), id!); return true; }
   if (d['del']) {
     const day = currentDate();
     const [i, id] = d['del'].split(':');

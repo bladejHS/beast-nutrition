@@ -117,30 +117,30 @@ function hero(d: string, t: DayTarget) {
   </button>${fastChip(d)}`;
 }
 
-/** One macro: its name, the grams counting up, the target, a bar that runs 20 % past it so going over shows. */
-function macro(key: string, label: string, val: number, target: number) {
-  return `<div class="mc ${key}"><div class="mc-h"><span>${label}</span><b><span data-count="az-${key}" data-to="${Math.round(val)}">${n0(val)}</span><small> / ${n0(target)} g</small></b></div>
-    <div class="bl-t"><div data-bar="az-${key}" data-to="${Math.min(1, val / (target * 1.2 || 1)).toFixed(3)}"></div><i></i></div></div>`;
-}
-
-/** The day's fuel: the calories left in a ring that fills as the day is eaten, the three macros beside it. */
-/** The calories eaten last time Azi was drawn: when they grow, the food drops into the ring. */
-let lastKcal = { d: '', kcal: -1 };
-
+/** The day's fuel: the calories as eaten / target with one bar split by macro, then a row per macro (2026-11-28). */
 function numbers(d: string, t: DayTarget, sum: ReturnType<typeof totals>) {
   const left = t.kcal - sum.kcal;
   const fill = Math.min(1, sum.kcal / (t.kcal || 1));
   const state = left < -50 ? 'over' : Math.abs(left) <= t.kcal * 0.05 && sum.kcal > 0 ? 'hit' : '';
-  const drop = lastKcal.d === d && sum.kcal > lastKcal.kcal + 1 && !ctx.fresh;
-  lastKcal = { d, kcal: sum.kcal };
   const perfect = d === ctx.today() && isPerfect(sum, t);
   const streak = perfect ? perfectStreak() : 0;
-  return `<section class="dash ${state}${drop ? ' drop' : ''}${perfect ? ' perfect' : ''}">
-    ${perfect ? `<p class="perfd"><b>Macro perfect</b>${streak > 1 ? `<span><i class="perf-fl" aria-hidden="true"></i>${streak} zile la rând</span>` : ''}</p>` : ''}
-    <div class="ring"><div class="liq" style="--l:${fill.toFixed(3)}" aria-hidden="true"><i></i><i></i></div><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="rt" cx="60" cy="60" r="52"/><circle class="rv" cx="60" cy="60" r="52" pathLength="100" data-ring="az-k" data-to="${fill.toFixed(3)}"/></svg>
-      <div class="ring-in"><b data-count="az-left" data-to="${Math.round(Math.abs(left))}">${n0(Math.abs(left))}</b><span>kcal ${left < 0 ? 'peste' : 'rămase'}</span><em>din ${n0(t.kcal)}</em></div></div>
-    <div class="macros">${macro('p', 'Proteine', sum.p, t.p)}${macro('c', 'Carbo', sum.c, t.c)}${macro('f', 'Grăsimi', sum.f, t.f)}
-      <p class="fib">Fibre <b>${n0(sum.fiber)}</b> din ${nb(`${t.fiberMin}–${t.fiberMax}`, 'g')}</p></div>
+  // 2026-11-28, the user chose "bară unică + listă": the calories in one line with one long bar split by where
+  // they came from (protein, carbs, fat), then a short row per macro with what is left of it
+  const pk = sum.p * 4, ck = sum.c * 4, fk = sum.f * 9, all = pk + ck + fk || 1;
+  const row = (key: string, label: string, val: number, target: number) => {
+    const rest = target - val;
+    const say = rest > 0.5 ? `mai ai <b>${n0(rest)}</b> g` : rest < -Math.max(5, target * 0.05) ? `peste cu <b>${n0(-rest)}</b> g` : '<b>gata</b>';
+    return `<div class="dq-r ${key}"><i aria-hidden="true"></i><span>${label}</span><b><span data-count="az-${key}" data-to="${Math.round(val)}">${n0(val)}</span><small> / ${n0(target)} g</small></b><em>${say}</em></div>`;
+  };
+  return `<section class="dash dq ${state}${perfect ? ' perfect' : ''}">
+    ${perfect ? `<p class="perfd"><b>Macro perfect</b>${streak > 1 ? `<span>${streak} zile la rând</span>` : ''}</p>` : ''}
+    <div class="dq-top"><p class="dq-k"><b data-count="az-eat" data-to="${Math.round(sum.kcal)}">${n0(sum.kcal)}</b><small> / ${n0(t.kcal)} kcal</small></p>
+      <p class="dq-left"><b data-count="az-left" data-to="${Math.round(Math.abs(left))}">${n0(Math.abs(left))}</b> ${left < 0 ? 'peste' : 'rămase'}</p></div>
+    <div class="dq-bar" role="img" aria-label="${n0(sum.kcal)} din ${n0(t.kcal)} kcal: ${n0(pk)} din proteine, ${n0(ck)} din carbohidrați, ${n0(fk)} din grăsimi">
+      <div class="dq-fill" data-bar="az-k" data-to="${fill.toFixed(3)}"><i class="p" style="flex-grow:${(pk / all).toFixed(3)}"></i><i class="c" style="flex-grow:${(ck / all).toFixed(3)}"></i><i class="f" style="flex-grow:${(fk / all).toFixed(3)}"></i></div></div>
+    <p class="dq-leg"><span class="p">P</span><span class="c">C</span><span class="f">G</span> din ce vin caloriile mâncate</p>
+    <div class="dq-rows">${row('p', 'Proteine', sum.p, t.p)}${row('c', 'Carbo', sum.c, t.c)}${row('f', 'Grăsimi', sum.f, t.f)}</div>
+    <p class="fib">Fibre <b>${n0(sum.fiber)}</b> din ${nb(`${t.fiberMin}–${t.fiberMax}`, 'g')}</p>
     ${left < -50 ? '<p class="coach">Nu e un eșec și nu trebuie compensat cu foame. Contează media săptămânii, continui normal de la masa următoare.</p>' : ''}
   </section>`;
 }

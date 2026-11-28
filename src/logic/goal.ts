@@ -17,6 +17,8 @@ export interface Goal {
   from: number;
   /** Where the maintenance band is centred, once the diet ended. */
   hold?: number;
+  /** Where the road to the date starts: the day the goal was set and the trend that day (2026-11-28). */
+  line?: { date: string; kg: number };
 }
 
 export const BAND = 1.5;
@@ -86,7 +88,7 @@ export function goalView(g: Goal, points: TrendPoint[], phase: Phase, today: str
 
   if (left <= 0) return { ...v, state: 'reached', to: 'reverse', title: 'Ai ajuns la țintă', text: `Trendul e ${kg(now)} kg, ținta era ${kg(g.kg)} kg. Ieși din deficit acum, fără o săptămână de sărbătoare: reverse diet urcă caloriile pas cu pas până la menținere, iar greutatea rămâne într-o bandă de ±${kg(BAND)} kg.` };
   if (weeksToBy != null && weeksToBy <= STOP_WEEKS) return { ...v, state: 'stop', to: 'reverse', title: 'Oprește deficitul înaintea selecției', text: `Selecția e în ${Math.max(1, Math.round(weeksToBy))} ${Math.round(weeksToBy) === 1 ? 'săptămână' : 'săptămâni'}. Probele le dai la menținere, cu glicogenul plin și forța întreagă, nu din deficit. Ce a mai rămas din țintă (${kg(left)} kg) continui după.` };
-  if (weeksToBy != null && eta && gap(eta, g.by) < STOP_WEEKS * 7) return { ...v, state: 'late', title: 'Ținta trece de selecție', text: `La ritmul de acum (${kg(rate!)} kg pe săptămână) ajungi la ${kg(g.kg)} kg pe ${dateRo(eta)}. Deficitul se oprește cu ${STOP_WEEKS} săptămâni înaintea selecției, deci la probe vei avea în jur de ${kg(Math.max(g.kg, now - rate! * Math.max(0, weeksToBy - STOP_WEEKS)))} kg. Nu grăbi ritmul: la probe contează forța, nu ultimul kilogram.` };
+  if (weeksToBy != null && eta && gap(eta, g.by) < STOP_WEEKS * 7) return { ...v, state: 'late', title: 'Ținta trece de selecție', text: `La ritmul de acum (${kg(rate!)} kg pe săptămână) ajungi la ${kg(g.kg)} kg pe ${dateRo(eta)}. Deficitul se oprește cu ${STOP_WEEKS} săptămâni înaintea selecției, deci la probe vei avea în jur de ${kg(Math.max(g.kg, now - rate! * Math.max(0, weeksToBy - STOP_WEEKS)))} kg. Caloriile se ajustează ca să prinzi data, fără să treacă de limita sigură de slăbire.` };
   if (left <= 3) return { ...v, state: 'close', title: `Mai ai ${kg(left)} kg`, text: `Aproape. Când trendul trece de ${kg(g.kg)} kg, aplicația îți propune ieșirea din deficit.${eta ? ` La ritmul de acum: pe ${dateRo(eta)}.` : ''}` };
   return { ...v, state: 'far', title: `Mai ai ${kg(left)} kg`, text: eta ? `La ritmul de acum (${kg(rate!)} kg pe săptămână) ajungi pe ${dateRo(eta)}.` : 'Ritmul se vede după două săptămâni de cântăriri.' };
 }
@@ -164,4 +166,76 @@ export function chance(g: Goal, points: TrendPoint[], planPace: number, today: s
   const sd = Math.sqrt(weeks * sdw * sdw + (0.3 * (now - at)) ** 2) || 0.5;
   const pct = Math.round(Math.max(1, Math.min(99, phi((g.kg - at) / sd) * 100)));
   return { pct, need: left / weeks, pace, at, deadline, weeks };
+}
+
+// ---- the pace the date asks for, and the weight for every date on the way (2026-11-28) ---------------------------
+// The user: "ajustarea macronutrienților vreau să fie făcută ca să ating targetul de kg până la data stabilită de mine"
+// and "la fiecare dată, pe o anumită perioadă de timp, câte kg trebuie să am ca să ating targetul".
+
+/** The slowest weekly rate the app aims for, % of body weight: under it, a cut is not worth its cost. */
+export const MIN_RATE = 0.25;
+
+export interface GoalPace {
+  /** The day the deficit stops: STOP_WEEKS before the selection. */
+  deadline: string;
+  weeks: number;
+  /** What the date asks for, kg and % of today's weight per week. */
+  needKg: number;
+  needPct: number;
+  /** What the plan will aim for: the need, never over the cap for this body fat, never under MIN_RATE. */
+  pct: number;
+  capped: boolean;
+  /** Where the capped pace lands on the deadline. */
+  at: number;
+}
+
+/** The weekly rate that takes `now` to the goal by the deadline, compounding (each week a share of the weight then). */
+export function goalPace(g: Goal, now: number, today: string, cap: number): GoalPace | null {
+  if (!g.by) return null;
+  const deadline = addDays(g.by, -STOP_WEEKS * 7);
+  const weeks = gap(today, deadline) / 7;
+  if (weeks < 1 || now <= g.kg) return null;
+  const needPct = (1 - Math.pow(g.kg / now, 1 / weeks)) * 100;
+  const pct = Math.round(Math.max(MIN_RATE, Math.min(cap, needPct)) * 100) / 100;
+  return { deadline, weeks, needKg: (now - g.kg) / weeks, needPct, pct, capped: needPct > cap, at: now * Math.pow(1 - pct / 100, weeks) };
+}
+
+export interface Milestone {
+  date: string;
+  /** The weight the road asks for on that date. */
+  kg: number;
+  /** The trend on that date, for the dates already passed. */
+  got: number | null;
+  kind: 'past' | 'now' | 'next' | 'stop' | 'by';
+}
+
+/** The trend weight on a date: the last point on or before it. */
+const trendAt = (points: TrendPoint[], date: string) => [...points].reverse().find((p) => p.date <= date)?.trend ?? null;
+
+/**
+ * The road from the day the goal was set to the deadline, one weight per step: every week up to 16 weeks, every
+ * two weeks up to 40, every four after. The road compounds like goalPace, so a straight percentage a week.
+ */
+export function milestones(g: Goal, points: TrendPoint[], today: string): Milestone[] {
+  if (!g.by) return [];
+  const start = g.line ?? { date: today, kg: points.at(-1)?.trend ?? g.from };
+  const deadline = addDays(g.by, -STOP_WEEKS * 7);
+  const total = gap(start.date, deadline);
+  if (total < 7 || start.kg <= g.kg) return [];
+  const at = (d: string) => start.kg * Math.pow(g.kg / start.kg, Math.min(1, gap(start.date, d) / total));
+  const weeks = total / 7;
+  const step = (weeks <= 16 ? 1 : weeks <= 40 ? 2 : 4) * 7;
+  const dates: string[] = [];
+  for (let d = addDays(start.date, step); d < deadline; d = addDays(d, step)) dates.push(d);
+  dates.push(deadline);
+  let marked = false;
+  const out: Milestone[] = dates.map((date) => {
+    const past = date < today;
+    let kind: Milestone['kind'] = past ? 'past' : 'next';
+    if (!past && !marked) { kind = 'now'; marked = true; }
+    if (date === deadline) kind = date < today ? 'past' : 'stop';
+    return { date, kg: at(date), got: past ? trendAt(points, date) : null, kind };
+  });
+  out.push({ date: g.by, kg: g.kg, got: null, kind: 'by' });
+  return out;
 }

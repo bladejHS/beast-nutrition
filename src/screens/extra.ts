@@ -1,7 +1,9 @@
 /* 2026-11-14: the end of the diet (goal card on Corp), blood tests (a section of Mai mult) and the training
    supplement stack (on Suplimente). Kept apart from body.ts and fuel.ts, which only call in here. */
-import { ctx, esc, n1, parseNum } from '../app.ts';
-import { BAND, dateRo, goalView, STOP_WEEKS } from '../logic/goal.ts';
+import { ctx, esc, n0, n1, parseNum } from '../app.ts';
+import { BAND, dateRo, goalView, milestones, STOP_WEEKS, type GoalPace } from '../logic/goal.ts';
+import { deficitFactor, kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
+import { currentPace, decision, keepFatFloor, shiftPct } from './pilot.ts';
 import { GROUP_NAME, history, homa, LABS, labDef, labStatus, type LabDef } from '../logic/labs.ts';
 import { trendAlpha, weightTrend } from '../logic/trend.ts';
 import type { Supp } from '../logic/wellness.ts';
@@ -28,8 +30,77 @@ export function goalCard(): string {
   const bar = s.plan!.phase === 'cut' && v.now != null ? `<div class="gbar"><i class="fbar"><u style="transform:scaleX(${v.done.toFixed(3)})"></u></i><p class="gends"><span>${kg(g.from)} kg</span><b>${kg(v.now)} kg acum</b><span>${kg(g.kg)} kg</span></p></div>` : '';
   const go = v.to && s.plan!.phase === 'cut' ? `<button class="primary wide" data-phase="${v.to}" data-hold="${v.now ?? ''}">Ieși din deficit: reverse diet</button>` : '';
   const sel = g.by ? `<p class="hint">Selecția: ${esc(dateRo(g.by))}${v.weeksToBy != null ? `, peste ${Math.max(0, Math.round(v.weeksToBy))} săptămâni` : ''}. Deficitul se oprește cu ${STOP_WEEKS} săptămâni înainte.</p>` : '';
-  return `<section class="card goal review ${cls}"><h2>${esc(v.title)}</h2>${bar}<p>${esc(v.text)}</p>${go}${sel}
-    <details><summary class="hint">Schimbă ținta</summary>${form('Salvează')}<button class="ghost wide" data-goal="off">Șterge ținta</button></details></section>`;
+  return `<section class="card goal review ${cls}"><h2>${esc(v.title)}</h2>${bar}<p>${esc(v.text)}</p>${paceLine(currentPace())}${go}${sel}
+    <details><summary class="hint">Schimbă ținta</summary>${form('Salvează')}<button class="ghost wide" data-goal="off">Șterge ținta</button></details></section>
+  ${roadCard()}`;
+}
+
+/** What the date asks for and what the calories aim at (2026-11-28). */
+function paceLine(p: GoalPace | null): string {
+  if (!p) return '';
+  const s = ctx.get();
+  const want = `Ca să ajungi la ${kg(s.goal!.kg)} kg până pe ${esc(dateRo(p.deadline))} îți trebuie ${kg(p.needKg)} kg pe săptămână (${n1(p.needPct)}% din greutate).`;
+  if (p.capped) return `<p class="warn">${want} E peste limita sigură de ${n1(p.pct)}% pe săptămână pentru grăsimea ta, așa că ținta de calorii merge la limită: la ritmul ăsta ajungi pe ${esc(dateRo(p.deadline))} în jur de ${kg(p.at)} kg. Ca să prinzi ținta, mută data mai târziu.</p>`;
+  return `<p class="hint">${want} Caloriile sunt calculate pentru ritmul ăsta${s.pilot?.on ? ', iar pilotul le recalculează din întreținerea măsurată, o dată pe săptămână' : '; pornește pilotul (Carb Cycling → Reguli) ca să le recalculeze singur din întreținerea măsurată'}.</p>`;
+}
+
+/** The weight the road asks for on each date, and the trend on the dates already passed. */
+function roadCard(): string {
+  const s = ctx.get();
+  const g = s.goal;
+  if (!g?.by || s.plan!.phase !== 'cut') return '';
+  const points = weightTrend(s.weights, trendAlpha(s.plan!.phase));
+  const rows = milestones(g, points, ctx.today());
+  if (!rows.length) return '';
+  const now = rows.find((r) => r.kind === 'now' || r.kind === 'stop');
+  const head = now ? `<p class="big"><b>${kg(now.kg)}</b> kg până pe ${esc(shortDate(now.date))}</p><p class="hint">Atât ar trebui să arate tendința la următorul reper ca să fii pe drum. ${points.length ? `Acum e ${kg(points.at(-1)!.trend)} kg.` : ''}</p>` : '';
+  const row = (m: (typeof rows)[number]) => {
+    const diff = m.got != null ? m.got - m.kg : null;
+    const mark = m.kind === 'by' ? '<em>selecția, la menținere</em>' : m.kind === 'stop' ? '<em>se oprește deficitul</em>' : diff == null ? '' : `<em class="${diff <= 0.2 ? 'ok' : 'off'}">${diff <= 0.2 ? '✓' : '+'}${diff <= 0.2 ? '' : kg(diff)} ${diff <= 0.2 ? `${kg(m.got!)} kg` : 'kg peste'}</em>`;
+    return `<div class="line ms ${m.kind}"><span>${esc(shortDate(m.date))}</span><b>${kg(m.kg)} kg</b>${mark}</div>`;
+  };
+  return `<section class="card road-ms"><h2>Greutatea pe date</h2>${head}
+    <p class="hint">Drumul de la ${kg(g.line?.kg ?? g.from)} kg la ${kg(g.kg)} kg, cu același procent pe săptămână. ✓ = tendința a fost sub reper în ziua aceea.</p>
+    ${rows.map(row).join('')}</section>`;
+}
+
+/**
+ * The calories the date asks for, applied when the goal is saved: from the measured maintenance when the pilot has
+ * one, else from the plan's. Protein stays, carbs and fat move, never under the floor (same rules as the pilot).
+ */
+function applyPace(): string | null {
+  const s = ctx.get();
+  const plan = s.plan!, profile = s.profile!;
+  const p = currentPace();
+  if (!p) return null;
+  const t = decision()?.tdee;
+  const maint = t?.usable ? t.kcal : plan.maintenance;
+  const now = weightTrend(s.weights, trendAlpha(plan.phase)).at(-1)?.trend ?? profile.weightKg;
+  const deficit = Math.round(((now * p.pct) / 100) * deficitFactor({ ...profile, weightKg: now }));
+  const kcal = Math.max(kcalFloor(profile.sex), Math.round((maint - deficit) / 10) * 10);
+  plan.ratePct = p.pct;
+  const delta = kcal - plan.macros.kcal;
+  if (Math.abs(delta) < 40) return null;
+  const pct = shiftPct(plan.macros.kcal, plan.macros.p, delta);
+  const next = keepFatFloor(shiftCarbsFat(plan.macros, pct), now);
+  plan.adjustments = [...plan.adjustments, { date: ctx.today(), pct: Math.round(pct * 10) / 10, note: `Ținta: ${n1(p.pct)}%/săpt până pe ${p.deadline}`, from: plan.macros.kcal, to: next.kcal }];
+  plan.macros = next;
+  return `Noua țintă: ${n0(next.kcal)} kcal, pentru ${n1(p.pct)}% pe săptămână.`;
+}
+
+/** Keeps the plan's rate on what the date asks for, so the weekly review and the chart judge by it. Once a render. */
+export function goalSync(): boolean {
+  const s = ctx.get();
+  const g = s.goal;
+  if (!g || !s.plan || s.plan.phase !== 'cut') return false;
+  let changed = false;
+  if (g.by && !g.line) {
+    const now = weightTrend(s.weights, trendAlpha(s.plan.phase)).at(-1)?.trend;
+    if (now != null) { g.line = { date: ctx.today(), kg: Math.round(now * 10) / 10 }; changed = true; }
+  }
+  const p = currentPace();
+  if (p && Math.abs(s.plan.ratePct - p.pct) >= 0.01) { s.plan.ratePct = p.pct; changed = true; }
+  return changed;
 }
 
 /** Before the plan's own handler changes phase: remember where the diet ended, so the band is centred there. */
@@ -51,8 +122,15 @@ export function goalBind() {
     const now = weightTrend(s.weights, trendAlpha(s.plan!.phase)).at(-1)?.trend ?? latestKg();
     if (!(target > 40 && target < 250)) { ctx.toast('Scrie greutatea finală în kilograme.'); return; }
     if (s.plan!.phase === 'cut' && target >= now) { ctx.toast(`Ținta trebuie să fie sub greutatea de acum (${kg(now)} kg).`); return; }
-    s.goal = { kg: target, by: String(d.get('by') ?? ''), from: s.goal?.from ?? Math.round(now * 10) / 10, ...(s.goal?.hold ? { hold: s.goal.hold } : {}) };
-    ctx.commit(); ctx.render(); ctx.toast('Ținta e salvată.');
+    const by = String(d.get('by') ?? '');
+    const before = { goal: s.goal ? { ...s.goal } : null, macros: s.plan!.macros, ratePct: s.plan!.ratePct, adjustments: s.plan!.adjustments };
+    // a new weight or a new date starts a new road from today's trend
+    const fresh = !s.goal || s.goal.kg !== target || s.goal.by !== by;
+    const line = fresh || !s.goal?.line ? { date: ctx.today(), kg: Math.round(now * 10) / 10 } : s.goal.line;
+    s.goal = { kg: target, by, from: s.goal?.from ?? Math.round(now * 10) / 10, ...(s.goal?.hold ? { hold: s.goal.hold } : {}), ...(by ? { line } : {}) };
+    const moved = s.plan!.phase === 'cut' ? applyPace() : null;
+    ctx.commit(); ctx.render();
+    ctx.toast(moved ? `Ținta e salvată. ${moved}` : 'Ținta e salvată.', () => { s.goal = before.goal; Object.assign(s.plan!, { macros: before.macros, ratePct: before.ratePct, adjustments: before.adjustments }); ctx.commit(); ctx.render(); });
   });
 }
 

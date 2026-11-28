@@ -15,7 +15,7 @@ import { glp1Action, glp1Html } from './screens/glp1.ts';
 import { peptidesAction, peptidesHtml } from './screens/peptides.ts';
 import { cjcAction, cjcHtml } from './screens/cjc.ts';
 import { pilotBind, runPilot } from './screens/pilot.ts';
-import { goalAction, goalBind, labsAction, labsBind, stackAction } from './screens/extra.ts';
+import { goalAction, goalBind, goalSync, labsAction, labsBind, stackAction } from './screens/extra.ts';
 import { back } from './screens/parts.ts';
 import { logAction, logInput } from './screens/log.ts';
 import { mineAction } from './screens/mine.ts';
@@ -150,6 +150,7 @@ function render() {
   freshFuel();
   syncFuel();
   kitchen();
+  if (goalSync()) commit();
   if (tab === 'cicl' && !s.fuel.cycling) tab = 'azi';
   const views: Record<Tab, () => string> = { cicl: cycleTabHtml, cook: cookHtml, azi: todayHtml, mese: mealsTab, fuel: fuelHtml, post: fastHtml, corp: bodyHtml, plan: () => `${back('Mai mult', 'data-tab="fuel"')}${planHtml()}`, minte: mindHtml, glp1: glp1Html, pept: peptidesHtml, cjc: cjcHtml };
   // the light of the hour on the living pictures: cold in the morning, warm in the evening, darker at night

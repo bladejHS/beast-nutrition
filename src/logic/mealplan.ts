@@ -12,7 +12,12 @@ export interface Meal { id: string; name: string; steps: string; time: string; i
   /** An extra small meal, on top of the day's slots. */
   snack?: boolean;
   /** Chosen by the user: stays when the day is rebuilt. */
-  keep?: boolean }
+  keep?: boolean;
+  /** The template's own title, kept for variety once the shown title names the foods picked (2026-11-28). */
+  base?: string }
+
+/** The template a meal came from: what variety and the "other options" compare. */
+export const tplOf = (m: Pick<Meal, 'name' | 'base'>) => m.base ?? m.name;
 export interface Macro { kcal: number; p: number; c: number; f: number; fiber: number }
 export interface Prefs { meals: 3 | 4 | 5; exclude: string; allergies: string; maxCook: number; budget: number }
 
@@ -139,7 +144,9 @@ export function buildMeal(tpl: Template, target: { p: number; c: number; f: numb
   const items: Item[] = [{ foodId: p.id, role: 'protein', g: 0 }, { foodId: c.id, role: 'carb', g: 0 }];
   if (f) items.push({ foodId: f.id, role: 'fat', g: 0 });
   for (const v of vegs) items.push({ foodId: v.id, role: 'veg', g: vegG });
-  return { id: crypto.randomUUID(), name: tpl.name, steps: tpl.steps, time, tag, done: false, items: solve(items, target, db) };
+  // the template's title names its first foods; when another one was picked, the title says so (2026-11-28)
+  const name = ([[tpl.protein, p], [tpl.carb, c], [tpl.fat, f]] as const).reduce((t, [alts, got]) => (got ? alts.reduce((x, n) => (n === got.name ? x : retitle(x, n, got.name)), t) : t), tpl.name);
+  return { id: crypto.randomUUID(), name, base: tpl.name, steps: tpl.steps, time, tag, done: false, items: solve(items, target, db) };
 }
 
 /** The most anyone would eat of one food in a meal, in grams. */
@@ -162,7 +169,7 @@ export function generateDay(day: { p: number; c: number; f: number }, carbShares
     return { meals, key: meals.map((m) => m.name).join('|'), miss: Math.abs(got.f - day.f) * 9 + Math.abs(got.c - day.c) * 4 + Math.abs(got.p - day.p) * 4 + bulk(meals.flatMap((m) => m.items)) * 4 + (carbShares.length - meals.length) * 1000 };
   });
   const lowest = Math.min(...tries.map((t) => t.miss));
-  const repeats = (t: { meals: Meal[] }) => t.meals.filter((m) => opts.recent?.includes(m.name)).length;
+  const repeats = (t: { meals: Meal[] }) => t.meals.filter((m) => opts.recent?.includes(tplOf(m))).length;
   const near = tries.filter((t) => t.miss <= lowest + 15);
   const fewest = Math.min(...near.map(repeats));
   const fresh = near.filter((t) => repeats(t) === fewest);
@@ -238,7 +245,7 @@ function oneDay(day: { p: number; c: number; f: number }, carbShares: number[], 
     const goal = { p: pGoal, c: (left.c * carbShares[i]!) / shareLeft, f: (Math.max(0, left.f) * fatShares[i]!) / fatLeft };
     for (let k = 0; k < pool.length; k++) {
       const tpl = pool[(seed + i + k) % pool.length]!;
-      if (avoid.includes(tpl.name) || meals.some((m) => m.name === tpl.name)) continue;
+      if (avoid.includes(tpl.name) || meals.some((m) => tplOf(m) === tpl.name)) continue;
       const option = buildMeal(tpl, goal, byName, db, words, seed + i, times[i] ?? '', tags[i] ?? '', { slot, ...(focus ? { prefer: focus === 'fish' ? OILY_FISH : RED_MEAT } : {}) });
       if (!option) continue;
       const got = macros(option.items, db);
@@ -267,7 +274,7 @@ export function regenerate(existing: Meal[], day: { p: number; c: number; f: num
   const open = free.slice(-Math.max(0, times.length - full.length));
   if (!open.length) return kept;
   const left = { p: Math.max(0, day.p - eaten.p), c: Math.max(0, day.c - eaten.c), f: Math.max(0, day.f - eaten.f) };
-  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map((m) => m.name), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}), ...(focus ? { focus } : {}) });
+  const fresh = generateDay(left, open.map((i) => carbShares[i]!), open.map((i) => times[i]!), open.map((i) => tags[i] ?? ''), foods, prefs, seed, { avoid: full.map(tplOf), firstSweet: open[0] === 0, ...(fatShares ? { fatShares: open.map((i) => fatShares[i]!) } : {}), ...(recent ? { recent } : {}), ...(focus ? { focus } : {}) });
   // in the day's order, also when it runs past midnight (night shift, logic/shift.ts)
   const base = times[0] ? dayBase(times[0]) : 0;
   return [...kept, ...fresh].sort((a, b) => onClock(a.time, base) - onClock(b.time, base));
@@ -283,7 +290,7 @@ export function mealOptions(goal: { p: number; c: number; f: number }, foods: Fo
     .map((t) => buildMeal(t, goal, byName, db, words, seed, time, tag, { slot: tag === PRE_TAG ? 'pre' : 'main' }))
     .filter((m): m is Meal => !!m)
     // before training the light meals come first (coach.ts)
-    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 + (tag === PRE_TAG && !light.has(m.name) ? 400 : 0) }; })
+    .map((m) => { const g = macros(m.items, db); return { m, miss: Math.abs(g.f - goal.f) * 9 + Math.abs(g.c - goal.c) * 4 + Math.abs(g.p - goal.p) * 4 + bulk(m.items) * 4 + (tag === PRE_TAG && !light.has(tplOf(m)) ? 400 : 0) }; })
     .sort((a, b) => a.miss - b.miss).slice(0, 6).map((x) => x.m);
 }
 
@@ -307,9 +314,54 @@ export function snackOptions(carbs: number, foods: Food[], prefs: Prefs, time: s
 
 export function substitute(meal: Meal, index: number, next: Food, db: Map<string, Food>): Meal {
   const items = meal.items.map((it, i) => (i === index ? { ...it, foodId: next.id } : it));
+  const was = db.get(meal.items[index]?.foodId ?? '');
   db.set(next.id, next);
   const old = macros(meal.items, db);
-  return { ...meal, items: solve(items, { p: old.p, c: old.c, f: old.f }, db) };
+  // 2026-11-28, the user: the title stayed "Pui cu orez" after the chicken was swapped for turkey
+  return { ...meal, name: was ? retitle(meal.name, was.name, next.name) : meal.name, items: solve(items, { p: old.p, c: old.c, f: old.f }, db) };
+}
+
+/** Words that describe the state or the cut of a food, not the food a title names. */
+const CUT = /^(piept|pulpa|pulpe|muschi|carne tocata|carne|cotlet|file|fileu) de /;
+const QUALIFIER = new Set(['crud', 'cruda', 'cruzi', 'crude', 'uscat', 'uscata', 'uscate', 'fulgi', 'degresat', 'degresata', 'natur', 'proaspat', 'proaspata', 'fara', 'piele', 'conserva', 'apa', 'in', 'la']);
+const ALIAS: Record<string, string> = { 'albus de ou': 'ouă', 'ou intreg': 'ouă', 'whey (proteina din zer)': 'whey' };
+
+/** The name a meal's title uses for a food: "Piept de pui, crud" → "pui", "Orez brun crud" → "orez brun". */
+export function shortName(name: string): string {
+  const base = name.split(/[,(·]/)[0]!.trim();
+  const alias = ALIAS[fold(name)] ?? ALIAS[fold(base)];
+  if (alias) return alias;
+  const words = base.split(/\s+/);
+  // the cut goes ("Piept de"), the animal stays
+  const cut = fold(base).match(CUT);
+  const rest = cut ? words.slice(cut[0].trim().split(/\s+/).length) : words;
+  const kept = rest.filter((w) => !QUALIFIER.has(fold(w)) && !/^\d+%?$/.test(w));
+  return (kept.length ? kept : rest).slice(0, 3).join(' ').toLowerCase();
+}
+
+/** Folded, but one character for one character, so a position found in it is a position in the original. */
+const foldKeep = (s: string) => [...s].map((c) => c.toLowerCase().normalize('NFD')[0]!).join('');
+
+/**
+ * The title after a food is swapped: the old food's name in it becomes the new one's. The longest run of the old
+ * name's words that the title holds is replaced ("orez" in "Pui cu orez și legume" for "Orez alb crud"); a title that
+ * never named the food stays as it was.
+ */
+export function retitle(title: string, from: string, to: string): string {
+  const a = shortName(from), b = shortName(to);
+  if (!b || fold(a) === fold(b)) return title;
+  const hay = foldKeep(title);
+  const words = foldKeep(a).split(' ');
+  for (let k = words.length; k > 0; k--) {
+    const needle = words.slice(0, k).join(' ');
+    const re = new RegExp(`(^|[^a-z])(${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![a-z])`);
+    const m = re.exec(hay);
+    if (!m) continue;
+    const at = m.index + m[1]!.length;
+    const word = at === 0 ? b.charAt(0).toUpperCase() + b.slice(1) : b;
+    return title.slice(0, at) + word + title.slice(at + needle.length);
+  }
+  return title;
 }
 
 /** Foods that belong in a sweet bowl, and foods that belong next to meat and vegetables. */

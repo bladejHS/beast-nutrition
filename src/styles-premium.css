@@ -136,3 +136,14 @@
 @media (prefers-reduced-motion: reduce) {
   .pm-aura i, .pm.in > *, .pm.in .pm-st div { animation: none !important; }
 }
+
+/* the weight for every date on the road to the goal (extra.ts roadCard, 2026-11-28) */
+.road-ms .ms > span { flex: 0 0 74px; }
+.road-ms .ms > b { flex: 1; text-align: left; font-variant-numeric: tabular-nums; }
+.road-ms .ms > em { font-size: 13px; }
+.road-ms .ms.past { opacity: .72; }
+.road-ms .ms.now { margin: 2px -10px; padding: 11px 10px; border-radius: 10px; border-top-color: transparent; background: rgba(164, 122, 255, .12); box-shadow: inset 3px 0 0 #a47aff; }
+.road-ms .ms.now > span, .road-ms .ms.now > b { color: var(--t1, #fff); }
+.road-ms .ms.stop > b, .road-ms .ms.by > b { color: var(--gold); }
+.road-ms em.ok { color: var(--gold); }
+.road-ms em.off { color: var(--bad); }

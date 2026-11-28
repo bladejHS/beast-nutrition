@@ -8,7 +8,7 @@ import { DEFAULT_FACTORS } from '../logic/carbs.ts';
 import { isBreakWeek, weekday } from '../logic/calc.ts';
 import { status, windowFor } from '../logic/fasting.ts';
 import { insights, type Feedback, type FeedbackKey, type Rated } from '../logic/insights.ts';
-import { alternatives, macros, mealOptions, regenerate, snackOptions, substitute, type Meal } from '../logic/mealplan.ts';
+import { alternatives, macros, mealOptions, regenerate, snackOptions, substitute, tplOf, type Meal } from '../logic/mealplan.ts';
 import { AISLES, shopLine, shopList, BUY, type ShopItem } from '../logic/shop.ts';
 import { buildReport, type DayFacts } from '../logic/report.ts';
 import { addDays, finishedWeeks, mondayOf } from '../logic/review.ts';
@@ -121,7 +121,7 @@ function recovery() {
 function genDay(date: string, seed: number): Meal[] {
   const s = ctx.get();
   const sl = mealSlots(date);
-  const recent = [-2, -1, 1].flatMap((k) => s.fuel.plan[addDays(date, k)] ?? []).map((m) => m.name);
+  const recent = [-2, -1, 1].flatMap((k) => s.fuel.plan[addDays(date, k)] ?? []).map(tplOf);
   return regenerate(s.fuel.plan[date] ?? [], mealTarget(date), sl.shares, sl.times, sl.tags, kitchen(), s.fuel.prefs, seed, sl.fatShares, recent, weekFocus(date));
 }
 
@@ -494,7 +494,7 @@ function openOptions(mi: number) {
   const s = ctx.get();
   const m = s.fuel.plan[mealDay]![mi]!;
   const g = macros(m.items, pantry.map);
-  pending = mealOptions(g, kitchen(), s.fuel.prefs, m.time, m.tag, Date.now() % 97, m.name);
+  pending = mealOptions(g, kitchen(), s.fuel.prefs, m.time, m.tag, Date.now() % 97, tplOf(m));
   ctx.open(`<h2>${esc(m.tag || 'Alte variante')}</h2><p class="hint">Aceleași macronutrienți, alte alimente.</p>${pending.map((o, k) => { const t = macros(o.items, pantry.map); return `<button class="row" data-f="optgo" data-m="${mi}" data-v="${k}"><span><b>${esc(o.name)}</b><small>${o.items.map((it) => `${nb(n0(it.g), 'g')} ${esc(pantry.map.get(it.foodId)?.name ?? '')}`).join(', ')}</small></span><em>${nb(n0(t.kcal), 'kcal')}<small>${nb(n0(t.c), 'g')} carbo</small></em></button>`; }).join('') || '<p class="hint">Nicio variantă pentru preferințele tale.</p>'}`);
 }
 

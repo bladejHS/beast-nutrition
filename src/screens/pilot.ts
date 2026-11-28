@@ -11,7 +11,17 @@ import { pilot, willApply, type PilotOut } from '../logic/autopilot.ts';
 import { finishedWeeks } from '../logic/review.ts';
 import { dayMeals, totals, type State } from '../logic/store.ts';
 import { addDaysUtc } from '../logic/tdee.ts';
-import { flagText } from '../logic/safety.ts';
+import { flagText, rateCap } from '../logic/safety.ts';
+import { dateRo, goalPace, type GoalPace } from '../logic/goal.ts';
+import { trendAlpha, weightTrend } from '../logic/trend.ts';
+
+/** What the goal's date asks for today, from the trend (null without a goal, a date, or outside a cut). */
+export function currentPace(): GoalPace | null {
+  const s = ctx.get();
+  if (!s.goal || !s.plan || !s.profile || s.plan.phase !== 'cut') return null;
+  const now = weightTrend(s.weights, trendAlpha(s.plan.phase)).at(-1)?.trend ?? s.profile.weightKg;
+  return goalPace(s.goal, now, ctx.today(), rateCap(s.profile.bf));
+}
 
 /** Everything eaten on a day, for the days that have anything logged. */
 function intakeOf(s: State, today: string, days = 30): Array<{ date: string; kcal: number }> {
@@ -41,7 +51,9 @@ export function decision(): PilotOut | null {
   const s = ctx.get();
   if (!s.plan || !s.profile) return null;
   const today = ctx.today();
+  const pace = currentPace();
   return pilot({
+    ...(pace ? { ratePct: pace.pct, aimWhy: `ca să ajungi la ${String(s.goal!.kg).replace('.', ',')} kg până pe ${dateRo(pace.deadline)}` } : {}),
     plan: s.plan,
     profile: s.profile,
     goalKg: s.goal?.kg,

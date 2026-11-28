@@ -50,6 +50,11 @@ export interface PilotIn {
   proteinG: number | null;
   /** The last day the pilot (or the user) changed the plan. */
   lastChange?: string;
+  /** The weekly rate the goal's date asks for, % of body mass, already capped (goal.ts goalPace). Without it the
+   *  pilot aims for the comfortable rate of this body fat (2026-11-28: the date decides when there is one). */
+  ratePct?: number;
+  /** How the copy names that aim, e.g. "ca să ajungi la 105 kg până pe 1 martie 2027". */
+  aimWhy?: string;
 }
 
 export interface PilotOut {
@@ -77,8 +82,8 @@ const ro = (v: number) => String(v).replace('.', ',');
 const kcalRo = (v: number) => Math.round(v).toLocaleString('ro-RO');
 
 /** The deficit that produces the target rate for this body: kcal a day. */
-export function wantedDeficit(bodyKg: number, bf: number): number {
-  const kgPerWeek = (rateTarget(bf) / 100) * bodyKg;
+export function wantedDeficit(bodyKg: number, bf: number, ratePct = rateTarget(bf)): number {
+  const kgPerWeek = (ratePct / 100) * bodyKg;
   return Math.round((kgPerWeek * KCAL_PER_KG) / 7);
 }
 
@@ -99,6 +104,8 @@ export function pilot(x: PilotIn): PilotOut {
     kcalFloor: kcalFloor(x.profile.sex),
   });
   const base = { tdee: t, flags };
+  const aim = x.ratePct ?? rateTarget(x.profile.bf);
+  const aimTxt = `${ro(aim)}% pe săptămână${x.aimWhy ? `, ${x.aimWhy}` : ''}`;
 
   // 1. the pilot never touches a diet break
   if (isBreakWeek(x.plan, mondayOf(x.today))) {
@@ -137,7 +144,7 @@ export function pilot(x: PilotIn): PilotOut {
   }
 
   // 5. the arithmetic: where the target should sit at the measured maintenance
-  const want = t.kcal - wantedDeficit(bodyKg, x.profile.bf);
+  const want = t.kcal - wantedDeficit(bodyKg, x.profile.bf, aim);
   const implied = want - current;
   const damped = implied * DAMPING;
   const capped = Math.max(-current * MAX_STEP, Math.min(current * MAX_STEP, damped));
@@ -172,8 +179,8 @@ export function pilot(x: PilotIn): PilotOut {
     kcal: next, delta, pct: pct1((delta / current) * 100), rate,
     title: up ? 'Urc ținta' : 'Cobor ținta',
     body: `Întreținerea măsurată e ${kcalRo(t.kcal)} kcal${t.confidence < 0.7 ? ', estimare încă subțire' : ''}. ${reachable
-      ? `Pentru ${ro(rateTarget(x.profile.bf))}% pe săptămână ținta ar fi ${kcalRo(dream)} kcal; mut jumătate din drum, la ${kcalRo(next)} kcal (${up ? '+' : ''}${delta}).`
-      : `Ritmul de ${ro(rateTarget(x.profile.bf))}% pe săptămână ar cere mai puțin decât limita de ${kcalRo(floor)} kcal, deci nu îl urmărim orbește: cobor un pas, la ${kcalRo(next)} kcal (${delta}), și mergem cât se poate${rate != null ? `, adică vreo ${ro(Math.abs(rate))}% pe săptămână` : ''}.`}`,
+      ? `Pentru ${aimTxt} ținta ar fi ${kcalRo(dream)} kcal; mut jumătate din drum, la ${kcalRo(next)} kcal (${up ? '+' : ''}${delta}).`
+      : `Ritmul de ${aimTxt} ar cere mai puțin decât limita de ${kcalRo(floor)} kcal, deci nu îl urmărim orbește: cobor un pas, la ${kcalRo(next)} kcal (${delta}), și mergem cât se poate${rate != null ? `, adică vreo ${ro(Math.abs(rate))}% pe săptămână` : ''}.`}`,
     note: `Pilot: întreținere ${t.kcal} kcal, ${up ? '+' : ''}${delta} kcal`,
   };
 }

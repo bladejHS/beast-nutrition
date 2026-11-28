@@ -7,6 +7,7 @@ import { kcalFloor, shiftCarbsFat } from '../logic/calc.ts';
 import { addDays, finishedWeeks, mondayOf, review, type CheckIn } from '../logic/review.ts';
 import { chartRange, trendAlpha, trendChange, weightTrend, type TrendPoint } from '../logic/trend.ts';
 import { fatMass, type Measure } from '../logic/wellness.ts';
+import { STOP_WEEKS } from '../logic/goal.ts';
 import { banner, heroBand, shortDate } from './parts.ts';
 import { latestKg } from './state.ts';
 import { goalCard } from './extra.ts';
@@ -23,13 +24,15 @@ let range = 84;
 export const checkinWeek = (today: string) => mondayOf(addDays(today, -3));
 
 /** `rate`: the plan's expected change per week in %, drawn as a dashed target from the first visible point (0 = hold). */
-function trendChart(points: TrendPoint[], rate = 0) {
+function trendChart(points: TrendPoint[], rate = 0, road?: (d: string) => number) {
   if (points.length < 2) return '<p class="hint pad">Graficul apare după câteva cântăriri.</p>';
   const W = 358, H = 168, L = 8, R = 46, T = 10, B = 22;
   const first = Date.parse(points[0]!.date), last = Date.parse(points.at(-1)!.date);
   const span = Math.max(1, last - first);
   const weeks = (d: string) => (Date.parse(d) - first) / (7 * 864e5);
-  const target = (d: string) => points[0]!.trend * (1 + rate / 100) ** weeks(d);
+  // with a goal date the dashed line is the road to it (goal.ts milestones), else the plan's rate from the first point
+  const target = road ?? ((d: string) => points[0]!.trend * (1 + rate / 100) ** weeks(d));
+  if (road) rate = rate || -1;
   const [lo, hi] = chartRange(points.flatMap((p) => [p.kg, p.trend]).concat(rate ? [target(points.at(-1)!.date)] : []));
   const x = (d: string) => L + ((Date.parse(d) - first) / span) * (W - L - R);
   const y = (v: number) => T + (1 - (v - lo) / (hi - lo || 1)) * (H - T - B);
@@ -69,11 +72,23 @@ function weighCard(points: TrendPoint[]) {
   const end = points.at(-1);
   const from = addDays(today, -range);
   return `<section class="card">
-    ${end ? `<p class="big"><b>${n1(end.trend)}</b> kg, tendința</p><p class="hint">${change == null ? 'Punctele sunt cântăririle, linia e tendința.' : `${change > 0 ? '+' : '−'}${nb(n1(Math.abs(change)), 'kg')} în 7 zile. Punctele sunt cântăririle, linia e tendința.`}</p>` : ''}
+    ${end ? `<p class="big"><b>${n1(end.kg)}</b> kg, ${end.date === today ? 'azi' : `pe ${shortDate(end.date)}`}</p><p class="hint">Tendința: ${nb(n1(end.trend), 'kg')}.</p><p class="hint">${change == null ? 'Punctele sunt cântăririle, linia e tendința.' : `${change > 0 ? '+' : '−'}${nb(n1(Math.abs(change)), 'kg')} în 7 zile. Punctele sunt cântăririle, linia e tendința.`}</p>` : ''}
     <div class="seg small">${RANGES.map(([v, l]) => `<button data-range="${v}" class="${range === v ? 'on' : ''}">${l}</button>`).join('')}</div>
-    ${trendChart(points.filter((p) => p.date >= from), s.plan?.phase === 'cut' ? -s.plan.ratePct : 0)}
+    ${trendChart(points.filter((p) => p.date >= from), s.plan?.phase === 'cut' ? -s.plan.ratePct : 0, roadFn())}
     <button class="${s.weights[today] == null ? 'primary' : 'ghost'} wide" data-weigh>${s.weights[today] == null ? 'Notează greutatea de azi' : `Azi: ${nb(n1(s.weights[today]!), 'kg')}, schimbă`}</button>
     <p class="hint">Dimineața, după baie, pe același cântar.</p></section>`;
+}
+
+/** The goal's road as a function of the date, for the chart: flat before it starts, the goal after the deadline. */
+function roadFn(): ((d: string) => number) | undefined {
+  const s = ctx.get();
+  const g = s.goal;
+  if (!g?.by || !g.line || s.plan?.phase !== 'cut') return undefined;
+  const line = g.line;
+  const end = addDays(g.by, -STOP_WEEKS * 7);
+  const total = (Date.parse(end) - Date.parse(line.date)) / 864e5;
+  if (!(total > 0) || line.kg <= g.kg) return undefined;
+  return (d: string) => line.kg * Math.pow(g.kg / line.kg, Math.max(0, Math.min(1, (Date.parse(d) - Date.parse(line.date)) / 864e5 / total)));
 }
 
 export function openWeigh() {
@@ -89,14 +104,18 @@ export function openWeigh() {
     if (!(kg > 30 && kg < 350)) { ctx.toast('Scrie greutatea în kilograme, de exemplu 82,5.'); return; }
     audioOn();
     const before = s.weights[today];
+    const beforeProfile = s.profile!.weightKg;
     const beforeTrend = trendNow();
     trophyInit();
     s.weights[today] = kg;
+    // 2026-11-28, the user: "nu actualizează cu noua greutate". The profile (Plan, the protein floor, water) follows
+    // the scale too, not only the chart.
+    s.profile!.weightKg = kg;
     ctx.close(); ctx.commit(); ctx.render();
     // the number lands like a result, then any trophy the trend has passed (show.ts)
     weighReveal(kg, beforeTrend);
     trophyCheck(matchMedia('(prefers-reduced-motion: reduce)').matches ? 600 : 6900);
-    ctx.toast('Greutate salvată.', () => { if (before == null) delete s.weights[today]; else s.weights[today] = before; ctx.commit(); ctx.render(); });
+    ctx.toast(`Greutate salvată: ${n1(kg)} kg.`, () => { if (before == null) delete s.weights[today]; else s.weights[today] = before; s.profile!.weightKg = beforeProfile; ctx.commit(); ctx.render(); });
   });
 }
 
@@ -144,7 +163,7 @@ export function bodyHtml() {
   const weeks = finishedWeeks(s.weights, ctx.today()).length;
   return `${banner('body', 'Corp')}
   <div class="pm${pmIn()}">
-  ${pmHero({ eyebrow: points.length > 1 ? `${points.length} cântăriri din ${shortDate(points[0]!.date)}` : 'Prima zi', title: end ? `${n1(end.trend)} kg` : 'Prima cântărire', sub: end ? (change == null ? 'Linia e tendința, nu cântărirea de azi.' : `${change > 0 ? '+' : '−'}${n1(Math.abs(change))} kg în ultimele 7 zile, pe tendință.`) : 'Notează-ți greutatea și începe graficul.', art: points.length > 1 ? summit(points, goal) : ribbonArt(), tall: points.length > 1 })}
+  ${pmHero({ eyebrow: points.length > 1 ? `${points.length} cântăriri din ${shortDate(points[0]!.date)}` : 'Prima zi', title: end ? `${n1(end.kg)} kg` : 'Prima cântărire', sub: end ? `${end.date === ctx.today() ? 'Cântărirea de azi' : `Ultima cântărire, ${shortDate(end.date)}`}. Tendința: ${n1(end.trend)} kg${change == null ? '' : `, ${change > 0 ? '+' : '−'}${n1(Math.abs(change))} kg în 7 zile`}.` : 'Notează-ți greutatea și începe graficul.', art: points.length > 1 ? summit(points, goal) : ribbonArt(), tall: points.length > 1 })}
   ${pmStats([[gone != null && gone > 0 ? `−${n1(gone)}` : gone != null ? n1(-gone) : '–', 'kg de la start'], [left != null ? n1(Math.max(0, left)) : '–', 'kg până la țintă'], [String(weeks), weeks === 1 ? 'săptămână' : 'săptămâni'], [String(Object.keys(s.weights).length), 'cântăriri']])}
   ${heroBand('weigh')}
   ${pmSect('Ținta')}

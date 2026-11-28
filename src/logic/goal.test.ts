@@ -67,3 +67,37 @@ test('the chance: on pace is likely, too far is unlikely, no date is no number',
   assert.ok(chance({ kg: 90, by: '2027-01-15', from: 134 }, pts, 0.7, '2026-11-14').pct! < 10);
   assert.equal(chance({ kg: 105, by: '', from: 134 }, pts, 0.7, '2026-11-14').pct, null);
 });
+
+// 2026-11-28: the pace the date asks for, and the road of weights to it
+import { goalPace, milestones, MIN_RATE } from './goal.ts';
+
+test('goalPace: the date sets the rate, capped by body fat', () => {
+  // 134 → 110 kg, selection 2027-11-28, deficit stops 3 weeks before
+  const p = goalPace({ kg: 110, by: '2027-11-28', from: 134 }, 134, '2026-11-28', 1.2)!;
+  assert.equal(p.deadline, '2027-11-07');
+  assert.ok(p.needPct > 0.35 && p.needPct < 0.45, String(p.needPct));
+  assert.equal(p.capped, false);
+  assert.ok(Math.abs(134 * (1 - p.needPct / 100) ** p.weeks - 110) < 0.01);
+  // too close a date: capped at the limit, landing above the goal
+  const q = goalPace({ kg: 110, by: '2027-03-01', from: 134 }, 134, '2026-11-28', 1.2)!;
+  assert.equal(q.capped, true);
+  assert.equal(q.pct, 1.2);
+  assert.ok(q.at > 110);
+  // a far date never aims under the minimum
+  assert.equal(goalPace({ kg: 130, by: '2029-01-01', from: 134 }, 134, '2026-11-28', 1.2)!.pct, MIN_RATE);
+  assert.equal(goalPace({ kg: 110, by: '', from: 134 }, 134, '2026-11-28', 1.2), null);
+});
+
+test('milestones: one weight per step, the current one marked, the passed ones with the trend', () => {
+  const g = { kg: 120, by: '2027-03-21', from: 134, line: { date: '2026-11-01', kg: 134 } };
+  const points = [{ date: '2026-11-01', kg: 134, trend: 134 }, { date: '2026-11-20', kg: 132, trend: 132.4 }];
+  const m = milestones(g, points, '2026-11-28');
+  assert.equal(m.at(-1)!.kind, 'by');
+  assert.equal(m.at(-2)!.date, '2027-02-28');
+  assert.ok(Math.abs(m.at(-2)!.kg - 120) < 0.01);
+  const now = m.find((x) => x.kind === 'now')!;
+  assert.ok(now.date >= '2026-11-28');
+  const past = m.filter((x) => x.kind === 'past');
+  assert.ok(past.length >= 1 && past.every((x) => x.got != null));
+  for (let i = 1; i < m.length - 1; i++) assert.ok(m[i]!.kg < m[i - 1]!.kg);
+});

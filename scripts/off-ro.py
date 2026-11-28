@@ -38,6 +38,8 @@ def opt(name, default):
 COUNTRIES = ['en:' + c for c in opt('--country', 'romania').split(',')]
 SKIPS = ['en:' + c for c in opt('--skip', '').split(',') if c]
 COUNTRY = COUNTRIES[0]
+# --country all (2026-11-28, the user: "toate țările"): every product, whatever its country, minus --skip
+ALL = COUNTRIES == ['en:all']
 # --since <unix time>: only products edited after it (a big shelf keeps the products still on sale)
 SINCE = int(opt('--since', '0'))
 
@@ -116,7 +118,7 @@ try:
       print('coloane lipsă (ignorate):', missing, flush=True)
       for line in fh:
           lines += 1
-          if not any(c in line for c in COUNTRIES):
+          if not ALL and not any(c in line for c in COUNTRIES):
               continue
           row = next(csv.reader([line], delimiter='\t', quoting=csv.QUOTE_NONE))
           if len(row) != len(header):
@@ -124,7 +126,7 @@ try:
               continue
           x = {n: row[col[n]] if n in col else '' for n in need}
           tags = x['countries_tags'].split(',')
-          if not any(c in tags for c in COUNTRIES) or any(c in tags for c in SKIPS):
+          if (not ALL and not any(c in tags for c in COUNTRIES)) or any(c in tags for c in SKIPS):
               continue
           if SINCE and int(x['last_modified_t'] or 0) < SINCE:
               why['nemodificat recent'] += 1

@@ -65,7 +65,7 @@ async function runSearch(q: string) {
   const plain = searchExact(all, q);
   const foods = list('Alimente', plain);
   if (q.trim().length < 3) { res.innerHTML = foods || list('Poate te referi la', search(all, q)) || '<p class="hint pad">Nimic găsit.</p>'; return; }
-  res.innerHTML = `${foods}<p class="hint pad">Caut și în produsele de marcă…</p>`;
+  res.innerHTML = `${foods}<p class="hint pad">Caut și în produsele de marcă…</p><div class="skel s-row"></div><div class="skel s-row"></div><div class="skel s-row"></div>`;
   const [ro, de, eu, world, usda] = await Promise.all([searchOffRo(q, undefined, 25).catch(() => null), searchOffDe(q, undefined, 25).catch(() => null), searchOffEu(q, undefined, 25).catch(() => null), searchOffWorld(q, undefined, 25).catch(() => null), searchUsdaBrands(q).catch(() => null)]);
   if (run !== searchRun) return;
   const shelves = [ro, de, eu, world, usda];

@@ -1,5 +1,7 @@
 import './styles.css';
 import './styles-premium.css';
+import './styles-motion.css';
+import { pageIn, sheetIn, swapIn, toastDone } from './screens/motion.ts';
 import { cycleAction, cycleTabHtml } from './screens/cycletab.ts';
 import { cookAction, cookHtml, cookInput } from './screens/cook.ts';
 import { chapterCheck, isPerfect, trophyInit } from './screens/show.ts';
@@ -45,6 +47,7 @@ function toast(msg: string, undo?: () => void, label = 'Anulează') {
     b.addEventListener('click', () => { toastEl.classList.remove('on'); undo(); });
     toastEl.append(b);
   }
+  toastDone(toastEl, msg);
   toastEl.classList.add('on');
   toastTimer = window.setTimeout(() => toastEl.classList.remove('on'), undo ? 6000 : 2800);
 }
@@ -64,12 +67,15 @@ function close() {
   opener = null;
 }
 function open(html: string, label = 'Fereastră') {
+  // a sheet replaced by the next one (search, then the amount) changes in place; only a new sheet grows out of the tap
+  const reopen = sheet.classList.contains('on');
   if (!sheet.classList.contains('on')) opener = document.activeElement as HTMLElement | null;
   sheet.className = 'on';
   app.inert = true;
   sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-modal', 'true'); sheet.setAttribute('aria-label', label.replace(/&#\d+;/g, ''));
   sheet.innerHTML = `<div class="sh" tabindex="-1"><button class="x" data-close aria-label="Închide">×</button>${html}</div>`;
   sheet.querySelector<HTMLElement>('.sh')!.focus({ preventScroll: true });
+  if (!reopen) sheetIn(sheet.querySelector<HTMLElement>('.sh'));
 }
 
 ctx.get = () => s; ctx.commit = commit; ctx.toast = toast; ctx.render = () => render(); ctx.open = open; ctx.close = close; ctx.today = () => localDate();
@@ -93,7 +99,8 @@ const home = (t: Tab): Main => (t === 'post' || t === 'minte' || t === 'plan' ||
 function mountHero(root: HTMLElement) {
   const arena = (window as unknown as { BeastArena?: { hero: (c: HTMLCanvasElement, o: object) => unknown } }).BeastArena;
   if (!arena) return;
-  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // 2026-11-28 (motion guidelines, "fără particule peste tot"): the living pictures are drawn still, one frame
+  const still = true;
   root.querySelectorAll<HTMLCanvasElement>('canvas.hero-cv').forEach((cv) => {
     let journey: unknown = null;
     try { journey = cv.dataset['j'] ? JSON.parse(cv.dataset['j']) : null; } catch { journey = null; }
@@ -145,6 +152,11 @@ async function tiltToggle() {
   toast('Înclină telefonul: lumina de pe bară te urmează.');
 }
 
+let lastAt = -1;
+/** Set by a tap that shows other content on the same screen (a day, a week, a carb view). */
+let swapNext = false;
+const SWAP_F = new Set(['mday', 'mwk', 'dd', 'wk', 'wpick', 'tday', 'tgo', 'cv', 'mic', 'sub']);
+
 function render() {
   if (!s.profile || !s.plan || isEditing()) { dock.hide(); app.innerHTML = setupHtml(); setupBind(); return; }
   freshFuel();
@@ -156,7 +168,13 @@ function render() {
   // the light of the hour on the living pictures: cold in the morning, warm in the evening, darker at night
   const hr = new Date().getHours();
   document.documentElement.dataset.tod = hr >= 5 && hr < 10 ? 'morning' : hr >= 10 && hr < 17 ? 'day' : hr >= 17 && hr < 22 ? 'evening' : 'night';
+  const fresh = ctx.fresh;
   app.innerHTML = `<main>${views[tab]()}</main>`;
+  // motion (screens/motion.ts): a new tab comes in from its side, another day or week on the same tab crossfades
+  const at = shown().indexOf(home(tab));
+  if (fresh) pageIn(app.querySelector('main'), lastAt < 0 || at === lastAt ? 0 : at > lastAt ? 1 : -1);
+  else if (swapNext) swapIn(app.querySelector('main'));
+  lastAt = at; swapNext = false;
   dock.show(shown());
   dock.set(tabAt());
   dockLive();
@@ -172,6 +190,7 @@ function render() {
 document.addEventListener('click', (ev) => {
   const el = (ev.target as HTMLElement).closest<HTMLElement>('button, [data-close]');
   if (!el) { if (ev.target === sheet) close(); return; }
+  if ((el.dataset['f'] && SWAP_F.has(el.dataset['f'])) || el.dataset['az'] === 'today' || el.dataset['day'] != null) swapNext = true;
   if (el.closest('#toast')) return;
   if (el.dataset['close'] != null) { close(); return; }
   if (el.dataset['dockTilt'] != null) { void tiltToggle(); return; }

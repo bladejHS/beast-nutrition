@@ -1,0 +1,79 @@
+/* Motion (2026-11-28, the user's "Premium Animation Guidelines"; screens/motion.ts). Imported last, so it wins.
+   Quick (200–350 ms), pages 300–450 ms, natural easing, discreet springs on press, a very faint glow. Only transform
+   and opacity move. Nothing loops and nothing pulses on its own; Reduce Motion stops all of it. */
+:root { --mv-ease: cubic-bezier(.22, 1, .36, 1); --mv-spring: cubic-bezier(.34, 1.4, .64, 1); }
+
+/* ---- calm: the decorations that used to move forever are still now ---------------------------------------- */
+.r.next::before, .r.nowm::before, .tabs-plate, .tabs .tabs-blade::after, .bn-cel-rays, .perf-fl, .ring .liq i,
+.mc .bl-t div::after, .cn-k i, .cn-main::after, .dk-dot.on, .pep-chain .pc-w, .pep-chain .bd, .pep-chain .sa, .pep-scan,
+.cd.now .cd-ripple, .primary.pulse, .sm-d.next .sm-p, .stairs .now .st-bar i::after, .stairs em, .glp-tile.hot,
+.pm-aura i, .chain .cd, .chain .cb, .grains circle, .ribbon path, .ai-wait { animation: none !important; }
+.bn-cel-rays { opacity: .25; }
+.ribbon path { stroke-dasharray: none; }
+/* the entrance is ours now (mv-rise), not the old half-second rise */
+.pm.in > *, .pm.in .pm-st div { animation: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* ---- pages: fade and a short slide from the side the tab is on --------------------------------------------- */
+  /* only opacity on <main>: a transform there would carry the fixed + button along with the page */
+  main.mv-page { animation: mv-fade 380ms var(--mv-ease) both; }
+  /* the same page with another day or week in it */
+  main.mv-swap > :not(.fab) { animation: mv-swap 260ms var(--mv-ease) both; }
+  @keyframes mv-swap { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+  /* ---- cards rise once, 40 ms apart --------------------------------------------------------------------------- */
+  .mv-rise { animation: mv-rise 360ms var(--mv-ease) both; animation-delay: calc(min(var(--i, 0), 8) * 40ms + 40ms); }
+  @keyframes mv-rise { from { opacity: 0; transform: translate(var(--dx, 0), 12px); } to { opacity: 1; transform: none; } }
+
+  /* ---- press: a discreet spring on everything that can be tapped ----------------------------------------------- */
+  .primary, .ghost, .chips button, .seg button, .row, .cook-row, .mealc > summary, .road-set, .qk, .fmain, .hero, .ib {
+    transition: transform 260ms var(--mv-spring), background-color 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+  }
+  .primary:active, .ghost:active, .chips button:active, .seg button:active, .ib:active { transform: scale(.965); transition-duration: 90ms; }
+  .row:active, .cook-row:active, .mealc > summary:active, .road-set:active, .qk:active, .hero:active { transform: scale(.98); transition-duration: 90ms; }
+  .fmain:active { transform: scale(.985); transition-duration: 90ms; }
+
+  /* ---- the + button: it gives under the finger and the plus turns as the sheet opens --------------------------- */
+  .fab { transition: transform 300ms var(--mv-spring), box-shadow 300ms var(--mv-ease); }
+  .fab svg { transition: transform 300ms var(--mv-spring); }
+  .fab:active { transform: scale(.88); box-shadow: 0 6px 16px -8px rgba(var(--glow), .7); transition-duration: 100ms; }
+  .fab:active svg { transform: rotate(90deg); }
+  .mv-page .fab { animation: mv-fab 420ms var(--mv-spring) 240ms both; }
+  @keyframes mv-fab { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: none; } }
+
+  /* ---- sheets: the backdrop fades; the panel is moved by motion.ts (it grows out of what was tapped) ----------- */
+  #sheet.on { animation: fade 240ms ease-out; }
+
+  /* ---- the calorie ring and the macro bars fill at a calm pace -------------------------------------------------- */
+  .ring .rv { transition: stroke-dashoffset 900ms var(--mv-ease) !important; }
+  [data-bar] { transition: transform 700ms var(--mv-ease) !important; }
+
+  /* ---- body charts draw themselves when the page opens ---------------------------------------------------------- */
+  .mv-page .chart polyline { stroke-dasharray: 1 1; animation: mv-draw 1100ms var(--mv-ease) 200ms both; }
+  .mv-page .chart polyline.goal { stroke-dasharray: none; animation: mv-fade 500ms ease 900ms both; }
+  .mv-page .chart circle, .mv-page .chart text { animation: mv-fade 420ms ease 500ms both; }
+  @keyframes mv-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes mv-fade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---- carb days: the colour of the day changes, it does not jump ---------------------------------------------- */
+  .hero, .dayrow button, .dot, .cday, .wk-d, .lv { transition: background-color 300ms var(--mv-ease), color 300ms var(--mv-ease), box-shadow 300ms var(--mv-ease), transform 260ms var(--mv-spring); }
+
+  /* ---- success: a tick drawn in the toast ---------------------------------------------------------------------- */
+  #toast.mv-ok .mv-tick circle { animation: mv-tick-c 420ms var(--mv-ease) both; }
+  #toast.mv-ok .mv-tick path { animation: mv-tick-p 300ms var(--mv-ease) 260ms both; }
+  #toast.mv-ok .mv-tick { animation: mv-pop 380ms var(--mv-spring) both; }
+  @keyframes mv-tick-c { from { stroke-dashoffset: 66; } to { stroke-dashoffset: 0; } }
+  @keyframes mv-tick-p { from { stroke-dashoffset: 16; } to { stroke-dashoffset: 0; } }
+  @keyframes mv-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+
+  /* ---- skeletons while foods load ------------------------------------------------------------------------------ */
+  .skel { position: relative; overflow: hidden; }
+  .skel::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .05), transparent); animation: mv-shimmer 1.3s ease-in-out infinite; }
+  @keyframes mv-shimmer { to { transform: translateX(100%); } }
+}
+
+.mv-tick { flex: none; width: 22px; height: 22px; margin-right: 10px; vertical-align: -6px; fill: none; stroke: var(--act-hot); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 4px rgba(var(--glow), .35)); }
+.mv-tick circle { stroke-dasharray: 66; stroke-opacity: .55; }
+.mv-tick path { stroke-dasharray: 16; stroke-width: 2.4; }
+.skel { border-radius: 18px; }
+.skel.s-row { height: 58px; margin: 8px 0; border-radius: 14px; }

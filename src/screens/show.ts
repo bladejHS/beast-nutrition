@@ -3,6 +3,7 @@
    break, maintenance, reverse). Decoration over facts the app already has; with reduced motion the entrances are
    short and the sound stays off. Nothing here changes a number of the plan. */
 import { ctx, esc, n0, n1 } from '../app.ts';
+import { haptic } from './motion.ts';
 import { isBreakWeek, type DayTarget } from '../logic/calc.ts';
 import { addDays } from '../logic/review.ts';
 import { dayMeals, totals } from '../logic/store.ts';
@@ -27,39 +28,6 @@ export function audioOn() {
     void ac.resume();
   } catch { ac = null; }
 }
-function hit(at: number, gain: number, freq = 0) {
-  if (!ac) return;
-  const t = ac.currentTime + at;
-  const len = 0.12;
-  const buf = ac.createBuffer(1, Math.round(ac.sampleRate * len), ac.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
-  const src = ac.createBufferSource();
-  src.buffer = buf;
-  const g = ac.createGain();
-  g.gain.value = gain;
-  const f = ac.createBiquadFilter();
-  f.type = 'lowpass';
-  f.frequency.value = 1800;
-  src.connect(f).connect(g).connect(ac.destination);
-  src.start(t);
-  if (freq) {
-    const o = ac.createOscillator(), og = ac.createGain();
-    o.frequency.setValueAtTime(freq, t);
-    o.frequency.exponentialRampToValueAtTime(freq / 2.5, t + 0.5);
-    og.gain.setValueAtTime(gain * 0.9, t);
-    og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
-    o.connect(og).connect(ac.destination);
-    o.start(t);
-    o.stop(t + 0.65);
-  }
-}
-function drumRoll(sec: number) {
-  if (!ac) return;
-  let t = 0, gap = 0.11;
-  while (t < sec) { hit(t, 0.06 + (t / sec) * 0.18); t += gap; gap = Math.max(0.035, gap * 0.93); }
-  hit(sec, 0.5, 150);
-}
 function chime() {
   if (!ac) return;
   [0, 0.12, 0.24].forEach((at, i) => {
@@ -77,39 +45,6 @@ function chime() {
 
 /* ---------- the ceremony overlay ---------- */
 
-function sparks(c: HTMLCanvasElement, host: HTMLElement, gold: boolean) {
-  const x = c.getContext('2d');
-  if (!x) return;
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  const W = (c.width = Math.round(innerWidth * dpr)), H = (c.height = Math.round(innerHeight * dpr));
-  const COL = gold ? ['#f5d690', '#dcb35e', '#fff3d6', '#7844ea', '#ffffff'] : ['#7844ea', '#a07bf0', '#ffffff', '#f5d690', '#5017ca'];
-  const ps = Array.from({ length: 130 }, () => {
-    const a = Math.random() * Math.PI * 2, v = (220 + Math.random() * 760) * dpr;
-    return { vx: Math.cos(a) * v, vy: Math.sin(a) * v - 260 * dpr, r: (1 + Math.random() * 2.6) * dpr, c: COL[Math.floor(Math.random() * COL.length)]!, life: 0.7 + Math.random() * 0.9 };
-  });
-  const G = 900 * dpr, cx = W / 2, cy = H * 0.36;
-  let t0 = 0;
-  const draw = (t: number) => {
-    if (!t0) t0 = t;
-    const s = (t - t0) / 1000;
-    x.clearRect(0, 0, W, H);
-    x.globalCompositeOperation = 'lighter';
-    let alive = 0;
-    for (const p of ps) {
-      const k = s / p.life;
-      if (k >= 1) continue;
-      alive++;
-      const d = (1 - Math.exp(-3 * s)) / 3;
-      x.globalAlpha = 1 - k * k;
-      x.fillStyle = p.c;
-      x.beginPath();
-      x.arc(cx + p.vx * d, cy + p.vy * d + 0.5 * G * s * s, p.r * (1 - k * 0.6), 0, 6.283);
-      x.fill();
-    }
-    if (alive && host.isConnected) requestAnimationFrame(draw);
-  };
-  requestAnimationFrame(draw);
-}
 
 export function ceremony(o: { kicker: string; title: string; word: string; mark: string; gold?: boolean; poster?: PosterData; ms?: number }) {
   const el = document.createElement('div');
@@ -140,7 +75,8 @@ export function ceremony(o: { kicker: string; title: string; word: string; mark:
   });
   timer = window.setTimeout(close, o.ms ?? (o.poster ? 12000 : 5200));
   chime();
-  if (!calm()) window.setTimeout(() => sparks(el.querySelector('canvas')!, el, !!o.gold), 420);
+  // 2026-11-28 (motion guidelines): no particles; the card, the chime and a success haptic are the celebration
+  haptic('success');
 }
 
 /* ---------- the perfect day ---------- */
@@ -252,22 +188,20 @@ export function weighReveal(kg: number, beforeTrend: number | null) {
   document.body.appendChild(el);
   const close = () => { if (el.classList.contains('out')) return; el.classList.add('out'); window.setTimeout(() => el.remove(), 480); dispatchEvent(new Event('bn:weigh')); };
   el.addEventListener('click', close);
-  window.setTimeout(close, 6500);
+  window.setTimeout(close, 3200);
+  haptic('success');
   if (calm()) { el.classList.add('shown'); return; }
-  drumRoll(1.3);
+  // 2026-11-28 (motion guidelines): no slot machine and no drum roll; the number runs from the last trend to today's
+  // weighing in 650 ms, eased, then settles
   const n = el.querySelector('#wn')!;
+  const from = beforeTrend ?? kg;
   const t0 = performance.now();
-  const spin = (t: number) => {
-    const k = (t - t0) / 1300;
-    if (k < 1) {
-      n.textContent = n1(30 + Math.random() * 170);
-      requestAnimationFrame(spin);
-    } else {
-      n.textContent = kg1(kg);
-      el.classList.add('shown');
-    }
+  const run = (t: number) => {
+    const k = Math.min(1, (t - t0) / 650), e = 1 - (1 - k) ** 3;
+    n.textContent = kg1(from + (kg - from) * e);
+    if (k < 1) requestAnimationFrame(run); else el.classList.add('shown');
   };
-  requestAnimationFrame(spin);
+  requestAnimationFrame(run);
 }
 
 /* ---------- the body's transformation (Corp) ---------- */

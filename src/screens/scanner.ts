@@ -24,6 +24,29 @@ function getDetector(): Promise<Detector> {
   })().catch((e: unknown) => { detector = null; throw e; });
 }
 
+// ---- one camera for the session (2026-11-28, the user: "să nu îmi mai ceară mereu permisiune pentru cameră") ----
+// Each getUserMedia after the last stream was stopped can bring Safari's permission question back, and on an iPhone
+// home-screen app it often does. So the stream is kept for a while after the scanner closes and handed to the next
+// scan; it is let go after KEEP_MS without a scan, or as soon as the app goes to the background.
+const KEEP_MS = 3 * 60_000;
+let live: MediaStream | null = null;
+let idle = 0;
+const alive = (m: MediaStream | null) => !!m && m.getVideoTracks().some((t) => t.readyState === 'live');
+function release() { clearTimeout(idle); live?.getTracks().forEach((t) => t.stop()); live = null; }
+document.addEventListener('visibilitychange', () => { if (document.hidden) release(); });
+async function camera(): Promise<MediaStream> {
+  clearTimeout(idle);
+  if (alive(live)) { live!.getVideoTracks().forEach((t) => { t.enabled = true; }); return live!; }
+  live = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+  return live;
+}
+/** The scanner closed: the camera rests (no picture) and waits for the next scan. */
+function park() {
+  live?.getVideoTracks().forEach((t) => { t.enabled = false; });
+  clearTimeout(idle);
+  idle = window.setTimeout(release, KEEP_MS);
+}
+
 const buzz = () => { try { navigator.vibrate?.(60); } catch { /* not on iPhone */ } };
 
 /** Opens the scanner; `found` gets a checked product code and decides what the sheet shows next. */
@@ -41,7 +64,7 @@ export function openScanner(found: (code: string) => void) {
   const say = (t: string) => { const m = $('#scanmsg'); if (m) m.textContent = t; };
   let stream: MediaStream | null = null;
   let done = false;
-  const stop = () => { stream?.getTracks().forEach((t) => t.stop()); stream = null; };
+  const stop = () => { if (stream) park(); stream = null; video.srcObject = null; };
   const hit = (code: string) => { if (done) return; done = true; stop(); buzz(); found(code); };
 
   $('#find')!.addEventListener('click', () => {
@@ -64,7 +87,7 @@ export function openScanner(found: (code: string) => void) {
   void (async () => {
     if (!navigator.mediaDevices?.getUserMedia) { $('#scan')!.hidden = true; say('Aici nu am cameră. Fă o poză codului sau scrie cifrele.'); return; }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } });
+      stream = await camera();
     } catch {
       $('#scan')!.hidden = true;
       say('Camera nu e permisă pentru aplicație. O pornești din setările telefonului, sau faci o poză codului, sau scrii cifrele.');

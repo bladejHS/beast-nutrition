@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
-    "barcode-detector": "^3.2.3"
+    "barcode-detector": "^3.2.3",
+    "tesseract.js": "^6.0.1"
   }
 }

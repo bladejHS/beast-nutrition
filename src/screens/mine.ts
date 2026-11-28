@@ -4,6 +4,7 @@
    meal plan as a swap for its role, and carries the pack it is bought in, for the shopping list. */
 import { ctx, esc, n0, n1, nb, parseNum } from '../app.ts';
 import type { Food, FoodRole } from '../logic/foods.ts';
+import type { LabelVals } from '../logic/label.ts';
 import { pantry } from './state.ts';
 
 const ROLES: [FoodRole | '', string][] = [['', 'Nu'], ['protein', 'Proteină'], ['carb', 'Carbohidrați'], ['fat', 'Grăsime'], ['veg', 'Legumă sau fruct']];
@@ -33,23 +34,25 @@ export function openMine() {
 }
 
 /** The form: a new food, or one of the user's to change. `then` decides what follows the save (default: the list). */
-export function openFoodEditor(o: { food?: Food; code?: string; then?: (f: Food) => void } = {}) {
+export function openFoodEditor(o: { food?: Food; code?: string; then?: (f: Food) => void; draft?: LabelVals } = {}) {
   const f = o.food;
+  // 2026-11-28: values read from a photo of the label (screens/label.ts) fill a new food, for a check before saving
+  const dr = o.draft;
   back = o.then ?? null;
   const v = (x: number | undefined | null) => (x == null ? '' : String(x).replace('.', ','));
-  const portion = f?.portions[0]?.[1];
+  const portion = f?.portions[0]?.[1] ?? dr?.portion ?? undefined;
   const num = (name: string, label: string, val: string, req = false) => `<label class="field">${label}<input name="${name}" type="text" inputmode="decimal" value="${esc(val)}" ${req ? 'required' : ''} autocomplete="off"></label>`;
-  ctx.open(`<h2>${f ? 'Modifică alimentul' : 'Aliment propriu'}</h2>
+  ctx.open(`<h2>${f ? 'Modifică alimentul' : 'Aliment propriu'}</h2>${dr ? '<p class="hint">Valorile sunt citite din poza etichetei, la 100 g. Verifică-le cu eticheta înainte să salvezi.</p>' : ''}
     <form id="mine">
-      <label class="field">Nume<input name="name" required autocomplete="off" value="${esc(f?.name ?? '')}" placeholder="Iaurt grecesc Olympus 2%"></label>
+      <label class="field">Nume<input name="name" required autocomplete="off" value="${esc(f?.name ?? dr?.name ?? '')}" placeholder="Iaurt grecesc Olympus 2%"></label>
       <fieldset class="pick5"><legend>Valorile de pe etichetă sunt</legend><div>
         <label><input type="radio" name="basis" value="100" checked><span>La 100 g</span></label>
         <label><input type="radio" name="basis" value="portion"><span>Pe porție</span></label></div></fieldset>
       ${num('portion', 'Porția, în grame (pentru „pe porție” și ca porție rapidă la adăugare)', v(portion))}
       <div class="grid2">
-        ${num('p', 'Proteine, g', f ? v(f.p) : '', true)}${num('c', 'Carbohidrați, g', f ? v(f.c) : '', true)}
-        ${num('f', 'Grăsimi, g', f ? v(f.f) : '', true)}${num('kcal', 'Calorii (gol = calculate)', f ? v(f.kcal) : '')}
-        ${num('fiber', 'Fibre, g (opțional)', f && !f.noFiber ? v(f.fiber) : '')}${num('sugar', 'Zahăr, g (opțional)', f?.sugar ? v(f.sugar) : '')}
+        ${num('p', 'Proteine, g', f ? v(f.p) : dr ? v(dr.p) : '', true)}${num('c', 'Carbohidrați, g', f ? v(f.c) : dr ? v(dr.c) : '', true)}
+        ${num('f', 'Grăsimi, g', f ? v(f.f) : dr ? v(dr.f) : '', true)}${num('kcal', 'Calorii (gol = calculate)', f ? v(f.kcal) : dr ? v(dr.kcal) : '')}
+        ${num('fiber', 'Fibre, g (opțional)', f && !f.noFiber ? v(f.fiber) : v(dr?.fiber))}${num('sugar', 'Zahăr, g (opțional)', f?.sugar ? v(f.sugar) : v(dr?.sugar))}
       </div>
       <p class="hint" id="mine-kcal"></p>
       <label class="field">În planul de mese, ca înlocuire pentru<select name="role">${ROLES.map(([r, l]) => `<option value="${r}" ${(f?.role ?? '') === r ? 'selected' : ''}>${l}</option>`).join('')}</select></label>

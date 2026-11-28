@@ -5,6 +5,7 @@ import { dayMeals, entryFrom, MEALS, totals, type Entry } from '../logic/store.t
 import { dayFuel } from './state.ts';
 import { openScanner } from './scanner.ts';
 import { openFoodEditor } from './mine.ts';
+import { openLabelScan } from './label.ts';
 import { openAi } from './ai.ts';
 
 let meal = 0;
@@ -87,7 +88,7 @@ function searchSheet() {
     ${added.length ? `<p class="added"><b>Adăugat:</b> ${added.map((e) => `${esc(e.name)}, ${nb(n0(e.g), 'g')}`).join('; ')}</p>` : ''}
     <p class="hint" id="left">${leftLine()}</p>
     <label class="sr" for="q">Caută un aliment</label><input id="q" type="search" placeholder="Caută alimente și produse: pui, ovăz, Pilos" autocomplete="off" enterkeyhint="search">
-    <div class="btns"><button class="ghost scanbtn" data-scan><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M10.5 8v8M13.5 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Scanează codul</button><button class="ghost" data-manual>Introdu manual</button></div>
+    <div class="btns"><button class="ghost scanbtn" data-scan><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3M7 8v8M10.5 8v8M13.5 8v8M17 8v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Scanează codul</button><button class="ghost" data-manual>Introdu manual</button><button class="ghost" data-label-new>Scanează eticheta</button></div>
     <button class="ghost wide aibtn" data-ai><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3v10H4zM12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM18.5 2.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>Poză sau descriere, cu AI</button>
     <div id="res"></div>
     ${added.length ? '<button class="primary wide stick" data-close>Gata</button>' : ''}`, MEALS[meal]);
@@ -145,6 +146,7 @@ function openQuantity(f: Food) {
 
 /** A food typed in from its label: saved in Alimentele mele (src/screens/mine.ts), then its amount for this meal. */
 function openManual(code = '') {
+  notFoundCode = code;
   openFoodEditor({ code, then: openQuantity });
 }
 
@@ -157,7 +159,8 @@ function openBarcode() {
     if (f) { openQuantity(f); return; }
     notFoundCode = code;
     ctx.open(`<h2>Produs negăsit</h2><p class="hint">${offline ? 'Căutarea are nevoie de internet.' : `Codul ${code} nu este nici pe rafturile din România, Germania, Europa sau restul lumii, nici în USDA, nici în Open Food Facts.`} Îl poți salva tu o singură dată, cu valorile de pe etichetă.</p>
-      <button class="primary wide" data-manual-code>Adaugă-l de pe etichetă</button>
+      <button class="primary wide" data-label>Scanează eticheta cu valorile</button>
+      <button class="ghost wide" data-manual-code>Scriu valorile eu</button>
       <div class="btns"><button class="ghost" data-scan>Scanează din nou</button><button class="ghost" data-back-search>Înapoi la căutare</button></div>`, 'Produs negăsit');
   })());
 }
@@ -204,6 +207,13 @@ export function logAction(el: HTMLElement): boolean {
   }
   if (d['manual'] != null) { openManual(); return true; }
   if (d['manualCode'] != null) { openManual(notFoundCode); return true; }
+  // 2026-11-28: the values read from a photo of the label fill the form; the user checks them and saves
+  if (d['label'] != null || d['labelNew'] != null) {
+    const code = d['label'] != null ? notFoundCode : '';
+    notFoundCode = code;
+    openLabelScan(code, (draft) => openFoodEditor({ code, draft: draft ?? undefined, then: openQuantity }));
+    return true;
+  }
   if (d['scan'] != null) { openBarcode(); return true; }
   if (d['backSearch'] != null) { searchSheet(); return true; }
   return false;

@@ -137,6 +137,11 @@
   .pm-aura i, .pm.in > *, .pm.in .pm-st div { animation: none !important; }
 }
 
+/* no zoom (2026-11-28): no pinch or double-tap anywhere, and no field under 16 px, which Safari zooms into */
+html, body { touch-action: pan-x pan-y; }
+button, a, label, summary, input, select, textarea { touch-action: manipulation; }
+textarea { font-size: 16px; }
+
 /* the weight for every date on the road to the goal (extra.ts roadCard, 2026-11-28) */
 .road-ms .ms > span { flex: 0 0 74px; }
 .road-ms .ms > b { flex: 1; text-align: left; font-variant-numeric: tabular-nums; }

@@ -211,6 +211,26 @@ addEventListener('focus', wake);
 // No zoom: iOS ignores user-scalable=no, so pinch is blocked here as well.
 for (const g of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(g, (ev) => ev.preventDefault(), { passive: false });
 document.addEventListener('touchmove', (ev) => { if (ev.touches.length > 1) ev.preventDefault(); }, { passive: false });
+// 2026-11-28, the user: "elimină zoom-ul din aplicație". Two more ways iOS still zoomed:
+// - a double tap: the second tap of a quick pair is taken from Safari and given back as a plain click, so fast taps
+//   on − / + still count;
+// - a field written smaller than 16 px: Safari zooms in on it when it gets the focus (the AI textarea was 13 px). The
+//   size is raised before the focus, on the touch that leads to it.
+const FIELD = 'input, textarea, select, [contenteditable]';
+let lastTap = 0;
+document.addEventListener('touchend', (ev) => {
+  const now = ev.timeStamp;
+  const el = ev.target as HTMLElement;
+  if (ev.touches.length === 0 && now - lastTap < 350 && !el.closest(FIELD)) {
+    ev.preventDefault();
+    (el.closest<HTMLElement>('button, a, label, summary, [data-close]') ?? el).click();
+  }
+  lastTap = now;
+}, { passive: false });
+document.addEventListener('touchstart', (ev) => {
+  const f = (ev.target as HTMLElement).closest<HTMLElement>(FIELD);
+  if (f && parseFloat(getComputedStyle(f).fontSize) < 16) f.style.fontSize = '16px';
+}, { passive: true });
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   const had = !!navigator.serviceWorker.controller;
